@@ -3,8 +3,10 @@ import os
 import sys
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+# from torch.utils.data import DataLoader
+# from torch.optim import AdamW`nfrom transformers import get_cosine_schedule_with_warmup
 from torch.optim import AdamW
+from transformers import get_cosine_schedule_with_warmup
 from safetensors.torch import load_file, save_file
 from PIL import Image
 from diffusers import AutoencoderKL
@@ -150,7 +152,18 @@ def run_latent_heavy_training():
 
     # Собираем только LoRA веса для оптимизатора
     trainable_params = [p for p in base_model.parameters() if p.requires_grad]
-    optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)
+    # optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)`n    num_training_steps = num_epochs * len(dataset)`n    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=int(num_training_steps * 0.05), num_training_steps=num_training_steps)
+    num_epochs = 150
+    optimizer = AdamW(trainable_params, lr=1e-4, weight_decay=0.01)
+    
+    # Считаем шаги исходя из реального размера датасета
+    num_training_steps = num_epochs * len(dataset)
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=int(num_training_steps * 0.05), 
+        num_training_steps=num_training_steps
+    )
+    
     criterion = FlowMatchingLoss()
 
     print('🎲 аморозка фиксированного латентного шума x_0 для валидации...')
