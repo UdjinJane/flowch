@@ -7,14 +7,14 @@ from src.config import VAE_PATH, device
 class EmptyTransformer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.proj_in = nn.Linear(128, 3072, bias=False)
+        self.proj_in = nn.Linear(64, 3072, bias=False)
         self.blocks = nn.ModuleList([
             nn.ModuleDict({
                 'linear1': nn.Linear(3072, 3072, bias=False),
                 'linear2': nn.Linear(3072, 3072, bias=False)
             }) for _ in range(24)
         ])
-        self.proj_out = nn.Linear(3072, 128, bias=False)
+        self.proj_out = nn.Linear(3072, 64, bias=False)
 
     def forward(self, x, t, c):
         x = self.proj_in(x)
