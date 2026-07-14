@@ -63,7 +63,7 @@ def run_training_loop(transformer, dataloader, validation_text_emb, total_epochs
             
             # Извлекаем кэшированные латенты ChromaDataset из SSD
             latents = batch['latent_values'].to(device)
-            t_tensor = torch.rand(latents.shape[0], device=device) # Вектор времени для Rectified Flow
+            t_tensor = torch.rand(latents.shape[0], 1, 1, 1, device=device) # Вектор времени для Rectified Flow
             
             # Извлекаем текущий Т5 контекст текущего батча для обучения
             text_emb = batch['t5_hidden'].to(device)
