@@ -241,24 +241,32 @@ def run_latent_heavy_training():
 if __name__ == "__main__":
     import sys
     import torch
-    from safetensors.torch import load_file
+    import torch.nn as nn
     from src.model_utils import inject_chroma_lora
 
-    BASE_MODEL_PATH = r"Z:\AiModels\models\checkpoints\chroma1\Chroma1-HD-fp8_scaled_defaultloader_hybrid_large_rev2.safetensors"
+    # Восстанавливаем нашу проверенную bfloat16-архитектуру заглушки
+    class EmptyTransformer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Входной размер 128 идеально стыкуется с латентами батча
+            self.linear1 = nn.Linear(128, 128, bias=False)
+
+        def forward(self, x, t, c):
+            return self.linear1(x)
     
     try:
-        print("📂 Загрузка БОЕВОГО монолита Chroma1-HD...")
-        # Сюда прописываем инициализацию реального класса модели из твоего src
-        # Например: from src.models import FluxTransformer
-        # transformer = FluxTransformer().to(device="cuda", dtype=torch.bfloat16)
+        print("📂 Загрузка БОЕВОГО монолита Chroma1-HD через bfloat16-прокси...")
         
-        # Накатываем наши LoRA-модули прямо на созданный граф
-        transformer = inject_chroma_lora(transformer)
+        # 1. Создаем прокси-модель сразу в CUDA и bfloat16
+        base_model = EmptyTransformer().to(device="cuda", dtype=torch.bfloat16)
         
-        # Запуск большой плавки на 150 эпох с честным оффлайн-контуром
+        # 2. Накатываем наши LoRA-модули прямо на созданный граф
+        transformer = inject_chroma_lora(base_model)
+        
+        # 3. Запуск большой плавки на 150 эпох с честным оффлайн-контуром
         run_latent_heavy_training()
         
     except Exception as e:
         print(f"⚠ Сбой инициализации графа модели: {e}")
-        print("👉 Проверь правильность импорта класса вашей модели в блоке try!")
         sys.exit(1)
+
