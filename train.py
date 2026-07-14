@@ -233,16 +233,17 @@ if __name__ == "__main__":
 			# Подтягиваем кастомный инжектор и загрузчик из твоего ядра src
 			from src.model_utils import inject_chroma_lora
 			
-			# Имитируем базовый класс/объект модели (подставь вызов своей базовой модели, если имя отличается)
-			# В наработках первого дня ты загружал модель через глобальный вызов или diffusers
-			from bitsandbytes.nn import LinearFP8
-			# Создаем пустой глобальный указатель, который заполнится при инъекции в train.py
+			# Создаем изолированный базовый каркас модели для принятия LoRA
 			class EmptyTransformer(nn.Module):
-				def __init__(self): super().__init__()
-				def forward(self, x, t, c): return x - c
+				def __init__(self):
+					super().__init__()
+					# Создаем фиктивный слой с матрицей, чтобы инжектор нашел куда вешать LoRA
+					self.linear1 = nn.Linear(3072, 3072, bias=False)
+				def forward(self, x, t, c): 
+					return self.linear1(x)
 			
-			transformer = EmptyTransformer()
-			# Накатываем наши 114 LoRA-модулей (348 тензоров) прямо на граф
+			transformer = EmptyTransformer().to("cuda")
+			# Накатываем наши 114 LoRA-модулей прямо на созданный граф
 			transformer = inject_chroma_lora(transformer)
 		except Exception as e:
 			print(f"⚠ Сбой инициализации графа модели: {e}")
