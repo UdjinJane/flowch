@@ -121,13 +121,13 @@ def compute_flow_matching_loss(model, x_1, condition):
 	return torch.mean((pred_velocity - target_velocity) ** 2)
 
 print("📟 Блок №4 зафиксирован. Логика инъекции и лосса на борту.")
-from src.dataset import HeavyLatentDataset
+from src.dataset import ChromaDataset
 
 def run_latent_heavy_training():
 	print("🔥 ИНИЦИАЛИЗАЦИЯ СЕРДЦА КОСМОЛЕТА...")
 	
 	# Сборка датасета и загрузчика данных
-	dataset = HeavyLatentDataset(
+	dataset = ChromaDataset(
 		metadata_path=METADATA_PATH,
 		text_cache_dir=TEXT_CACHE_DIR,
 		latent_cache_dir=LATENT_CACHE_DIR
