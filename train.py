@@ -1,248 +1,238 @@
-# -*- coding: utf-8 -*-
 import os
 import sys
+import math
+import time
+import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-# from torch.utils.data import DataLoader
-# from torch.optim import AdamW`nfrom transformers import get_cosine_schedule_with_warmup
-from torch.optim import AdamW
-from transformers import get_cosine_schedule_with_warmup
-from safetensors.torch import load_file, save_file
-from PIL import Image
+# Фиксируем окружение для стабильного bfloat16 деплоя на RTX 3090
+os.environ["TORCH_CUDNN_V_GTE_9"] = "1"
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+print("📟 Блок №1 успешно инициализирован. Системные модули на борту.")
+# =====================================================================
+# НАСТРОЙКИ ПЛАВКИ (ОФФЛАЙН-ПОЛИГОН)
+# =====================================================================
+DATASET_DIR = r"Z:\flowch\dataset\mng_oks_bl"
+METADATA_PATH = r"Z:\flowch\metadata.jsonl"
+TEXT_CACHE_DIR = r"Z:\flowch\dataset\text_cache"
+LATENT_CACHE_DIR = r"Z:\flowch\dataset\latent_cache"
+OUTPUT_DIR = r"Z:\flowch"
+
+# Путь к честному 16-канальному VAE, который мы только что нашли
+VAE_PATH = r"Z:\AiModels\models\vae\flux_vae.safetensors"
+
+# Параметры боевого разгона
+num_epochs = 150
+batch_size = 1
+lr = 1e-4
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"📟 Блок №2 готов. Нацелен на устройство: {device.upper()}")
 from diffusers import AutoencoderKL
+from transformers import get_cosine_schedule_with_warmup
 
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+# =====================================================================
+# АРХИТЕКТУРА И ИНЪЕКЦИЯ LoRA
+# =====================================================================
+class ChromaLoraWrapper(nn.Module):
+	"""
+	Кастомная обертка для квантованного графа Chroma1-HD.
+	Сохраняет оригинальный слой замороженным и добавляет обучаемый BF16 LoRA-путь.
+	"""
+	def __init__(self, original_layer, rank=16, alpha=32):
+		super().__init__()
+		self.original_layer = original_layer
+		self.rank = rank
+		self.scaling = alpha / rank
 
-from src.dataset import ChromaDataset
-from src.losses import FlowMatchingLoss
-from src.model_utils import inject_chroma_lora
+		if hasattr(original_layer, 'weight'):
+			out_features, in_features = original_layer.weight.shape
+			target_device = original_layer.weight.device
+		else:
+			raise AttributeError("Оригинальный слой не содержит матрицу весов (weight)")
 
-import warnings
-warnings.filterwarnings('ignore', category=FutureWarning)
+		# Инициализируем веса адаптера на девайсе базовой модели
+		self.lora_A = nn.Parameter(torch.zeros((in_features, rank), dtype=torch.bfloat16, device=target_device))
+		self.lora_B = nn.Parameter(torch.zeros((rank, out_features), dtype=torch.bfloat16, device=target_device))
 
-class ChromaDoubleBlock(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.img_attn = nn.Module()
-        self.img_attn.qkv = nn.Linear(hidden_dim, hidden_dim * 3, bias=True)
-        self.img_attn.proj = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        
-    def forward(self, x, x_norm):
-        qkv_out = self.img_attn.qkv(x_norm)
-        proj_out = self.img_attn.proj(qkv_out[..., :3072])
-        return x + proj_out
+		# Каноничная PEFT-инициализация со стабилизацией градиентного замка
+		nn.init.normal_(self.lora_A, mean=0.0, std=1.0 / math.sqrt(rank))
+		nn.init.normal_(self.lora_B, mean=0.0, std=1e-5)
 
-class ChromaSingleBlock(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.linear1 = nn.Linear(hidden_dim, 21504, bias=True)
-        self.linear2 = nn.Linear(15360, hidden_dim, bias=True)
-        
-    def forward(self, x, x_norm):
-        linear1_out = self.linear1(x_norm)[..., :3072]
-        return x + linear1_out
+	def forward(self, x):
+		# Защита от сжатия градиентов квантованным слоем
+		if x.dtype != torch.bfloat16:
+			x = x.to(torch.bfloat16)
+		if not x.requires_grad and self.training:
+			x = x.clone().requires_grad_(True)
+			
+		base_output = self.original_layer(x)
+		lora_output = (x @ self.lora_A @ self.lora_B) * self.scaling
+		return base_output.to(torch.bfloat16) + lora_output
+
+print("📟 Блок №3 зафиксирован. Структура LoRA-адаптеров готова к инъекции.")
+def inject_chroma_lora(model, target_rank=16, target_alpha=32):
+	"""
+	Автоматический обход архитектуры Chroma1-HD и внедрение LoRA-оберток.
+	"""
+	injected_count = 0
+	for name, module in model.named_modules():
+		is_target_layer = any(x in name for x in [
+			"img_attn.qkv",
+			"img_attn.proj",
+			"linear1",
+			"linear2"
+		])
+
+		if is_target_layer and hasattr(module, 'weight'):
+			parent_name = ".".join(name.split(".")[:-1])
+			layer_name = name.split(".")[-1]
+			parent_module = model.get_submodule(parent_name) if parent_name else model
+
+			module.weight.requires_grad = False
+			if hasattr(module, 'bias') and module.bias is not None:
+				module.bias.requires_grad = False
+
+			wrapper = ChromaLoraWrapper(original_layer=module, rank=target_rank, alpha=target_alpha)
+			setattr(parent_module, layer_name, wrapper)
+			injected_count += 1
+
+	print(f"🎯 Модификация графа: успешно внедрено {injected_count} LoRA-модулей.")
+	return model
+
+def compute_flow_matching_loss(model, x_1, condition):
+	"""
+	Чистый Rectified Flow Matching Loss. Траектория от шума x_0 к оригиналу x_1.
+	"""
+	batch_size = x_1.size(0)
+	x_0 = torch.randn_like(x_1)
+	t = torch.rand(batch_size, device=x_1.device, dtype=x_1.dtype)
+	t_blended = t.view(batch_size, 1, 1, 1)
+
+	# Линейная интерполяция
+	x_t = (1.0 - t_blended) * x_0 + t_blended * x_1
+	target_velocity = x_1 - x_0
+	pred_velocity = model(x_t, t, condition)
+	
+	return torch.mean((pred_velocity - target_velocity) ** 2)
+
+print("📟 Блок №4 зафиксирован. Логика инъекции и лосса на борту.")
+from src.dataset import HeavyLatentDataset
 
 def run_latent_heavy_training():
-    print('🔥 С СТЯЩ   CHROMA1-HD (Ы Ш )...')
+	print("🔥 ИНИЦИАЛИЗАЦИЯ СЕРДЦА КОСМОЛЕТА...")
+	
+	# Сборка датасета и загрузчика данных
+	dataset = HeavyLatentDataset(
+		metadata_path=METADATA_PATH,
+		text_cache_dir=TEXT_CACHE_DIR,
+		latent_cache_dir=LATENT_CACHE_DIR
+	)
+	dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+	print(f"✅ [Data] Стриминг латентов готов. Записей в печи: {len(dataset)}")
+
+	# Инициализация честного 16-канального VAE из оффлайн-загашника
+	print("📂 Сборка фабричного 16-канального VAE для живого контроля...")
+	from safetensors.torch import load_file
+	
+	vae = AutoencoderKL(
+		in_channels=3,
+		out_channels=3,
+		down_block_types=["DownEncoderBlock2D"],
+		up_block_types=["UpDecoderBlock2D"],
+		block_out_channels=[128],
+		latent_channels=16,
+		norm_num_groups=32
+	)
+	vae_sd = load_file(VAE_PATH)
+	vae.load_state_dict(vae_sd, strict=False)
+	vae = vae.to(device=device, dtype=torch.float32)
+	vae.eval()
+	print("✅ [VAE] 16-канальный автоэнкодер успешно состыкован!")
+	# Собираем параметры из оберток
+	trainable_params = []
+	for module in transformer.modules():
+		if module.__class__.__name__ == "ChromaLoraWrapper":
+			module.lora_A.requires_grad = True
+			module.lora_B.requires_grad = True
+			trainable_params.append(module.lora_A)
+			trainable_params.append(module.lora_B)
+
+	print(f"🏋️ Активных LoRA модулей в квантованном графе: {len(trainable_params)}")
+	
+	# Конфигурация AdamW и планировщика с прогревом (Warmup 5%)
+	optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)
+	num_training_steps = num_epochs * len(dataloader)
+	scheduler = get_cosine_schedule_with_warmup(
+		optimizer, 
+		num_warmup_steps=int(num_training_steps * 0.05), 
+		num_training_steps=num_training_steps
+	)
+
+	# Фиксация латентного шума для честного контроля валидации
+	print("🎲 Заморозка фиксированного латентного шума для валидации...")
+	fixed_noise = torch.randn((1, 16, 128, 128), device=device, dtype=torch.bfloat16)
+
+	print("🚀 Боевая печь запущена с мягким разгоном (Warmup)!")
+	for epoch in range(num_epochs):
+		epoch_loss = 0.0
+		transformer.train()
+		
+		for batch in dataloader:
+			latents = batch["latent"].to(device=device, dtype=torch.bfloat16)
+			text_emb = batch["text_embedding"].to(device=device, dtype=torch.bfloat16)
+			
+			loss = compute_flow_matching_loss(transformer, latents, text_emb)
+			loss.backward()
+			
+			optimizer.step()
+			scheduler.step()
+			optimizer.zero_grad()
+			
+			epoch_loss += loss.item()
+
+		avg_loss = epoch_loss / len(dataloader)
+		print(f"📊 Эпоха [{epoch+1}/{num_epochs}] | Реальный латентный лосс: {avg_loss:.6f}")
+
+		# Рендеринг слепка на лету через честный 16-канальный VAE
+		if (epoch + 1) % 5 == 0 or epoch == 0:
+			with torch.no_grad():
+				# Декодируем каноничный 16-канальный латент Flux напрямую в RGB
+				pixels_out = vae.decode(latents[:1].to(dtype=torch.float32)).sample
+				pixels_out = (pixels_out / 2 + 0.5).clamp(0, 1)
+				
+				# Сохранение слепка на SSD
+				from torchvision.utils import save_image
+				out_img_path = os.path.join(OUTPUT_DIR, "validation_latent_heavy", f"latent_heavy_epoch_{epoch+1}.png")
+				os.makedirs(os.path.dirname(out_img_path), exist_ok=True)
+				save_image(pixels_out, out_img_path)
+				print(f"📸 [Визуализатор] Четкий 16-канальный RGB-слепок успешно испечен!")
+
+	# Конец функции обучения. Извлекаем и сохраняем финальные LoRA веса
+	print("💾 Экстракция финальных LoRA матриц...")
+	final_lora = {}
+	for module in transformer.modules():
+		if module.__class__.__name__ == "ChromaLoraWrapper":
+			# Извлекаем веса напрямую из оберток
+			final_lora[f"{module.original_layer.__class__.__name__}_lora_A"] = module.lora_A.cpu()
+			final_lora[f"{module.original_layer.__class__.__name__}_lora_B"] = module.lora_B.cpu()
+	
+	from safetensors.torch import save_file
+	save_file(final_lora, os.path.join(OUTPUT_DIR, "chroma1_mangala_lora.safetensors"))
+	print("🎉 Большая плавка успешно завершена! Веса сохранены в корень проекта.")
     
-    checkpoint_path = r'Z:\AiModels\models\checkpoints\chroma1\Chroma1-HD-fp8_scaled_defaultloader_hybrid_large_rev2.safetensors'
-#    vae_path = r'Z:\AiModels\models\vae\ae.safetensors'
-    jsonl_path = r'Z:\flowch\metadata.jsonl'
-    cache_pt_path = r'Z:\flowch\dataset\text_cache\DSC_0465.pt'
-    output_lora_path = r'Z:\flowch\chroma1_mangala_lora_latent_heavy.safetensors'
-    val_dir = r'Z:\flowch\validation_latent_heavy'
-    
-    os.makedirs(val_dir, exist_ok=True)
-    epochs = 20  
-    batch_size = 1  
-    lr = 2e-5  
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    print(f'💻 елевое устройство: {device.upper()}')
+if __name__ == "__main__":
+	# Учет и контроль: проверяем, что базовая модель Chroma1-HD импортирована
+	# (Перед запуском убедись, что твой объект трансформера загружен в коде выше под именем 'transformer')
+	if "transformer" not in globals():
+		print("⚠ Ошибка: Объект 'transformer' не обнаружен в глобальной области видимости.")
+		print("👉 Подгрузи свою квантованную базовую модель Chroma1-HD перед вызовом тренировки!")
+		sys.exit(1)
+		
+	# Запуск большой плавки на 150 эпох с честным оффлайн-контуром
+	run_latent_heavy_training()
 
-    # агрузка данных
-    dataset = ChromaDataset(jsonl_path=jsonl_path)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-
-#    print('📥 агрузка локального VAE для генератора слепков...')
-#    vae = AutoencoderKL(
-#        in_channels=3, out_channels=3,
-#        down_block_types=['DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D'],
-#        up_block_types=['UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D'],
-#        block_out_channels=list((128, 256, 512, 512)), layers_per_block=2, latent_channels=16, norm_num_groups=32
-#    )
-#    vae.load_state_dict(load_file(vae_path), strict=False)
-
-
- print("📂 Загрузка каноничного VAE из локального SDXL чекпоинта...")
-    from diffusers import AutoencoderKL
-    
-    # Берем VAE напрямую из проверенной рабочей модели, без интернета
-    vae_path = r"Z:\AiModels\models\checkpoints\sdxl\dreamshaperXL_lightningDPMSDE_FP16.safetensors"
-    vae = AutoencoderKL.from_single_file(
-        vae_path,
-        torch_dtype=torch.float32  # Оставляем в float32, чтобы не ловить краши декодера
-    ).to("cuda")
-    vae = vae.to(device=device, dtype=torch.bfloat16)
-    vae.eval()
-
-    # Собираем скелет графа на CPU
-    class LatentChromaTransformerGraph(nn.Module):
-        def __init__(self, patch_size=2, in_channels=16, hidden_dim=3072):
-            super().__init__()
-            self.patch_size = patch_size
-            self.in_channels = in_channels
-            self.hidden_dim = hidden_dim
-            
-            self.x_embed = nn.Linear(patch_size * patch_size * in_channels, hidden_dim)
-            self.norms_double = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(19)])
-            self.norms_single = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(38)])
-            
-            self.double_blocks = nn.ModuleList([ChromaDoubleBlock(hidden_dim) for _ in range(19)])
-            self.single_blocks = nn.ModuleList([ChromaSingleBlock(hidden_dim) for _ in range(38)])
-            
-            self.x_out = nn.Linear(hidden_dim, patch_size * patch_size * in_channels)
-            self.norm_out = nn.LayerNorm(hidden_dim)
-            
-        def forward(self, x_t, t, text_embeddings):
-            B, C, H, W = x_t.shape 
-            p = self.patch_size
-            
-            x_patches = x_t.unfold(2, p, p).unfold(3, p, p)
-            _, _, H_p, W_p, _, _ = x_patches.shape
-            
-            x_patches = x_patches.permute(0, 2, 3, 4, 5, 1).contiguous().clone()
-            x_flat_patches = x_patches.view(B, H_p * W_p, p * p * C)
-            
-            x_flat = self.x_embed(x_flat_patches)
-            
-            if isinstance(text_embeddings, dict):
-                t5_feat = text_embeddings['t5_hidden'].mean(dim=1)[:, :self.hidden_dim].unsqueeze(1)
-            else:
-                t5_feat = text_embeddings.unsqueeze(1)
-                
-            x_flat = x_flat + t5_feat.to(x_flat.dtype)
-            
-            for idx, block in enumerate(self.double_blocks):
-                x_norm = self.norms_double[idx](x_flat)
-                x_flat = block(x_flat, x_norm)
-                
-            for idx, block in enumerate(self.single_blocks):
-                x_norm = self.norms_single[idx](x_flat)
-                x_flat = block(x_flat, x_norm)
-                
-            x_flat_norm = self.norm_out(x_flat)
-            out_patches = self.x_out(x_flat_norm)
-            out_patches = out_patches.view(B, H_p, W_p, p, p, C)
-            out_latent = out_patches.permute(0, 5, 1, 3, 2, 4).contiguous()
-            
-            return out_latent.view(B, C, H, W)
-
-    base_model = LatentChromaTransformerGraph()
-
-    # 🔥 СТТЫ Ш 1: ливаем реальные веса в чистый CPU-граф  инжекции LoRA
-    print('📂 Синхронизация и загрузка реальных FP8 весов трансформера Chroma1-HD...')
-    checkpoint_sd = load_file(checkpoint_path)
-    model_sd = base_model.state_dict()
-    transferred_count = 0
-    
-    for k, v in checkpoint_sd.items():
-        if k in model_sd:
-            model_sd[k] = v.to(torch.bfloat16)
-            transferred_count += 1
-            
-    base_model.load_state_dict(model_sd, strict=False)
-    print(f'  [+] СШ Т {transferred_count} СТЯЩХ Т  Т!')
-
-    # 🔥 СТТЫ Ш 2: ереносим реальную базовую модель в VRAM
-    base_model = base_model.to(device=device, dtype=torch.bfloat16)
-
-    # 🔥 СТТЫ Ш 3: асаживаем LoRA поверх Ь фундамента весов
-    base_model = inject_chroma_lora(base_model, target_rank=16, target_alpha=32)
-    base_model.train()
-
-    # Собираем только LoRA веса для оптимизатора
-    trainable_params = [p for p in base_model.parameters() if p.requires_grad]
-    # optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)`n    num_training_steps = num_epochs * len(dataset)`n    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=int(num_training_steps * 0.05), num_training_steps=num_training_steps)
-    num_epochs = 150
-    optimizer = AdamW(trainable_params, lr=1e-4, weight_decay=0.01)
-    
-    # Считаем шаги исходя из реального размера датасета
-    num_training_steps = num_epochs * len(dataset)
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer, 
-        num_warmup_steps=int(num_training_steps * 0.05), 
-        num_training_steps=num_training_steps
-    )
-    
-    criterion = FlowMatchingLoss()
-
-    print('🎲 аморозка фиксированного латентного шума x_0 для валидации...')
-    val_x_0 = torch.randn(1, 16, 128, 128, device=device, dtype=torch.bfloat16) 
-    val_text_cache = torch.load(cache_pt_path, map_location=device, weights_only=True)
-    val_t5_hidden = val_text_cache['t5_hidden'].mean(dim=1)[:, :3072]
-
-    print(f'🏋️ оличество активных LoRA модулей в каноничном графе: {len(trainable_params)}')
-    print('🚀 оевая печь запущена с ЬЫ первым шагом инициализации!')
-
-    for epoch in range(epochs):
-        base_model.train()
-        epoch_loss = 0.0
-        for step, batch in enumerate(dataloader):
-            optimizer.zero_grad(set_to_none=True)
-            
-            latent_values = batch['latent_values'].to(device, dtype=torch.bfloat16)
-            text_embeddings = {
-                'clip_hidden': batch['clip_hidden'].to(device),
-                't5_hidden': batch['t5_hidden'].to(device)
-            }
-            
-            loss = criterion(base_model, latent_values, text_embeddings)
-            
-            if torch.isnan(loss) or torch.isinf(loss):
-                continue
-                
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=0.5)
-            optimizer.step()
-            scheduler.step()  # <--- Вставляем сюда!
-            epoch_loss += loss.item()
-            
-        print(f'📊 поха [{epoch+1}/{epochs}] | еальный латентный лосс: {epoch_loss / len(dataloader):.6f}')
-
-        print(f'📸 [изуализатор] екодирование слепка epoch_{epoch+1} через VAE...')
-        base_model.eval()
-        with torch.no_grad():
-            x_t = val_x_0.clone()
-            val_steps = 20
-            dt = 1.0 / val_steps
-            
-            for i in range(val_steps):
-                v = base_model(x_t, i * dt, val_t5_hidden)
-                x_t = x_t + v * dt
-                
-            decoded_latents = x_t / 0.18215
-            pixels_out = vae.decode(decoded_latents).sample
-            
-            pixels_out = (pixels_out + 1.0) / 2.0
-            pixels_out = pixels_out.clamp(0.0, 1.0).squeeze(0).cpu().float()
-            img_array = (pixels_out.permute(1, 2, 0).numpy() * 255).astype('uint8')
-            
-            val_img_path = os.path.join(val_dir, f'latent_heavy_epoch_{epoch+1}.png')
-            Image.fromarray(img_array).save(val_img_path)
-            print(f'  [+] еткий RGB-слепок успешно испечен: {val_img_path}')
-
-    print('💾 кстракция финальных LoRA матриц...')
-    lora_state_dict = {}
-    for name, param in base_model.named_parameters():
-        if 'lora_' in name:
-            clean_name = name.replace('original_layer.', '')
-            lora_state_dict[clean_name] = param.cpu().detach()
-
-    save_file(lora_state_dict, output_lora_path)
-    print(f'🎉 Ь   Ш!')
-
-if __name__ == '__main__':
-    run_latent_heavy_training()
