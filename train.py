@@ -3,6 +3,8 @@ import os
 import sys
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
+
 # from torch.utils.data import DataLoader
 # from torch.optim import AdamW`nfrom transformers import get_cosine_schedule_with_warmup
 from torch.optim import AdamW
@@ -46,7 +48,7 @@ def run_latent_heavy_training():
     print('🔥 С СТЯЩ   CHROMA1-HD (Ы Ш )...')
     
     checkpoint_path = r'Z:\AiModels\models\checkpoints\chroma1\Chroma1-HD-fp8_scaled_defaultloader_hybrid_large_rev2.safetensors'
-    vae_path = r'Z:\AiModels\models\vae\ae.safetensors'
+#    vae_path = r'Z:\AiModels\models\vae\ae.safetensors'
     jsonl_path = r'Z:\flowch\metadata.jsonl'
     cache_pt_path = r'Z:\flowch\dataset\text_cache\DSC_0465.pt'
     output_lora_path = r'Z:\flowch\chroma1_mangala_lora_latent_heavy.safetensors'
@@ -64,14 +66,25 @@ def run_latent_heavy_training():
     dataset = ChromaDataset(jsonl_path=jsonl_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    print('📥 агрузка локального VAE для генератора слепков...')
-    vae = AutoencoderKL(
-        in_channels=3, out_channels=3,
-        down_block_types=['DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D'],
-        up_block_types=['UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D'],
-        block_out_channels=list((128, 256, 512, 512)), layers_per_block=2, latent_channels=16, norm_num_groups=32
-    )
-    vae.load_state_dict(load_file(vae_path), strict=False)
+#    print('📥 агрузка локального VAE для генератора слепков...')
+#    vae = AutoencoderKL(
+#        in_channels=3, out_channels=3,
+#        down_block_types=['DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D', 'DownEncoderBlock2D'],
+#        up_block_types=['UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D', 'UpDecoderBlock2D'],
+#        block_out_channels=list((128, 256, 512, 512)), layers_per_block=2, latent_channels=16, norm_num_groups=32
+#    )
+#    vae.load_state_dict(load_file(vae_path), strict=False)
+
+
+ print("📂 Загрузка каноничного VAE из локального SDXL чекпоинта...")
+    from diffusers import AutoencoderKL
+    
+    # Берем VAE напрямую из проверенной рабочей модели, без интернета
+    vae_path = r"Z:\AiModels\models\checkpoints\sdxl\dreamshaperXL_lightningDPMSDE_FP16.safetensors"
+    vae = AutoencoderKL.from_single_file(
+        vae_path,
+        torch_dtype=torch.float32  # Оставляем в float32, чтобы не ловить краши декодера
+    ).to("cuda")
     vae = vae.to(device=device, dtype=torch.bfloat16)
     vae.eval()
 
