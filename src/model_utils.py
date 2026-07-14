@@ -1,4 +1,4 @@
-﻿import torch
+import torch
 import torch.nn as nn
 import math
 
@@ -37,7 +37,7 @@ class ChromaLoraWrapper(nn.Module):
         base_output = self.original_layer(x)
         x_bf16 = x.to(torch.bfloat16)
         lora_output = (x_bf16 @ self.lora_A @ self.lora_B) * self.scaling
-        return base_output + lora_output.to(base_output.dtype)
+        return base_output.to(torch.bfloat16) + lora_output
 
 def inject_chroma_lora(model, target_rank=16, target_alpha=32):
     """
