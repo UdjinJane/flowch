@@ -53,8 +53,17 @@ def run_latent_heavy_training():
         for batch in dataloader:
             optimizer.zero_grad()
             
-            # 🚀 ТЫ  СШТЫ Т
-            latents = batch['latent_values'].to(device) * 0.18215
+            img_tensors = []
+            for name in batch['img_name']:
+                img_name_with_ext = name if name.lower().endswith(('.jpg', '.jpeg', '.png')) else f'{name}.JPG'
+                img_path = os.path.join(DATASET_DIR, img_name_with_ext)
+                img = Image.open(img_path).convert('RGB')
+                img_tensors.append(preprocess(img))
+                
+            images = torch.stack(img_tensors).to(device)
+            
+            with torch.no_grad():
+                latents = vae.encode(images).latent_dist.sample() * 0.18215
                 
             # Изменяем форму [B, 16, H, W] -> [B, H*W, 64] для линейных слоев прокси-модели
             B, C, H, W = latents.shape
@@ -92,15 +101,11 @@ def run_latent_heavy_training():
                 # 🚀 ИНТЕГРАЦИЯ РЕНДЕРА: Вызываем генератор прямо в общем потоке
                 print(f'📸 Автоматический запуск рендеринга для эпохи {epoch}...')
                 try:
-                    # Подтягиваем генератор из папки src без коллизий путей
                     from src.generate import run_inference
-                    import sys
-                    
-                    # Подменяем аргументы командной строки на лету для встроенного argparse
-                    sys.argv = ['generate.py', '--checkpoint', checkpoint_path, '--epoch', str(epoch)]
-                    run_inference()
+                    run_inference(loaded_transformer=transformer, epoch=epoch)
                 except Exception as e:
                     print(f'⚠️ Не удалось построить промежуточный имидж: {e}')
+
             else:
                 print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров для сохранения!')
 
