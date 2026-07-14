@@ -1,4 +1,4 @@
-﻿import os
+mport os
 from safetensors.torch import safe_open
 
 checkpoint_path = r"Z:\AiModels\models\checkpoints\chroma1\Chroma1-HD-fp8_scaled_defaultloader_hybrid_large_rev2.safetensors"
