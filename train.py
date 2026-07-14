@@ -185,19 +185,17 @@ def run_latent_heavy_training():
 	# Фиксация латентного шума для честного контроля валидации
 	print("🎲 Заморозка фиксированного латентного шума для валидации...")
 	fixed_noise = torch.randn((1, 16, 128, 128), device=device, dtype=torch.bfloat16)
-
-	print("🚀 Боевая печь запущена с мягким разгоном (Warmup)!")
-	for epoch in range(num_epochs):
-		epoch_loss = 0.0
-		transformer.train()
-		
+print("🚀 Боевая печь запущена с мягким разгоном (Warmup)!")
+    
+for current_epoch in range(num_epochs):
+	epoch_loss = 0.0
+	steps_in_epoch = 0
+	transformer.train()
+	
+	# Запуск итератора батчей с проверкой на пустоту
 	for batch in dataloader:
 		latents = batch["latent_values"].to(device=device, dtype=torch.bfloat16)
-            
-        # Объединяем эмбеддинги текстовых энкодеров для передачи в condition
-        # (Для заглушки пока просто берем T5 или конкатенируем по последней размерности)
 		text_emb = batch["t5_hidden"].to(device=device, dtype=torch.bfloat16)
-
 		
 		loss = compute_flow_matching_loss(transformer, latents, text_emb)
 		loss.backward()
@@ -207,23 +205,33 @@ def run_latent_heavy_training():
 		optimizer.zero_grad()
 		
 		epoch_loss += loss.item()
-
-		avg_loss = epoch_loss / len(dataloader)
-		print(f"📊 Эпоха [{epoch+1}/{num_epochs}] | Реальный латентный лосс: {avg_loss:.6f}")
-
-		# Рендеринг слепка на лету через честный 16-канальный VAE
-		if (epoch + 1) % 5 == 0 or epoch == 0:
+		steps_in_epoch += 1
+		
+	# Защита от деления на ноль, если даталоадер пустой
+	if steps_in_epoch == 0:
+		print(f"⚠ ВНИМАНИЕ! Даталоадер вернул 0 батчей на эпохе {current_epoch + 1}!")
+		# Имитируем шаг, чтобы не ломать лосс, если датасет пустой
+		avg_loss = epoch_loss
+	else:
+		avg_loss = epoch_loss / steps_in_epoch
+		
+	print(f"📊 Эпоха [{current_epoch + 1}/{num_epochs}] | Шагов: {steps_in_epoch} | Реальный латентный лосс: {avg_loss:.6f}")
+	
+	# Рендеринг слепка строго один раз в 10 эпох
+	if current_epoch % 10 == 0 or current_epoch == num_epochs - 1:
+		try:
 			with torch.no_grad():
-				# Декодируем каноничный 16-канальный латент Flux напрямую в RGB
 				pixels_out = vae.decode(latents[:1].to(dtype=torch.float32)).sample
 				pixels_out = (pixels_out / 2 + 0.5).clamp(0, 1)
 				
-				# Сохранение слепка на SSD
 				from torchvision.utils import save_image
-				out_img_path = os.path.join(OUTPUT_DIR, "validation_latent_heavy", f"latent_heavy_epoch_{epoch+1}.png")
+				out_img_path = os.path.join(OUTPUT_DIR, "validation_latent_heavy", f"latent_heavy_epoch_{current_epoch + 1}.png")
 				os.makedirs(os.path.dirname(out_img_path), exist_ok=True)
 				save_image(pixels_out, out_img_path)
 				print(f"📸 [Визуализатор] Четкий 16-канальный RGB-слепок успешно испечен!")
+		except Exception as vae_error:
+			print(f"⚠ [Визуализатор] Сбой: {vae_error}")
+
 
 	# Конец функции обучения. Извлекаем и сохраняем финальные LoRA веса
 	print("💾 Экстракция финальных LoRA матриц...")
@@ -239,53 +247,39 @@ def run_latent_heavy_training():
 	print("🎉 Большая плавка успешно завершена! Веса сохранены в корень проекта.")
     
 if __name__ == "__main__":
-	import sys
+    import sys
     import torch
     import torch.nn as nn
-	from src.model_utils import inject_chroma_lora
+    from src.model_utils import inject_chroma_lora
 
-    # Восстанавливаем нашу проверенную bfloat16-архитектуру заглушки
-	class EmptyTransformer(nn.Module):
-		def __init__(self):
-			super().__init__()
-            # Входная проекция под размер датасета
+    # Эмуляция глубокой архитектуры Chroma1-HD
+    class EmptyTransformer(nn.Module):
+        def __init__(self):
+            super().__init__()
             self.proj_in = nn.Linear(128, 3072, bias=False)
-            
-            # Эмуляция тяжелых блоков Chroma1-HD (24 глубоких слоя!)
-            # Инжектор LoRA перехватит блоки по ключевому слову "linear1" и "linear2"
+            # 24 слоя с линейными модулями для LoRA
             self.blocks = nn.ModuleList([
                 nn.ModuleDict({
                     "linear1": nn.Linear(3072, 3072, bias=False),
                     "linear2": nn.Linear(3072, 3072, bias=False)
                 }) for _ in range(24)
             ])
-            
-            # Выходная проекция
             self.proj_out = nn.Linear(3072, 128, bias=False)
 
         def forward(self, x, t, c):
-            # Пропускаем латенты через эмулируемый глубокий граф
             x = self.proj_in(x)
             for block in self.blocks:
-                # Прогоняем через цепочку тяжелых слоев, куда врежутся LoRA
                 x = block["linear1"](x)
                 x = block["linear2"](x)
             return self.proj_out(x)
-
     
     try:
-        print("📂 Загрузка БОЕВОГО монолита Chroma1-HD через bfloat16-прокси...")
-        
-        # 1. Создаем прокси-модель сразу в CUDA и bfloat16
+        print("📂 Инициализация прокси-модели Chroma1-HD (bfloat16)...")
+        # Создание модели, внедрение LoRA и запуск тренировки
         base_model = EmptyTransformer().to(device="cuda", dtype=torch.bfloat16)
-        
-        # 2. Накатываем наши LoRA-модули прямо на созданный граф
         transformer = inject_chroma_lora(base_model)
-        
-        # 3. Запуск большой плавки на 150 эпох с честным оффлайн-контуром
         run_latent_heavy_training()
-        
     except Exception as e:
-        print(f"⚠ Сбой инициализации графа модели: {e}")
+        print(f"⚠ Ошибка: {e}")
         sys.exit(1)
 
