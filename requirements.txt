@@ -1,0 +1,16 @@
+# Чистый базис для нашей кастомной Chroma LoRA печи
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+safetensors>=0.4.0
+numpy>=1.26.0
+pillow>=10.0.0
+psutil>=5.9.0
+transformers>=4.40.0
+accelerate>=0.30.0
+huggingface_hub>=0.23.0
+sentencepiece>=0.2.0
+tiktoken>=0.7.0
+
+
