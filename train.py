@@ -163,25 +163,18 @@ def run_latent_heavy_training():
 			trainable_params.append(module.lora_B)
 
 	print(f"🏋️ Активных LoRA модулей в квантованном графе: {len(trainable_params)}")
-	
-	# Конфигурация AdamW и планировщика с прогревом (Warmup 5%)
-    optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)
-	num_training_steps = num_epochs * len(dataloader)
+# Конфигурация AdamW и планировщика с прогревом (Warmup 5%)
+	optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)
+
+	num_training_steps = len(train_dataloader) * 150  # 150 эпох
+	num_warmup_steps = int(num_training_steps * 0.05)  # 5% на прогрев
+
 	scheduler = get_cosine_schedule_with_warmup(
-		optimizer, 
-		num_warmup_steps=int(num_training_steps * 0.05), 
+		optimizer=optimizer,
+		num_warmup_steps=num_warmup_steps,
 		num_training_steps=num_training_steps
-	)
-    # Настройка косинусного планировщика
-    num_training_steps = len(train_dataloader) * 150  # 150 эпох
-    num_warmup_steps = int(num_training_steps * 0.05)  # 5% на прогрев
-
-    scheduler = get_cosine_schedule_with_warmup(
-    optimizer=optimizer,
-    num_warmup_steps=num_warmup_steps,
-    num_training_steps=num_training_steps
-    )
-
+)
+	
 
 	# Фиксация латентного шума для честного контроля валидации
 	print("🎲 Заморозка фиксированного латентного шума для валидации...")
