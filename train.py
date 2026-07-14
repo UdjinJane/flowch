@@ -194,6 +194,7 @@ def run_latent_heavy_training():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=0.5)
             optimizer.step()
+            scheduler.step()  # <--- Вставляем сюда!
             epoch_loss += loss.item()
             
         print(f'📊 поха [{epoch+1}/{epochs}] | еальный латентный лосс: {epoch_loss / len(dataloader):.6f}')
