@@ -4,7 +4,7 @@ import argparse
 from PIL import Image
 import numpy as np
 from safetensors.torch import load_file
-from src.config import VAE_PATH, OUTPUT_DIR, device
+from .config import VAE_PATH, OUTPUT_DIR, device
 
 def run_inference():
     parser = argparse.ArgumentParser()
@@ -15,7 +15,7 @@ def run_inference():
     print(f"🚀 Загрузка чекпоинта LoRA: {args.checkpoint}")
     
     # 1. Инициализируем пустой Transformer (из ядра проекта)
-    from src.models import EmptyTransformer
+    from .models import EmptyTransformer
     transformer = EmptyTransformer().to(device)
     
     # 2. Накатываем веса LoRA

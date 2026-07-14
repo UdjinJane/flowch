@@ -7,7 +7,7 @@ from transformers import get_cosine_schedule_with_warmup
 from PIL import Image
 import torchvision.transforms as T
 
-from src.config import DATASET_DIR, OUTPUT_DIR, device, num_epochs
+from src.config import DATASET_DIR, OUTPUT_DIR, device, num_epochs, batch_size
 from src.models import EmptyTransformer, build_vae
 from src.model_utils import inject_chroma_lora
 from src.dataset import ChromaDataset
@@ -41,7 +41,7 @@ def run_latent_heavy_training():
     optimizer = AdamW(lora_params, lr=1e-5, weight_decay=0.01)
     
     dataset = ChromaDataset(jsonl_path=os.path.join(OUTPUT_DIR, 'metadata.jsonl'))
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
     scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=int(num_epochs * 0.05), num_training_steps=num_epochs)
     
@@ -82,22 +82,37 @@ def run_latent_heavy_training():
         
         if epoch % 5 == 0:
             print(f'💾 [Эпоха {epoch}] Запись чекпоинта на SSD...')
+            import os
             from safetensors.torch import save_file
-
+            
             # 1. Формируем железный путь и создаем папку
             checkpoint_dir = os.path.join(OUTPUT_DIR, "checkpoints")
             os.makedirs(checkpoint_dir, exist_ok=True)
             checkpoint_path = os.path.join(checkpoint_dir, f"chroma1_mangala_lora_epoch_{epoch}.safetensors")
-
-            # 2. Фильтруем граф весов
+            
+            # 2. Фильтруем граф весов: забираем только матрицы LoRA
             lora_state_dict = {k: v.cpu() for k, v in transformer.state_dict().items() if "lora" in k}
-
-            # 3. Честное запекание
+            
+            # 3. Честное запекание весов
             if lora_state_dict:
                 save_file(lora_state_dict, checkpoint_path)
                 print(f'✅ Чекпоинт успешно сохранен: {checkpoint_path}')
+                
+                # 🚀 ИНТЕГРАЦИЯ РЕНДЕРА: Вызываем генератор прямо в общем потоке
+                print(f'📸 Автоматический запуск рендеринга для эпохи {epoch}...')
+                try:
+                    # Подтягиваем генератор из папки src без коллизий путей
+                    from src.generate import run_inference
+                    import sys
+                    
+                    # Подменяем аргументы командной строки на лету для встроенного argparse
+                    sys.argv = ['generate.py', '--checkpoint', checkpoint_path, '--epoch', str(epoch)]
+                    run_inference()
+                except Exception as e:
+                    print(f'⚠️ Не удалось построить промежуточный имидж: {e}')
             else:
-                print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров!')
+                print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров для сохранения!')
+
 
 
 if __name__ == '__main__':

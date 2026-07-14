@@ -10,3 +10,5 @@ OUTPUT_DIR = 'Z:\\flowch'
 
 num_epochs = 150
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+batch_size = 4
