@@ -144,7 +144,7 @@ def run_latent_heavy_training():
 		out_channels=3,
 		down_block_types=["DownEncoderBlock2D"],
 		up_block_types=["UpDecoderBlock2D"],
-		block_out_channels=[128],
+		block_out_channels=[128, 256, 512, 512],
 		latent_channels=16,
 		norm_num_groups=32
 	)
