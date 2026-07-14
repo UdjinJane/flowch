@@ -82,23 +82,23 @@ def run_latent_heavy_training():
         
         if epoch % 5 == 0:
             print(f'💾 [Эпоха {epoch}] Запись чекпоинта на SSD...')
-            import os
             from safetensors.torch import save_file
-            
-            # 1. Формируем железный путь и создаем папку, если космолет её забыл
+
+            # 1. Формируем железный путь и создаем папку
             checkpoint_dir = os.path.join(OUTPUT_DIR, "checkpoints")
             os.makedirs(checkpoint_dir, exist_ok=True)
             checkpoint_path = os.path.join(checkpoint_dir, f"chroma1_mangala_lora_epoch_{epoch}.safetensors")
-            
-            # 2. Фильтруем граф весов: забираем только матрицы нашей LoRA
+
+            # 2. Фильтруем граф весов
             lora_state_dict = {k: v.cpu() for k, v in transformer.state_dict().items() if "lora" in k}
-            
-            # 3. Честное запекание на SSD без вранья в консоль
+
+            # 3. Честное запекание
             if lora_state_dict:
                 save_file(lora_state_dict, checkpoint_path)
                 print(f'✅ Чекпоинт успешно сохранен: {checkpoint_path}')
             else:
-                print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров для сохранения!')
+                print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров!')
+
 
 if __name__ == '__main__':
     run_latent_heavy_training()
