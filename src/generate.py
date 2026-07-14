@@ -7,6 +7,10 @@ from safetensors.torch import load_file
 from .config import VAE_PATH, OUTPUT_DIR, device
 
 def run_inference(loaded_transformer=None, epoch=0):
+    # 🚨 ЯЯ RNG: Сохраняем глобальное состояние генератора случайных чисел тренера
+    old_cpu_state = torch.get_rng_state()
+    old_cuda_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+
     # 1. сли модель передана напрямую из тренера — используем её без клонирования!
     if loaded_transformer is not None:
         print(f"📸 [Сэмплер] спользуем прогретый Transformer из памяти тренера...")
@@ -34,8 +38,11 @@ def run_inference(loaded_transformer=None, epoch=0):
     was_training = transformer.training
     transformer.eval()
 
-    # аноничный стартовый шум (дисперсия = 1.0)
+    # аноничный стартовый шум (дисперсия = 1.0) для визуального контроля
     torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+        
     x_t = torch.randn(1, 64, 64, 64, device=device) 
     steps = 25
     dt = 1.0 / steps
@@ -65,6 +72,11 @@ def run_inference(loaded_transformer=None, epoch=0):
     # озвращаем модель в исходное состояние для продолжения плавки
     if was_training:
         transformer.train()
+
+    # 🚨 ЯЯ RNG: олностью восстанавливаем состояние генератора случайных чисел для тренера
+    torch.set_rng_state(old_cpu_state)
+    if old_cuda_state is not None:
+        torch.cuda.set_rng_state(old_cuda_state)
 
 if __name__ == '__main__':
     run_inference()
