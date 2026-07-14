@@ -102,9 +102,12 @@ def run_latent_heavy_training():
                 print(f'📸 Автоматический запуск рендеринга для эпохи {epoch}...')
                 try:
                     from src.generate import run_inference
-                    run_inference(loaded_transformer=transformer, epoch=epoch)
+                    # Добавляем получение текста для первого кадра
+                    text_emb = batch['t5_hidden'][0].unsqueeze(0).to(device)
+                    run_inference(loaded_transformer=transformer, epoch=epoch, text_embedding=text_emb)
                 except Exception as e:
-                    print(f'⚠️ Не удалось построить промежуточный имидж: {e}')
+                    print(f'⚠ Не удалось построить промежуточный имидж: {e}')
+
 
             else:
                 print('⚠️ Ошибка: В графе модели не найдено LoRA-параметров для сохранения!')
