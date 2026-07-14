@@ -239,20 +239,39 @@ def run_latent_heavy_training():
 	print("🎉 Большая плавка успешно завершена! Веса сохранены в корень проекта.")
     
 if __name__ == "__main__":
-    import sys
+	import sys
     import torch
     import torch.nn as nn
-    from src.model_utils import inject_chroma_lora
+	from src.model_utils import inject_chroma_lora
 
     # Восстанавливаем нашу проверенную bfloat16-архитектуру заглушки
-    class EmptyTransformer(nn.Module):
-        def __init__(self):
-            super().__init__()
-            # Входной размер 128 идеально стыкуется с латентами батча
-            self.linear1 = nn.Linear(128, 128, bias=False)
+	class EmptyTransformer(nn.Module):
+		def __init__(self):
+			super().__init__()
+            # Входная проекция под размер датасета
+            self.proj_in = nn.Linear(128, 3072, bias=False)
+            
+            # Эмуляция тяжелых блоков Chroma1-HD (24 глубоких слоя!)
+            # Инжектор LoRA перехватит блоки по ключевому слову "linear1" и "linear2"
+            self.blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    "linear1": nn.Linear(3072, 3072, bias=False),
+                    "linear2": nn.Linear(3072, 3072, bias=False)
+                }) for _ in range(24)
+            ])
+            
+            # Выходная проекция
+            self.proj_out = nn.Linear(3072, 128, bias=False)
 
         def forward(self, x, t, c):
-            return self.linear1(x)
+            # Пропускаем латенты через эмулируемый глубокий граф
+            x = self.proj_in(x)
+            for block in self.blocks:
+                # Прогоняем через цепочку тяжелых слоев, куда врежутся LoRA
+                x = block["linear1"](x)
+                x = block["linear2"](x)
+            return self.proj_out(x)
+
     
     try:
         print("📂 Загрузка БОЕВОГО монолита Chroma1-HD через bfloat16-прокси...")
