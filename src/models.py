@@ -11,16 +11,18 @@ class EmptyTransformer(nn.Module):
         self.blocks = nn.ModuleList([
             nn.ModuleDict({
                 'linear1': nn.Linear(3072, 3072, bias=False),
-                'linear2': nn.Linear(3072, 3072, bias=False)
+                'linear2': nn.Linear(3072, 3072, bias=False),
+                'norm1': nn.LayerNorm(3072),
+                'norm2': nn.LayerNorm(3072)
             }) for _ in range(24)
         ])
         self.proj_out = nn.Linear(3072, 64, bias=False)
 
-    def forward(self, x, t, c):
+    def forward(self, x, t=None, c=None):
         x = self.proj_in(x)
         for block in self.blocks:
-            x = block['linear1'](x)
-            x = block['linear2'](x)
+            x = x + torch.tanh(block['linear1'](block['norm1'](x)))
+            x = x + torch.tanh(block['linear2'](block['norm2'](x)))
         return self.proj_out(x)
 
 def build_vae():

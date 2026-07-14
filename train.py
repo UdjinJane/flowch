@@ -38,7 +38,7 @@ def run_latent_heavy_training():
     transformer = inject_chroma_lora(transformer)
     
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
-    optimizer = AdamW(lora_params, lr=1e-4, weight_decay=0.01)
+    optimizer = AdamW(lora_params, lr=1e-5, weight_decay=0.01)
     
     dataset = ChromaDataset(jsonl_path=os.path.join(OUTPUT_DIR, 'metadata.jsonl'))
     dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
@@ -70,11 +70,15 @@ def run_latent_heavy_training():
             latents_reshaped = latents.view(B, -1, 64)
             loss = compute_flow_matching_loss(transformer, latents_reshaped, condition=None)
             loss.backward()
+            # Обрезаем градиенты, чтобы предотвратить взрыв весов
+            torch.nn.utils.clip_grad_norm_(lora_params, max_norm=1.0)
             optimizer.step()
             total_loss += loss.item()
             
         scheduler.step()
-        print(f' Epoch [{epoch}/{num_epochs}] | Loss: {total_loss / len(dataloader):.4f}')
+        # Вычисляем финальную норму для контроля стабильности
+        grad_norm = torch.nn.utils.clip_grad_norm_(lora_params, max_norm=1.0).item()
+        print(f' Epoch [{epoch}/{num_epochs}] | Loss: {total_loss / len(dataloader):.4f} | Grad Norm: {grad_norm:.4f}')
         
         if epoch % 5 == 0:
             print(f'💾 [Эпоха {epoch}] Запись чекпоинта на SSD...')
