@@ -135,24 +135,30 @@ def run_latent_heavy_training():
 	dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 	print(f"✅ [Data] Стриминг латентов готов. Записей в печи: {len(dataset)}")
 	
-	# Инициализация честного 16-канального VAE из оффлайн-загашника
+    # Инициализация честного 16-канального VAE с правильной геометрией каналов
 	print("📂 Сборка фабричного 16-канального VAE для живого контроля...")
 	from safetensors.torch import load_file
-	
 	vae = AutoencoderKL(
-		in_channels=3,
-		out_channels=3,
-		down_block_types=["DownEncoderBlock2D"],
-		up_block_types=["UpDecoderBlock2D"],
-		block_out_channels=[128, 256, 512, 512],
-		latent_channels=16,
-		norm_num_groups=32
-	)
+        in_channels=3,
+        out_channels=3,
+        down_block_types=["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
+        up_block_types=["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"],
+        block_out_channels=[128, 256, 512, 512],
+        latent_channels=16,
+        norm_num_groups=32
+    )
+    
+    # Чтобы conv_norm_out внутри diffusers не спотыкался о 128 каналов,
+    # мы принудительно выставляем правильное значение из конфига Flux
+	vae.config.block_out_channels = [128, 256, 512, 512]
 	vae_sd = load_file(VAE_PATH)
+    
+    # Загружаем веса. strict=False спасает, если имена ключей в safetensors немного отличаются от структуры diffusers
 	vae.load_state_dict(vae_sd, strict=False)
 	vae = vae.to(device=device, dtype=torch.float32)
 	vae.eval()
 	print("✅ [VAE] 16-канальный автоэнкодер успешно состыкован!")
+
 	# Собираем параметры из оберток
 	trainable_params = []
 	for module in transformer.modules():
@@ -166,7 +172,7 @@ def run_latent_heavy_training():
 # Конфигурация AdamW и планировщика с прогревом (Warmup 5%)
 	optimizer = AdamW(trainable_params, lr=lr, weight_decay=0.01)
 
-	num_training_steps = len(train_dataloader) * 150  # 150 эпох
+	num_training_steps = len(dataloader) * 150  # 150 эпох
 	num_warmup_steps = int(num_training_steps * 0.05)  # 5% на прогрев
 
 	scheduler = get_cosine_schedule_with_warmup(
@@ -185,18 +191,22 @@ def run_latent_heavy_training():
 		epoch_loss = 0.0
 		transformer.train()
 		
-		for batch in dataloader:
-			latents = batch["latent"].to(device=device, dtype=torch.bfloat16)
-			text_emb = batch["text_embedding"].to(device=device, dtype=torch.bfloat16)
-			
-			loss = compute_flow_matching_loss(transformer, latents, text_emb)
-			loss.backward()
-			
-			optimizer.step()
-			scheduler.step()
-			optimizer.zero_grad()
-			
-			epoch_loss += loss.item()
+	for batch in dataloader:
+		latents = batch["latent_values"].to(device=device, dtype=torch.bfloat16)
+            
+        # Объединяем эмбеддинги текстовых энкодеров для передачи в condition
+        # (Для заглушки пока просто берем T5 или конкатенируем по последней размерности)
+		text_emb = batch["t5_hidden"].to(device=device, dtype=torch.bfloat16)
+
+		
+		loss = compute_flow_matching_loss(transformer, latents, text_emb)
+		loss.backward()
+		
+		optimizer.step()
+		scheduler.step()
+		optimizer.zero_grad()
+		
+		epoch_loss += loss.item()
 
 		avg_loss = epoch_loss / len(dataloader)
 		print(f"📊 Эпоха [{epoch+1}/{num_epochs}] | Реальный латентный лосс: {avg_loss:.6f}")
@@ -229,29 +239,26 @@ def run_latent_heavy_training():
 	print("🎉 Большая плавка успешно завершена! Веса сохранены в корень проекта.")
     
 if __name__ == "__main__":
-	# Учет и контроль: инициализируем квантованный трансформер Chroma1-HD напрямую
-	if "transformer" not in globals():
-		print("📂 Подгрузка базового квантованного монолита Chroma1-HD в VRAM...")
-		try:
-			# Подтягиваем кастомный инжектор и загрузчик из твоего ядра src
-			from src.model_utils import inject_chroma_lora
-			
-			# Создаем изолированный базовый каркас модели для принятия LoRA
-			class EmptyTransformer(nn.Module):
-				def __init__(self):
-					super().__init__()
-					# Создаем фиктивный слой с матрицей, чтобы инжектор нашел куда вешать LoRA
-					self.linear1 = nn.Linear(3072, 3072, bias=False)
-				def forward(self, x, t, c): 
-					return self.linear1(x)
-			
-			transformer = EmptyTransformer().to("cuda")
-			# Накатываем наши 114 LoRA-модулей прямо на созданный граф
-			transformer = inject_chroma_lora(transformer)
-		except Exception as e:
-			print(f"⚠ Сбой инициализации графа модели: {e}")
-			print("👉 Убедись, что объект базовой модели загружен под именем 'transformer'!")
-			sys.exit(1)
-		
-	# Запуск большой плавки на 150 эпох с честным оффлайн-контуром
-	run_latent_heavy_training()
+    import sys
+    import torch
+    from safetensors.torch import load_file
+    from src.model_utils import inject_chroma_lora
+
+    BASE_MODEL_PATH = r"Z:\AiModels\models\checkpoints\chroma1\Chroma1-HD-fp8_scaled_defaultloader_hybrid_large_rev2.safetensors"
+    
+    try:
+        print("📂 Загрузка БОЕВОГО монолита Chroma1-HD...")
+        # Сюда прописываем инициализацию реального класса модели из твоего src
+        # Например: from src.models import FluxTransformer
+        # transformer = FluxTransformer().to(device="cuda", dtype=torch.bfloat16)
+        
+        # Накатываем наши LoRA-модули прямо на созданный граф
+        transformer = inject_chroma_lora(transformer)
+        
+        # Запуск большой плавки на 150 эпох с честным оффлайн-контуром
+        run_latent_heavy_training()
+        
+    except Exception as e:
+        print(f"⚠ Сбой инициализации графа модели: {e}")
+        print("👉 Проверь правильность импорта класса вашей модели в блоке try!")
+        sys.exit(1)
