@@ -125,16 +125,14 @@ from src.dataset import ChromaDataset
 
 def run_latent_heavy_training():
 	print("🔥 ИНИЦИАЛИЗАЦИЯ СЕРДЦА КОСМОЛЕТА...")
-	
+
 	# Сборка датасета и загрузчика данных
 	dataset = ChromaDataset(
-		metadata_path=METADATA_PATH,
-		text_cache_dir=TEXT_CACHE_DIR,
-		latent_cache_dir=LATENT_CACHE_DIR
+		jsonl_path=METADATA_PATH
 	)
 	dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
 	print(f"✅ [Data] Стриминг латентов готов. Записей в печи: {len(dataset)}")
-
+	
 	# Инициализация честного 16-канального VAE из оффлайн-загашника
 	print("📂 Сборка фабричного 16-канального VAE для живого контроля...")
 	from safetensors.torch import load_file
