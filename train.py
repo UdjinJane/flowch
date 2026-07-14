@@ -82,7 +82,7 @@ def run_latent_heavy_training():
         
         if epoch % 5 == 0:
             print(f'💾 [Эпоха {epoch}] Запись чекпоинта на SSD...')
-            import os
+            
             from safetensors.torch import save_file
             
             # 1. Формируем железный путь и создаем папку
