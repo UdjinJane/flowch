@@ -15,19 +15,20 @@ def run_inference():
     print(f"🚀 агрузка чекпоинта LoRA: {args.checkpoint}")
     
     from .models import EmptyTransformer
-    transformer = EmptyTransformer().to(device)
+    from .model_utils import inject_chroma_lora
     
+    # 1. нициализируем базу и армируем её LoRA-модулями
+    transformer = EmptyTransformer().to(device)
+    transformer = inject_chroma_lora(transformer)
+    
+    # 2. акатываем обученные матрицы (теперь ключи совпадут на 100%!)
     if os.path.exists(args.checkpoint):
         lora_sd = load_file(args.checkpoint)
-        base_sd = transformer.state_dict()
-        for k, v in lora_sd.items():
-            if k in base_sd:
-                base_sd[k].copy_(v.to(device))
-        transformer.load_state_dict(base_sd)
+        transformer.load_state_dict(lora_sd, strict=False)
     
     transformer.eval()
 
-    # 🎯  : иксируем сид, чтобы песок на каждой эпохе был одинаковым
+    # 🎯  : аш сид зафиксирован
     torch.manual_seed(42)
     x_t = torch.randn(1, 64, 64, 64, device=device) 
     steps = 25
