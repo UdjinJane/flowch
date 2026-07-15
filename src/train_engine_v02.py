@@ -87,7 +87,6 @@ def main_train_loop():
             return_dict=False
         )
         # ---  : ССЯ Я С Т5  Ы СЫХ ID ---
-            )
             
             pred_tensor = model_output[0]
             pred_latents = pred_tensor[:, :, :64]
