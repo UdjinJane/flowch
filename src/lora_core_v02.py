@@ -43,7 +43,7 @@ class FluxLoraCoreV02:
         
         # КРИТИЧЕСКИЙ АНТИ-OOM МАНЕВР: Активируем градиентный чекпоинтинг для тотальной разгрузки VRAM!
         # Выметает матрицы активаций внимания из физической памяти GPU, обнуляя заезд в Shared Memory.
-        transformer.gradient_checkpointing_enable()
+        transformer.enable_gradient_checkpointing()
         print("[ОТК] Аппаратный градиентный чекпоинтинг успешно активирован в слоях трансформера.")
         
         print(f"[ОБТ] Инжекция LoRA адаптеров V02 (Rank: {TrainConfig.LORA_RANK}, Alpha: {TrainConfig.LORA_ALPHA})...")
