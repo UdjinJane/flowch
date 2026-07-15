@@ -87,9 +87,8 @@ def main_train_loop():
             return_dict=False
         )
         # ---  : ССЯ Я С Т5  Ы СЫХ ID ---
-            
-            pred_tensor = model_output[0]
-            pred_latents = pred_tensor[:, :, :64]
+        pred_tensor = model_output[0]
+        pred_latents = pred_tensor[:, :, :64]
             
             loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
