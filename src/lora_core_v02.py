@@ -71,10 +71,9 @@ class FluxLoraCoreV02:
     def save_file(tensor_dict, filepath):
         save_file(tensor_dict, filepath)
 
-if __name__ == "__main__":
-
 
 if __name__ == "__main__":
+
     import shutil
     if os.path.exists("src/__pycache__"):
         shutil.rmtree("src/__pycache__")
