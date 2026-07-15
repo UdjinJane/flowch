@@ -5,10 +5,10 @@ from PIL import Image
 import numpy as np
 from safetensors.torch import load_file
 
-# Импортируем базовые константы
+# Импортируем базовые константы из пульта управления проектом
 from src.config import VAE_PATH, OUTPUT_DIR, device
 
-# Динамический импорт оригинального класса FluxVAE из diffusers
+# Динамический импорт оригинального класса FluxVAE под новые библиотеки
 try:
     from diffusers.models.autoencoders.autoencoder_flux import FluxVAE
 except ImportError:
@@ -42,7 +42,6 @@ def init_final_decoder():
     except Exception as e:
         print(f"⚠ Сбой инициализации класса VAE: {e}")
         return "emulation"
-
 def decode_latents_to_rgb(x_t, vae_model, output_path):
     """
     Блок 2: Полноценное каноническое декодирование скрытого пространства Flux.
@@ -55,7 +54,7 @@ def decode_latents_to_rgb(x_t, vae_model, output_path):
             # Каноническое масштабирование латентов Flux для разжатия дисперсии
             latents = x_t / 0.3611
             
-            # Пропускаем через ВСЮ цепочку декодера FluxVAE
+            # Скармливаем оригинальные 64 канала — обновленный FluxVAE сделает всё сам
             output_tensor = vae_model.decode(latents).sample
             image_tensor = torch.clamp((output_tensor + 1.0) / 2.0, 0.0, 1.0)
         else:
