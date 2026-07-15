@@ -10,12 +10,7 @@
 Если вносим непоправимые улучшения в файлы, предварительно их бэкапим!
 
 
-Набор ссылок для изучения.
-https://deepwiki.com/lodestone-rock/flow/2.1-chroma-training-pipeline
-https://deepwiki.com/lodestone-rock/flow/2.3-chroma-lora-training
-https://deepwiki.com/lodestone-rock/flow/2.4-chroma-cfg-training
-
-Наш код на гитхаб
+Наш код на гитхаб тут
 https://github.com/UdjinJane/flowch
 
 Модель
