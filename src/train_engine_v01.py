@@ -40,6 +40,7 @@ def generate_flux_img_ids(latent_h, latent_w, device):
     img_ids[:, 2] = grid_w.flatten()
     return img_ids
 # === БЛОК 1 ФИНАЛ ===
+
 # === БЛОК 2 СТАРТ ===
 def main_train_loop():
     print("[ОБТ] Шаг 5.5: Запуск обновленного диспетчера FLUX-Patch: train_engine_v01")
@@ -85,13 +86,14 @@ def main_train_loop():
             img_ids = generate_flux_img_ids(h, w, device="cuda")
             timesteps_attr = t.squeeze().view(-1) * 1000.0
             
-            # ЖЕСТКИЙ АРХИТЕКТУРНЫЙ ФИКС: Извлекаем строго количество токенов (256) как целое число!
-            txt_len = prompt_embeds.shape
+            # СНАЙПЕРСКИЙ ФИКС: Извлекаем строго количество токенов (256) как одномерное целое число!
+            txt_len = prompt_embeds.shape[0]
             txt_ids = torch.zeros(txt_len, 3, device="cuda", dtype=torch.bfloat16)
             
             # Генерируем пустой, валидный pooled_projections формы [B, 768] для обхода None-краша
             pooled_projections = torch.zeros(b, 768, device="cuda", dtype=torch.bfloat16)
 # === БЛОК 2 ФИНАЛ ===
+
 # === БЛОК 3 СТАРТ ===
             # ПРЯМОЙ ШАГ ИНФЕРЕНСА ЧЕРЕЗ ТРАНСФОРМЕР ХРОМЫ (23.7 ГБ VRAM)
             model_output = lora_model(
