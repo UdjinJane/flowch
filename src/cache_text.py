@@ -1,4 +1,5 @@
-﻿import os
+﻿import json
+import os
 import sys
 import torch
 from transformers import T5TokenizerFast, T5EncoderModel, T5Config
@@ -20,6 +21,8 @@ def get_tokenizer():
     return tokenizer
 from safetensors.torch import load_file
 
+from safetensors.torch import load_file
+
 def load_t5_from_safetensors():
     print(f"[Т] Шаг 3.2: агрузка тяжелого T5-XXL из закромов: {TrainConfig.T5_ENCODER_PATH}")
     
@@ -33,17 +36,63 @@ def load_t5_from_safetensors():
     # 2. изически выдергиваем веса из нашего одиночного safetensors
     state_dict = load_file(TrainConfig.T5_ENCODER_PATH, device="cpu")
     
-    # 3. акатываем веса на архитектуру и переводим в fp8 на CUDA
+    # 3. акатываем веса на архитектуру и переводим в гибридный режим
     print("[Т] еренос текстовых весов на тензорное ядро CUDA...")
     model = model.to_empty(device="cuda")
     model.load_state_dict(state_dict, strict=False)
-    model = model.to(torch.float8_e4m3fn) 
     
-    print("[СХ] Тяжелый T5-XXL fp8 успешно поднят на GPU!")
+    #  СЫ   FP8
+    model = model.to(torch.float8_e4m3fn)
+    
+    # ТС С: озвращаем слой эмбеддингов в bfloat16, чтобы не было краша на индексах!
+    model.encoder.embed_tokens = model.encoder.embed_tokens.to(torch.bfloat16)
+    
+    print("[СХ] Тяжелый гибридный T5-XXL (FP8 + BF16 Embeds) успешно поднят на GPU!")
     return model
 
-# страиваем вызов в конец исполняемого блока для теста
+def process_and_mask_tokens(tokenizer, text_encoder):
+    print("[Т] Шаг 3.3: тение манифеста и расчет масок T5...")
+    
+    if not os.path.exists(TrainConfig.CACHE_TEXT_DIR):
+        os.makedirs(TrainConfig.CACHE_TEXT_DIR)
+
+    with open(TrainConfig.METADATA_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            img_name = data["file_name"]
+            caption = data["text"]
+            
+            # Токенизируем с жестким выравниванием под MAX_SEQUENCE_LENGTH
+            inputs = tokenizer(
+                caption,
+                padding="max_length",
+                max_length=TrainConfig.MAX_SEQUENCE_LENGTH,
+                truncation=True,
+                return_tensors="pt"
+            )
+            
+            input_ids = inputs.input_ids.to("cuda")
+            #  Т С (1 - токен, 0 - паддинг)
+            text_ids_mask = inputs.attention_mask.to("cuda")
+            
+            # одируем в эмбеддинги без градиентов
+            with torch.no_grad():
+                outputs = text_encoder(input_ids=input_ids)
+                prompt_embeds = outputs.last_hidden_state
+                
+            # Сохраняем на SSD буферную пару: эмбеддинг и его маску
+            base_name = os.path.splitext(img_name)[0]
+            out_embed_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
+            out_mask_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_mask.pt")
+            
+            torch.save(prompt_embeds.cpu(), out_embed_path)
+            torch.save(text_ids_mask.cpu(), out_mask_path)
+            print(f"[СХ] акеширован текст для: {img_name}")
+
 if __name__ == "__main__":
     tokenizer = get_tokenizer()
     text_encoder = load_t5_from_safetensors()
-    print("[СХ] лок 2 прошел боевое крещение.")
+    process_and_mask_tokens(tokenizer, text_encoder)
+    print("[Т] онвейер кэширования текста полностью отработал.")

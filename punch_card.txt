@@ -18,6 +18,9 @@ https://deepwiki.com/lodestone-rock/flow/2.4-chroma-cfg-training
 Наш код на гитхаб
 https://github.com/UdjinJane/flowch
 
+Модель
+https://huggingface.co/lodestones/Chroma1-Base
+
 ================================================================================
  СУДОВОЙ МАНИФЕСТ РЕПОЗИТОРИЯ "Z:\flowch" (ПЕРФОКАРТА ПРОЕКТА "CHROMA-PECH")
 ================================================================================
