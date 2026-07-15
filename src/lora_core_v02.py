@@ -19,14 +19,26 @@ class FluxLoraCoreV02:
             print(f"[КРИТ] Чекпоинт Chroma1-Base не найден: {TrainConfig.MODEL_SINGLE_FILE}")
             sys.exit(1)
             
-        print(f"[ОБТ] Нативная оффлайн-загрузка квантового ядра FP8 SVD через Single File: {TrainConfig.MODEL_SINGLE_FILE}")
-        # Намертво загружаем 8-битный монолит напрямую в GPU без промежуточного bfloat16-раздувания
-        transformer = FluxTransformer2DModel.from_single_file(
-            TrainConfig.MODEL_SINGLE_FILE,
-            config=config_json_path,
-            torch_dtype=torch.bfloat16,
-            device="cuda"
-        )
+        with open(config_json_path, "r", encoding="utf-8-sig") as f:
+            config_dict = json.load(f)
+        
+        print("[ОБТ] Сборка каркаса Transformer V02...")
+        transformer = FluxTransformer2DModel.from_config(config_dict)
+
+        print(f"[ОБТ] Загрузка физических весов трансформера из монолита: {TrainConfig.MODEL_SINGLE_FILE}")
+        state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
+        clean_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith("model.diffusion_model."):
+                clean_state_dict[k.replace("model.diffusion_model.", "")] = v
+            else:
+                clean_state_dict[k] = v
+
+        print("[ОБТ] Развертывание базовых матриц Хромы на тензорные ядра CUDA...")
+        # КРИТИЧЕСКИЙ МАНЕВР С 5060: Переводим пустой каркас в FP8 ДО загрузки весов, чтобы они не раздувались!
+        transformer = transformer.to(device="cuda", dtype=torch.float8_e4m3fn)
+        transformer.load_state_dict(clean_state_dict, strict=False)
+
 
 
         
