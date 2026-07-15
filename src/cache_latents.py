@@ -1,4 +1,5 @@
-﻿import os
+﻿import json
+import os
 import sys
 import torch
 from diffusers import AutoencoderKL
@@ -54,8 +55,63 @@ def init_vae():
 
 if __name__ == "__main__":
     import shutil
-    if os.path.exists("src/__pycache__"):
-        shutil.rmtree("src/__pycache__")
-        
+from PIL import Image
+import torchvision.transforms as T
+
+def process_and_cache_images(vae):
+    print("[Т] Шаг 4.2: апуск конвейера кодирования изображений через VAE...")
+    
+    if not os.path.exists(TrainConfig.CACHE_LATENT_DIR):
+        os.makedirs(TrainConfig.CACHE_LATENT_DIR)
+
+    # Стандартный пайплайн трансформации пикселей в тензор [-1, 1]
+    transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ])
+
+    with open(TrainConfig.METADATA_PATH, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            img_name = data["file_name"]
+            img_path = os.path.join(TrainConfig.DATASET_DIR, img_name)
+            
+            if not os.path.exists(img_path):
+                print(f"[] айл изображения не найден: {img_path}")
+                continue
+                
+            # агружаем кадр мангала
+            img = Image.open(img_path).convert("RGB")
+            w, h = img.size
+            
+            # СТ С: ыравниваем стороны кратно 16 пикселям под шаг сетки Chroma1
+            # елаем это через целочисленное деление, чтобы буфер не сожрал цифры
+            k = 2**4 # исло 16
+            new_w = (w // k) * k
+            new_h = (h // k) * k
+            
+            if new_w != w or new_h != h:
+                img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                
+            # ереводим в тензор bfloat16 на CUDA-ядра
+            img_tensor = transform(img).unsqueeze(0).to(device="cuda", dtype=torch.bfloat16)
+            
+            # одируем в латентное пространство без расчета градиентов
+            with torch.no_grad():
+                # звлекаем модули распределения и берем среднее (mode)
+                latents = vae.encode(img_tensor).latent_dist.mode()
+                
+            # звлекаем чистое имя кадра для сохранения тензоров
+            base_name = os.path.splitext(img_name)
+            out_latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
+            
+            # Сохраняем готовый визуальный латент на SSD буфер
+            torch.save(latents.cpu(), out_latent_path)
+            print(f"[СХ] спешно закеширован латент VAE для: {img_name} [азмер: {new_w}x{new_h}]")
+
+if __name__ == "__main__":
     vae = init_vae()
-    print("[СХ] лок 1 (VAE-онолит-амять) успешно прошел приемку Т!")
+    process_and_cache_images(vae)
+    print("[Т] изуальный конвейер  Ш полностью и безупречно отработал.")
