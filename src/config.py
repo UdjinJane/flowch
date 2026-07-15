@@ -14,7 +14,8 @@ class TrainConfig:
     MODEL_SINGLE_FILE = r"Z:\AiModels\models\diffusion_models\Chroma1-Base.safetensors"
     
     # аш целевой энкодер в папке клипов
-    T5_ENCODER_PATH = r"Z:\AiModels\models\clip\t5xxl_fp8_e4m3fn.safetensors"
+    T5_ENCODER_PATH = r"Z:\AiModels\models\clip\t5xxl_bf16.safetensors"
+    VAE_PATH = r"Z:\AiModels\models\vae\ae.safetensors"
     
     # --- ТЫ ТТ T5-XXL ---
     TOKENIZER_DIR = r"Z:\flowch\src\tokenizer"

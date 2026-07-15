@@ -1,69 +1,52 @@
- -*- coding: utf-8 -*-
-import os
+﻿import os
 import sys
 import torch
-import json
-from safetensors.torch import load_file
-from torch.utils.data import DataLoader
 from diffusers import AutoencoderKL
-from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+from safetensors.torch import load_file
+from config import TrainConfig
 
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-from src.dataset import ChromaDataset
-
-def cache_vae_latents():
-    print("📦 Старт 100% Т фазы кэширования латентов VAE...")
-    vae_path = r"Z:\AiModels\models\vae\ae.safetensors"
-    jsonl_path = r"Z:\flowch\metadata.jsonl"
-    latent_dir = r"Z:\flowch\dataset\latent_cache"
-    
-    os.makedirs(latent_dir, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    print("🧠 Сборка каркаса Flux/Chroma VAE из локальной конфигурации...")
-    
-    # естко объявляем оригинальную топологию Flux VAE (327 )
-    # то избавляет нас от скачивания config.json из закрытых репозиториев HF
+def init_vae():
+    print(f"[Т] Шаг 4.1: Снайперская сборка FLUX-VAE контура: {TrainConfig.VAE_PATH}")
+    if not os.path.exists(TrainConfig.VAE_PATH):
+        print("[Т] айл VAE отсутствует в закромах!")
+        sys.exit(1)
+        
+    # ТС С: дален spatial_dims, параметры строго по СТу diffusers
     vae = AutoencoderKL(
         in_channels=3,
         out_channels=3,
-        down_block_types=["DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D"],
-        up_block_types=["UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D"],
-        block_out_channels=[128, 256, 512, 512],
+        latent_channels=16,
+        block_out_channels=[128, 256, 512],
         layers_per_block=2,
-        latent_channels=16, #  Flux/Chroma 16 латентных каналов
-        norm_num_groups=32
+        ch_mult=[1, 2, 4], 
+        norm_num_groups=32,
+        sample_size=1024,
+        scaling_factor=0.3611,
+        shift_factor=0.1159
     )
-
-    print(f"📂 агрузка локальных весов: {os.path.basename(vae_path)}")
-    vae_sd = load_file(vae_path)
     
-    # апим веса diffusers под стандартные ключи safetensors VAE
-    vae.load_state_dict(vae_sd, strict=False)
-    vae = vae.to(device=device, dtype=torch.bfloat16)
+    # звлекаем чистые веса и накатываем их на каркас
+    state_dict = load_file(TrainConfig.VAE_PATH, device="cpu")
+    
+    # трезаем префиксы, если ComfyUI перепаковал ключи
+    clean_state_dict = {}
+    for k, v in state_dict.items():
+        new_key = k.replace("vae.", "") if k.startswith("vae.") else k
+        clean_state_dict[new_key] = v
+        
+    vae.load_state_dict(clean_state_dict, strict=True)
+    
+    # ереводим в стабильный bfloat16 на CUDA
+    vae = vae.to(device="cuda", dtype=torch.bfloat16)
     vae.eval()
-    print("✅ окальный VAE успешно запечен на GPU без интернета!")
-
-    dataset = ChromaDataset(jsonl_path=jsonl_path, target_res=1024)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
-
-    print(f"🔄 одирование {len(dataset)} кадров мангала в компактные латенты...")
-    with torch.no_grad():
-        for step, batch in enumerate(dataloader):
-            pixels = batch["pixel_values"].to(device, dtype=torch.bfloat16)
-            
-            # звлекаем чистое имя файла из батча
-            img_name_raw = batch["img_name"][0] if isinstance(batch["img_name"], list) else batch["img_name"]
-            
-            # ереводим пиксели в латентное пространство
-            posterior = vae.encode(pixels).latent_dist
-            latents = posterior.sample() * 0.18215  # асштабирование Flux/Chroma
-            
-            out_path = os.path.join(latent_dir, f"{img_name_raw}.pt")
-            torch.save(latents.cpu().to(torch.bfloat16), out_path)
-            print(f"  [+] спешно упакован: {img_name_raw}.pt | Shape: {list(latents.shape)}")
-
-    print(f"🎉 эширование латентов полностью завершено! аза на SSD: {latent_dir}")
+    
+    print("[СХ] 16-канальный визуальный отсек VAE bfloat16 полностью герметизирован на GPU!")
+    return vae
 
 if __name__ == "__main__":
-    cache_vae_latents()
+    import shutil
+    if os.path.exists("src/__pycache__"):
+        shutil.rmtree("src/__pycache__")
+        
+    vae = init_vae()
+    print("[СХ] лок 1 (VAE-онтур) прошел дефектоскопию.")
