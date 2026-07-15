@@ -55,7 +55,7 @@ def main_train_loop():
         
         # Математика кастомного квадратичного распределения таймстепов по перфокарте
         t = torch.rand(b, device=device, dtype=torch.bfloat16)
-        t = FluxFlowMathV01.apply_timestep_sampling(t, mode=TrainConfig.TIMESTEP_SAMPLING)
+        t = FluxFlowMathV01.apply_timestep_shift(t, mode=TrainConfig.TIMESTEP_SAMPLING)
         
         # Линейный блендинг Rectified Flow шума и латентов
         packed_noisy_latents = FluxFlowMathV01.blend_noise(packed_latents, noise, t)
