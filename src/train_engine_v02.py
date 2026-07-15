@@ -67,14 +67,26 @@ def main_train_loop():
             txt_ids = txt_ids_raw.unsqueeze(0).repeat(b, 1, 1)
             pooled_projections = torch.zeros(b, 768, device="cuda", dtype=torch.bfloat16)
             
-            model_output = lora_model(
-                hidden_states=packed_noisy_latents,
-                timestep=timesteps_attr,
-                encoder_hidden_states=prompt_embeds,
-                pooled_projections=pooled_projections,
-                txt_ids=txt_ids,
-                img_ids=img_ids,
-                return_dict=False
+        # ---  : ССЯ Я С Т5  Ы СЫХ ID ---
+        # ыправляем размерности 3D-тензоров до 2D по требованиям обновленного diffusers
+        txt_ids_cleaned = txt_ids.squeeze(0) if txt_ids.dim() == 3 else txt_ids
+        img_ids_cleaned = img_ids.squeeze(0) if img_ids.dim() == 3 else img_ids
+        
+        # звлекаем маску внимания паддингов из батча стерильного лоудера данных
+        text_ids_mask = batch["text_ids_mask"].to(device="cuda")
+        
+        # аршевый запуск LoRA-модели с жестким маскированием MMDiT токенов
+        model_output = lora_model(
+            hidden_states=packed_noisy_latents,
+            timestep=timesteps_attr,
+            encoder_hidden_states=prompt_embeds,
+            pooled_projections=pooled_projections,
+            txt_ids=txt_ids_cleaned,
+            img_ids=img_ids_cleaned,
+            attention_mask=text_ids_mask,
+            return_dict=False
+        )
+        # ---  : ССЯ Я С Т5  Ы СЫХ ID ---
             )
             
             pred_tensor = model_output[0]
