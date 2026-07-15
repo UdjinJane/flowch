@@ -18,7 +18,6 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         pooled_projections=pooled_projections,
         txt_ids=txt_ids_cleaned,
         img_ids=img_ids_cleaned,
-        attention_mask=text_ids_mask,
         return_dict=False
     )
     
