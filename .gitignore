@@ -31644,3 +31644,7 @@ src/generate.py.bak2
 .venv/Lib/site-packages/peft/utils/save_and_load.py
 .venv/Lib/site-packages/peft/utils/transformers_weight_conversion.py
 .venv/Lib/site-packages/peft/utils/warning.py
+__pycache__/decode_final.cpython-310.pyc
+__pycache__/train_v2.cpython-310.pyc
+__pycache__/decode_final.cpython-310.pyc
+__pycache__/train_v2.cpython-310.pyc
