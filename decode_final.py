@@ -88,3 +88,92 @@ print("🧱 КИРПИЧ 2: Функции канонического VAE-дек
 # КОНЕЦ БЛОКА 2
 # =====================================================================
 
+# =====================================================================
+# БЛОК 3: ИСПРАВЛЕННЫЙ КОНТУР ИНФЕРЕНСА С АКТИВАЦИЕЙ CUDA-ЯДРА
+# =====================================================================
+def run_final_inference_fixed(checkpoint_path, vae_model, epoch=150, text_embedding=None):
+    """
+    Контур инференса с принудительным переносом весов на CUDA для честной загрузки.
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"❌ ОШИБКА: Чекпоинт {checkpoint_path} не найден.")
+        return
+
+    print(f"🚀 Прямая загрузка обученного чекпоинта LoRA на {device}...")
+    try:
+        from src.models import EmptyTransformer
+        from src.model_utils import inject_chroma_lora
+        
+        # 1. Строго переводим пустую базовую структуру на CUDA
+        transformer = EmptyTransformer().to(device)
+        transformer = inject_chroma_lora(transformer)
+        
+        # 2. Читаем обученные веса
+        lora_sd = load_file(checkpoint_path)
+        
+        # 3. АКТИВАЦИЯ ВЕСОВ: Принудительно загоняем каждый тензор на CUDA до наката
+        cuda_lora_sd = {k: v.to(device) for k, v in lora_sd.items()}
+        
+        # Загружаем веса в граф
+        transformer.load_state_dict(cuda_lora_sd, strict=False)
+        transformer.to(device) # Перестраховка по девайсу
+        transformer.eval()
+        print("✅ Граф LoRA-модулей успешно прогрет в памяти GPU!")
+    except Exception as e:
+        print(f"❌ Сбой подготовки модели: {e}")
+        return
+
+    # Жесткий абсолютный путь для сохранения финального цветного рендера
+    output_dir = r"Z:\flowch\output\images"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"mng_final_vae_epoch_{epoch}.png")
+    
+    print("⚡ Контур инференса запущен. Активация CUDA-ядра...")
+    
+    # Инициализируем стартовый шум строго на GPU (64 канала Chroma1-HD)
+    x_t = torch.randn(1, 64, 64, 64, device=device, dtype=torch.float32)
+    steps = 25
+    dt = 1.0 / steps
+    
+    # Прогрев ODE траектории Rectified Flow
+    with torch.no_grad():
+        for i in range(steps):
+            t_curr = i * dt
+            t_tensor = torch.ones(1, device=device, dtype=torch.float32) * t_curr
+            
+            # Подаем текстовый компас T5 из датасета
+            if text_embedding is not None:
+                cond = text_embedding.to(device=device, dtype=torch.float32)
+                velocity = transformer(x_t, t_tensor, cond)
+            else:
+                velocity = transformer(x_t, t_tensor)
+                
+            x_t = x_t + velocity * dt
+            if (i + 1) % 5 == 0 or (i + 1) == steps:
+                print(f"  [~] Прогресс ODE: {int(((i + 1) / steps) * 100)}%")
+
+    # Вызываем глубокий VAE-декодер для получения честной RGB-картинки
+    decode_latents_to_rgb(x_t, vae_model, output_path)
+
+if __name__ == "__main__":
+    vae_model = init_final_decoder()
+    if vae_model is not None:
+        target_check = r"Z:\flowch\checkpoints\chroma1_mangala_lora_epoch_150.safetensors"
+        
+        # Автоматически подтягиваем текстовый компас T5 из датасета
+        val_emb = None
+        try:
+            from src.models import ChromaDataset
+            dataset = ChromaDataset()
+            val_emb = dataset['t5_hidden'].unsqueeze(0).to(device)
+            print("🎯 Валидационный текстовый компас T5-XXL успешно подключен!")
+        except Exception:
+            print("⚠ Текстовый компас не найден. Запуск в режиме базового контекста.")
+
+        run_final_inference_fixed(target_check, vae_model, epoch=150, text_embedding=val_emb)
+
+print("🧱 КИРПИЧ 3: Контур CUDA-инференса и точка входа замкнуты.")
+# =====================================================================
+# КОНЕЦ БЛОКА 3
+# =====================================================================
+
