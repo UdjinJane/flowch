@@ -10,6 +10,7 @@
 import os
 import torch
 import torch.nn.functional as F
+import gc
 from torch.optim import AdamW
 from config import TrainConfig
 from dataset_v02 import get_dataloader_v02
@@ -52,15 +53,16 @@ def main_train_loop():
     lora_model.train()
     
     for batch in dataloader:
-        # Извлекаем предварительно рассчитанные латенты и эмбеддинги текста из SSD-кэша
-        model_latents = batch["latents"].to(device, dtype=torch.bfloat16)
-        prompt_embeds = batch["prompt_embeds"].to(device, dtype=torch.bfloat16)
-        
-        b, c, h, w = model_latents.shape
-        packed_latents = pack_latents_to_patches(model_latents)
-        
-        # Генерация маршевого шума Rectified Flow
-        noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
+        # Извлекаем предварительно рассчитанные латенты и эмбеддинги текста из SSD-кэша с изоляцией графа
+        with torch.no_grad():
+            model_latents = batch["latents"].to(device, dtype=torch.bfloat16)
+            prompt_embeds = batch["prompt_embeds"].to(device, dtype=torch.bfloat16)
+            b, c, h, w = model_latents.shape
+            packed_latents = pack_latents_to_patches(model_latents)
+
+            # Генерация маршевого шума Rectified Flow
+            noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
+
         
         # Математика кастомного квадратичного распределения таймстепов по перфокарте
         t = torch.rand(b, device=device, dtype=torch.bfloat16)
@@ -119,6 +121,11 @@ def main_train_loop():
                 
         if (global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS) >= (TrainConfig.MAX_TRAIN_STEPS // TrainConfig.GRADIENT_ACCUMULATION_STEPS):
             break
+
+    # Аварийная зачистка кэша и сбор мусора после каждого шага плавки батча
+    torch.cuda.empty_cache()
+    gc.collect()
+
 
 if __name__ == "__main__":
     main_train_loop()
