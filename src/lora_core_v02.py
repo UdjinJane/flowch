@@ -4,9 +4,10 @@ import sys
 import json
 import torch
 from diffusers import FluxTransformer2DModel
-from peft import LoraConfig, get_peft_model
-from safetensors.torch import load_file
+from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+from safetensors.torch import load_file, save_file
 from config import TrainConfig
+
 
 class FluxLoraCoreV02:
     @staticmethod
@@ -61,6 +62,17 @@ class FluxLoraCoreV02:
         
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
         return lora_model
+
+    @staticmethod
+    def get_peft_model_state_dict(lora_model):
+        return get_peft_model_state_dict(lora_model)
+
+    @staticmethod
+    def save_file(tensor_dict, filepath):
+        save_file(tensor_dict, filepath)
+
+if __name__ == "__main__":
+
 
 if __name__ == "__main__":
     import shutil
