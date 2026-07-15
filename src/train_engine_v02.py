@@ -69,8 +69,9 @@ def main_train_loop():
 
         
         # Линейный блендинг Rectified Flow шума и латентов
-        packed_noisy_latents = FluxFlowMathV01.blend_noise(packed_latents, noise, t)
-        packed_target_flow = FluxFlowMathV01.calculate_target_flow(packed_latents, noise)
+        t_bc = t.view(-1, 1)
+        packed_noisy_latents = (1.0 - t_bc) * packed_latents + t_bc * noise
+        packed_target_flow = noise - packed_latents
         
         # Формируем служебные ID векторов геометрии кадра (строго 2D для diffusers)
         img_ids_cleaned = generate_flux_img_ids(h, w, device=device)
