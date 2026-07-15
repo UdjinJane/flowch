@@ -12,7 +12,8 @@ class TrainConfig:
     OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
     
     # --- СТТ Т  COMFYUI ---
-    MODEL_SINGLE_FILE = r"Z:\AiModels\models\diffusion_models\Chroma1-Base.safetensors"
+    MODEL_SINGLE_FILE = r"Z:\AiModels\models\diffusion_models\chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors"
+
     
     # аш целевой энкодер в папке клипов
     T5_ENCODER_PATH = r"Z:\AiModels\models\clip\t5xxl_bf16.safetensors"
