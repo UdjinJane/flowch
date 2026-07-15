@@ -11,7 +11,7 @@ class FluxFlowMathV01:
     @classmethod
     def generate_train_timesteps(cls, batch_size, device):
         # енерируем случайное базовое время t от 0 до 1 для каждого кадра в батче
-        t_base = torch.rand((batch_size,), device=device, dtype=torch.bfloat16)
+        t_base = torch.rand((batch_size[0] if isinstance(batch_size, (list, tuple, torch.Size)) else batch_size,), device=device, dtype=torch.bfloat16)
         
         # акатываем наш жесткий нелинейный шифтинг
         t_shifted = cls.apply_timestep_shift(t_base, shift=3.0)
@@ -48,3 +48,4 @@ if __name__ == "__main__":
     print(f"ектор времени t (сдвинутый): {t.item():.4f}")
     print(f"орма зашумленного латента:  {noisy_x.shape}")
     print(f"орма целевого вектора loss: {target.shape}")
+

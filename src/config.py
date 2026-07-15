@@ -1,6 +1,7 @@
 ﻿import os
 
 class TrainConfig:
+    RESOLUTION = 512  # азовое разрешение обкатки реактора (512x512)
     # --- ССТЫ Т ---
     ROOT_DIR = r"Z:\flowch"
     DATASET_DIR = os.path.join(ROOT_DIR, "dataset", "mng_oks_bl")
