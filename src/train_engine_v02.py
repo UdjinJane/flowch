@@ -1,4 +1,13 @@
-﻿import os
+﻿def main_train_loop():
+    print("[Т] Запуск финального экономного диспетчера: train_engine_v02")
+    
+    # Жесткое выжигание кэша импортов перед стартом плавки по умолчанию
+    import shutil
+    shutil.rmtree(os.path.join(os.path.dirname(__file__), "__pycache__"), ignore_errors=True)
+    print("[ОТК] Локальный кэш __pycache__ принудительно зачищен.")
+
+
+import os
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
@@ -55,7 +64,7 @@ def main_train_loop():
         
         # Математика кастомного квадратичного распределения таймстепов по перфокарте
         t = torch.rand(b, device=device, dtype=torch.bfloat16)
-        t = FluxFlowMathV01.apply_timestep_shift(t, mode="x^2")
+        t = FluxFlowMathV01.apply_timestep_shift(t, "x^2")
 
         
         # Линейный блендинг Rectified Flow шума и латентов
