@@ -1,38 +1,33 @@
-# =====================================================================
-# ПУЛЬТ УПРАВЛЕНИЯ РЕАКТОРОМ: КОНФИГУРАЦИЯ ПРОЕКТА "CHROMA-PECH 2.0"
-# =====================================================================
-import os
-import torch
+﻿import os
 
-# ⚡ Окружение и системные флаги оптимизации CUDA
-os.environ['TORCH_CUDNN_V_GTE_9'] = '1'
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+class TrainConfig:
+    # --- ССТЫ Т ---
+    ROOT_DIR = r"Z:\flowch"
+    DATASET_DIR = os.path.join(ROOT_DIR, "dataset", "mng_oks_bl")
+    METADATA_PATH = os.path.join(DATASET_DIR, "metadata.jsonl")
+    
+    # уферная зона для кэша тензоров
+    CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "cache", "text_embeds")
+    CACHE_LATENT_DIR = os.path.join(ROOT_DIR, "cache", "latent_embeds")
+    OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
+    
+    # --- С   CHROMA1 ---
+    # апитан, укажите здесь точный локальный путь к весам Chroma1 / FLUX в вашей системе!
+    MODEL_PATH = r"Z:\models\Chroma1-Base" 
+    
+    # --- ТЫ ТТ T5-XXL ---
+    MAX_SEQUENCE_LENGTH = 256  # птимальное окно для Chroma/FLUX
+    
+    # --- ТЫ Т Я ---
+    BATCH_SIZE = 1             # естко зафиксировано по перфокарте для контроля температуры ядра
+    GRADIENT_ACCUMULATION_STEPS = 4
+    LEARNING_RATE = 1e-4
+    LR_SCHEDULER_TYPE = "constant"
+    MAX_TRAIN_STEPS = 1500
+    
+    # --- ТЫ LORA (PEFT) ---
+    LORA_RANK = 16
+    LORA_ALPHA = 16
+    TARGET_MODULES = ["to_q", "to_k", "to_v", "to_out.0"] # сновные узлы инжекции в 48 слоев
 
-# 📂 МАГИСТРАЛИ ДАННЫХ И ДАТАСЕТА
-DATASET_DIR = r'Z:\flowch\dataset\mng_oks_bl'
-METADATA_PATH = r'Z:\flowch\metadata.jsonl'
-OUTPUT_DIR = r'Z:\flowch'
-
-# 📦 КРЕМНИЕВЫЕ ЯДРА И МОДЕЛИ (Chroma1-Base & Текстовый контур)
-# Главный базовый чекпоинт Chroma1-Base (fp16 монолит со встроенным CLIP)
-MODEL_BASE_PATH = r'Z:\AiModels\models\diffusion_models\Chroma1-Base.safetensors'
-
-# Наш главный текстовый компас T5-XXL в энергоэффективном формате fp8
-T5_XXL_PATH = r'Z:\AiModels\models\clip\t5xxl_fp8_e4m3fn.safetensors'
-
-# Оригинальный тяжелый VAE-декодер для финишной распаковки латентов в RGB
-VAE_PATH = r'Z:\AiModels\models\vae\flux_vae.safetensors'
-
-# 📐 ПАРАМЕТРЫ ПЛАВКИ И ГЕОМЕТРИИ ЛАТЕНТОВ
-# Эталонное разрешение базовой Chroma1-Base для идеальной сходимости LoRA
-TRAIN_RESOLUTION = 512
-
-# Оптимальный размер батча для жесткого удержания VRAM в пределах 16.4 ГБ на RTX 3090
-batch_size = 1
-
-# Длина тренировочной траектории (количество эпох)
-num_epochs = 150
-
-# ⚙ СПЕЦИФИКАЦИЯ АРХИТЕКТУРЫ CHROMA1 (Для новых скриптов)
-TIMESTEP_SAMPLING = "x^2"    # Квадратичный сдвиг распределения шагов Rectified Flow
-MASK_PADDING_TOKENS = True   # Принудительная активация MMDiT маскирования Т5-паддингов
+print("[Т] онфигурация ядра ядра зафиксирована.")
