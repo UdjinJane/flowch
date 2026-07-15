@@ -24,7 +24,7 @@ class TrainConfig:
     # --- ТЫ Т Я ---
     BATCH_SIZE = 1
     GRADIENT_ACCUMULATION_STEPS = 4
-    LEARNING_RATE = 1e-4
+    LEARNING_RATE = 2e-5
     LR_SCHEDULER_TYPE = "constant"
     MAX_TRAIN_STEPS = 1500
     
