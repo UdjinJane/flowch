@@ -35,9 +35,9 @@ class FluxLoraCoreV02:
                 clean_state_dict[k] = v
 
         print("[ОБТ] Развертывание базовых матриц Хромы на тензорные ядра CUDA...")
-        # КРИТИЧЕСКИЙ МАНЕВР С 5060: Переводим пустой каркас в FP8 ДО загрузки весов, чтобы они не раздувались!
-        transformer = transformer.to(device="cuda", dtype=torch.float8_e4m3fn)
+        transformer = transformer.to_empty(device="cuda")
         transformer.load_state_dict(clean_state_dict, strict=False)
+        transformer = transformer.to(torch.bfloat16)
 
 
 
