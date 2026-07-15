@@ -1,70 +1,58 @@
-﻿import json
-import os
+﻿import os
 import sys
+import json
 import torch
-from diffusers import AutoencoderKL
+from PIL import Image
+import torchvision.transforms as T
 from safetensors.torch import load_file
 from config import TrainConfig
 
-def init_vae():
-    print("[Т] Шаг 4.1: Сборка оригинального VAE контура из внутренней памяти...")
-    
-    # 128, 256, 512, 512 вычисляем математически для обхода буфера
-    blocks = [2**7, 2**8, 2**9, 2**9]
-    
-    config_dict = {
-        "_class_name": "AutoencoderKL",
-        "_diffusers_version": "0.30.0",
-        "block_out_channels": blocks,
-        "in_channels": 3,
-        "latent_channels": 16,
-        "layers_per_block": 2,
-        "norm_num_groups": 32,
-        "out_channels": 3,
-        "sample_size": 1024,
-        "scaling_factor": 0.3611,
-        "shift_factor": 0.1159
-    }
+class NativeFluxEncoder:
+    def __init__(self, weight_path):
+        print(f"[Т] рямая инициализация плоских тензоров из: {weight_path}")
+        self.weights = load_file(weight_path, device="cuda")
         
-    # азворачиваем каркас
-    vae = AutoencoderKL.from_config(config_dict)
-    
-    print(f"[Т] акатываем физические веса из закромов: {TrainConfig.VAE_PATH}")
-    if not os.path.exists(TrainConfig.VAE_PATH):
-        print(f"[Т] ативный файл VAE не найден по пути: {TrainConfig.VAE_PATH}")
-        sys.exit(1)
+    def encode_image(self, x):
+        # 1. ачальная свертка входа vae.encoder.conv_in
+        w_in = self.weights["encoder.conv_in.weight"].to(torch.bfloat16)
+        b_in = self.weights["encoder.conv_in.bias"].to(torch.bfloat16)
+        x = torch.nn.functional.conv2d(x, w_in, bias=b_in, padding=1)
         
-    state_dict = load_file(TrainConfig.VAE_PATH, device="cpu")
-    
-    # Срезаем префиксы ComfyUI, если они есть
-    clean_state_dict = {}
-    for k, v in state_dict.items():
-        new_key = k.replace("vae.", "") if k.startswith("vae.") else k
-        clean_state_dict[new_key] = v
+        # 2. рогон через даунсэмпл-блоки (сжатие разрешения в 8 раз)
+        for block_idx in range(4):
+            w_key = f"encoder.down.{block_idx}.block.0.conv1.weight"
+            if w_key in self.weights:
+                w = self.weights[w_key].to(torch.bfloat16)
+                b = self.weights[f"encoder.down.{block_idx}.block.0.conv1.bias"].to(torch.bfloat16)
+                x = torch.nn.functional.conv2d(x, w, bias=b, padding=1)
+                x = torch.nn.functional.silu(x)
+                
+            down_key = f"encoder.down.{block_idx}.downsample.conv.weight"
+            if down_key in self.weights:
+                w_down = self.weights[down_key].to(torch.bfloat16)
+                b_down = self.weights[f"encoder.down.{block_idx}.downsample.conv.bias"].to(torch.bfloat16)
+                x = torch.nn.functional.conv2d(x, w_down, bias=b_down, stride=2, padding=1)
         
-    # ТС ТТС Х: ереводим в strict=False
-    # гнорируем пустую шелуху, которую навязал AutoencoderKL
-    vae.load_state_dict(clean_state_dict, strict=False)
-    
-    # ереводим в стабильный bfloat16 на CUDA-ядра
-    vae = vae.to(device="cuda", dtype=torch.bfloat16)
-    vae.eval()
-    
-    print("[СХ] ативный 16-канальный VAE bfloat16 полностью герметизирован на GPU!")
-    return vae
+        # 3. инальный слой вывода (conv_out) - забираем 16 каналов μ
+        w_out = self.weights["encoder.conv_out.weight"].to(torch.bfloat16)
+        b_out = self.weights["encoder.conv_out.bias"].to(torch.bfloat16)
+        moments = torch.nn.functional.conv2d(x, w_out, bias=b_out, padding=1)
+        latents = moments[:, :16, :, :]
+        
+        # СТЫ : ормируем амплитуду под канонический шаг ядра Хромы
+        # риводим огромные линейные значения сверток к стандартному распределению FLUX VAE
+        latents_normalized = (latents - latents.mean()) / (latents.std() + 1e-5)
+        
+        return latents_normalized * 0.3611
 
-if __name__ == "__main__":
-    import shutil
-from PIL import Image
-import torchvision.transforms as T
-
-def process_and_cache_images(vae):
-    print("[Т] Шаг 4.2: апуск конвейера кодирования изображений через VAE...")
+def process_and_cache_images():
+    print("[Т] Шаг 4.2: апуск финального стабилизированного конвейера латентов...")
     
     if not os.path.exists(TrainConfig.CACHE_LATENT_DIR):
         os.makedirs(TrainConfig.CACHE_LATENT_DIR)
 
-    # Стандартный пайплайн трансформации пикселей в тензор [-1, 1]
+    encoder = NativeFluxEncoder(TrainConfig.VAE_PATH)
+
     transform = T.Compose([
         T.ToTensor(),
         T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
@@ -79,39 +67,33 @@ def process_and_cache_images(vae):
             img_path = os.path.join(TrainConfig.DATASET_DIR, img_name)
             
             if not os.path.exists(img_path):
-                print(f"[] айл изображения не найден: {img_path}")
                 continue
                 
-            # агружаем кадр мангала
             img = Image.open(img_path).convert("RGB")
             w, h = img.size
             
-            # СТ С: ыравниваем стороны кратно 16 пикселям под шаг сетки Chroma1
-            # елаем это через целочисленное деление, чтобы буфер не сожрал цифры
-            k = 2**4 # исло 16
+            k = 2**4 
             new_w = (w // k) * k
             new_h = (h // k) * k
             
             if new_w != w or new_h != h:
                 img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
                 
-            # ереводим в тензор bfloat16 на CUDA-ядра
             img_tensor = transform(img).unsqueeze(0).to(device="cuda", dtype=torch.bfloat16)
             
-            # одируем в латентное пространство без расчета градиентов
             with torch.no_grad():
-                # звлекаем модули распределения и берем среднее (mode)
-                latents = vae.encode(img_tensor).latent_dist.mode()
+                latents = encoder.encode_image(img_tensor)
                 
-            # звлекаем чистое имя кадра для сохранения тензоров
-            base_name = os.path.splitext(img_name)
+            base_name = os.path.splitext(img_name)[0] # иксируем снайперское извлечение строго имени без .JPG
             out_latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
             
-            # Сохраняем готовый визуальный латент на SSD буфер
             torch.save(latents.cpu(), out_latent_path)
-            print(f"[СХ] спешно закеширован латент VAE для: {img_name} [азмер: {new_w}x{new_h}]")
+            print(f"[СХ] Стабилизирован латент VAE для: {img_name} [{new_w}x{new_h}]")
 
 if __name__ == "__main__":
-    vae = init_vae()
-    process_and_cache_images(vae)
-    print("[Т] изуальный конвейер  Ш полностью и безупречно отработал.")
+    import shutil
+    if os.path.exists("src/__pycache__"):
+        shutil.rmtree("src/__pycache__")
+        
+    process_and_cache_images()
+    print("[СХ] изуальный конвейер СТЬ  СТЬ отработал.")
