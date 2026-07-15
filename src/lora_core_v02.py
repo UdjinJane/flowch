@@ -37,7 +37,7 @@ class FluxLoraCoreV02:
         print("[ОБТ] Развертывание базовых матриц Хромы на тензорные ядра CUDA...")
         transformer = transformer.to_empty(device="cuda")
         transformer.load_state_dict(clean_state_dict, strict=False)
-        transformer = transformer.to(torch.float8_e4m3fn)
+        transformer = transformer.to(torch.bfloat16)
 
         
         # НАМЕРТВО ЗАМОРАЖИВАЕМ БАЗУ (оригинальные веса Хромы не изменятся)
