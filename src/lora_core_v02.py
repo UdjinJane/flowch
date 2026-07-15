@@ -37,7 +37,8 @@ class FluxLoraCoreV02:
         print("[ОБТ] Развертывание базовых матриц Хромы на тензорные ядра CUDA...")
         transformer = transformer.to_empty(device="cuda")
         transformer.load_state_dict(clean_state_dict, strict=False)
-        transformer = transformer.to(torch.bfloat16)
+        transformer = transformer.to(torch.float8_e4m3fn)
+
         
         # НАМЕРТВО ЗАМОРАЖИВАЕМ БАЗУ (оригинальные веса Хромы не изменятся)
         transformer.requires_grad_(False)
@@ -58,10 +59,13 @@ class FluxLoraCoreV02:
         )
         
         lora_model = get_peft_model(transformer, lora_config)
-        lora_model = lora_model.to(device="cuda", dtype=torch.bfloat16)
-        
+        lora_model = lora_model.to(device="cuda")
+        # Принудительно оставляем только обучаемые параметры LoRA в bfloat16 для стабильности градиентов
+        for p in lora_model.parameters():
+            if p.requires_grad:
+                p.data = p.data.to(torch.bfloat16)
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
-        return lora_model
+
 
     @staticmethod
     def get_peft_model_state_dict(lora_model):
