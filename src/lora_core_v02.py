@@ -65,7 +65,7 @@ class FluxLoraCoreV02:
             if p.requires_grad:
                 p.data = p.data.to(torch.bfloat16)
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
-
+        return lora_model
 
     @staticmethod
     def get_peft_model_state_dict(lora_model):
