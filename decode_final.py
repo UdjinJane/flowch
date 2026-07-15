@@ -1,24 +1,26 @@
 import os
+import sys
 import torch
 from PIL import Image
 import numpy as np
 from safetensors.torch import load_file
 
-# Импортируем наши константы и функции
+# Импортируем наши константы
 from src.config import VAE_PATH, OUTPUT_DIR, device
-from src.generate import run_inference
 
-# Предполагаем, что AutoEncoder (VAE) импортируется из diffusers или локальной архитектуры Chroma
+# Попытка нативного импорта правильной VAE структуры Flux
 try:
-    from diffusers import AutoencoderKL
-    # Или локальный импорт, если VAE кастомный:
-    # from src.models import ChromaVAE as AutoencoderKL
+    from diffusers.models.autoencoders.autoencoder_flux import FluxVAE
 except ImportError:
-    pass
+    try:
+        from diffusers import FluxVAE
+    except ImportError:
+        FluxVAE = None
+
 
 def init_final_decoder():
     """
-    Блок 1: Загрузка оригинального тяжелого VAE Flux с SSD.
+    Блок 1: Загрузка оригинального тяжелого VAE Flux с SSD через правильную структуру.
     """
     print("=== ИНИЦИАЛИЗАЦИЯ ФИНАЛЬНОГО ВЕРИФИКАЦИОННОГО ДЕКОДЕРА ===")
     print(f"📦 Загрузка оригинального VAE: {VAE_PATH}")
@@ -28,51 +30,59 @@ def init_final_decoder():
         return None
         
     try:
-        # Для Flux обычно используется стандартная структура AutoencoderKL
-        # Если веса чистые .safetensors, подгружаем их через state_dict
-        # Ниже приведена базовая безопасная обертка для инициализации VAE
         print("⚡ Выделение CUDA-памяти под VAE-контур...")
-        # Специфический импорт или инициализация структуры будет здесь
-        # vae = AutoencoderKL.from_single_file(VAE_PATH).to(device)
-        print("✅ Настоящий VAE Flux успешно развернут в памяти девайса!")
-        return True
+        
+        # Динамически импортируем родной класс FluxVAE для 32/64-канальных латентов
+        try:
+            from diffusers.models.autoencoders.autoencoder_flux import FluxVAE
+        except ImportError:
+            from diffusers import FluxVAE
+            
+        if FluxVAE is not None:
+            # Загружаем веса Flux VAE в bfloat16 для RTX 3090
+            vae_model = FluxVAE.from_single_file(VAE_PATH, torch_dtype=torch.bfloat16).to(device)
+            vae_model.eval()
+            print("✅ Настоящий VAE Flux успешно развернут в памяти девайса!")
+            return vae_model
+        else:
+            print("⚠ Класс FluxVAE недоступен в текущей версии diffusers. Переход в эмуляцию.")
+            return "emulation"
+            
     except Exception as e:
-        print(f"⚠ Сбой инициализации класса VAE (требуется точечная структура): {e}")
-        return False
+        print(f"⚠ Сбой инициализации класса VAE: {e}")
+        return "emulation"
+
 
 def decode_latents_to_rgb(x_t, vae_model, output_path):
     """
-    Блок 2: Каноническое декодирование скрытого пространства Flux через физический VAE.
+    Блок 2: Каноническое декодирование скрытого пространства Flux.
     """
     print("💾 Траектория завершена! Активация физического VAE Flux...")
     
     with torch.no_grad():
-        # 1. Масштабирование латентов Flux (разворачиваем сжатие дисперсии)
-        # В отличие от старых моделей SD (где коэффициент 0.18215), у Flux/Chroma 
-        # масштабирование часто зашито в сдвиг Rectified Flow, либо требует 
-        # деления на стандартный коэффициент VAE. Защищаем контур от перегрузки:
-        latents = x_t / 0.3611  # Канонический коэффициент демасштабирования для Flux VAE
+        if vae_model and vae_model != "emulation":
+            print("🔮 Декомпрессия 64-канальной матрицы через оригинальный декодер...")
+            # Масштабирование латентов Flux
+            latents = x_t / 0.3611
+            # Прямой VAE декодинг
+            output_tensor = vae_model.decode(latents).sample
+            image_tensor = torch.clamp((output_tensor + 1.0) / 2.0, 0.0, 1.0)
+        else:
+            print("⚠ Режим эмуляции: кастинг матрицы через апскейл среднего значения...")
+            x_t_vis = x_t.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
+            image_tensor = (x_t_vis - x_t_vis.min()) / (x_t_vis.max() - x_t_vis.min() + 1e-5)
         
-        # 2. Прямой проход через декодер
-        print("🔮 Декомпрессия 64-канальной матрицы в 3-канальный RGB-вектор...")
-        # image_tensor = vae_model.decode(latents).sample
-        
-        # Заглушка для математической структуры (нормализация тензора в диапазон)
-        # Когда мы подставим реальный вызов vae_model.decode, этот блок обработает его выход:
-        image_tensor = torch.clamp((latents.mean(dim=1, keepdim=True).repeat(1, 3, 8, 8) + 1.0) / 2.0, 0.0, 1.0)
-        
-        # 3. Кастинг геометрии тензора [1, 3, H, W] -> [H, W, 3] для PIL
-        img_array = (image_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).astype('uint8')
+        # Кастинг геометрии тензора [1, 3, H, W] -> [H, W, 3] для PIL
+        img_array = (image_tensor.squeeze(0).permute(1, 2, 0).cpu().float().numpy() * 255).astype('uint8')
         final_img = Image.fromarray(img_array)
         
-        # Перестраховка по размеру: апскейлим до честных 512x512
-        final_img = final_img.resize((512, 512), Image.Resampling.BILINEAR)
-        
-        # 4. Фиксация кадра на SSD
+        if final_img.size != (512, 512):
+            final_img = final_img.resize((512, 512), Image.Resampling.BILINEAR)
+            
         final_img.save(output_path)
         print(f"🎉 ФИНАЛЬНЫЙ ЦВЕТНОЙ РЕНДЕР СФОРМИРОВАН: {output_path}")
 
-def run_final_inference(checkpoint_path, epoch=150, text_embedding=None):
+def run_final_inference(checkpoint_path, vae_model, epoch=150, text_embedding=None):
     """
     Блок 3: Полный пайплайн инференса с загрузкой LoRA и VAE-декодированием.
     """
@@ -80,7 +90,6 @@ def run_final_inference(checkpoint_path, epoch=150, text_embedding=None):
         print(f"❌ ОШИБКА: Чекпоинт {checkpoint_path} не найден.")
         return
 
-    # 1. Собираем и прогреваем трансформер
     try:
         from src.models import EmptyTransformer
         from src.model_utils import inject_chroma_lora
@@ -88,7 +97,6 @@ def run_final_inference(checkpoint_path, epoch=150, text_embedding=None):
         transformer = EmptyTransformer().to(device)
         transformer = inject_chroma_lora(transformer)
         
-        # Накатываем обученные веса LoRA
         print(f"🚀 Загрузка весов LoRA из чекпоинта: {checkpoint_path}")
         lora_sd = load_file(checkpoint_path)
         transformer.load_state_dict(lora_sd, strict=False)
@@ -97,18 +105,42 @@ def run_final_inference(checkpoint_path, epoch=150, text_embedding=None):
         print(f"❌ Сбой подготовки модели: {e}")
         return
 
-    # 2. Вызываем генерацию (ODE-траекторию) и перенаправляем на честный VAE
     output_path = os.path.join(OUTPUT_DIR, f"mng_final_vae_epoch_{epoch}.png")
-    
-    # Запускаем штатный генератор, но перехватываем результат латентов
-    # Для этого в будущем мы сможем передать латенты напрямую в decode_latents_to_rgb
     print("⚡ Контур инференса готов к финишному рендеру.")
-    # Тут будет вызов: decode_latents_to_rgb(x_t, vae_model, output_path)
+    
+    x_t = torch.randn(1, 64, 64, 64, device=device)
+    steps = 25
+    dt = 1.0 / steps
+    
+    with torch.no_grad():
+        for i in range(steps):
+            t_curr = i * dt
+            t_tensor = torch.ones(1, device=device) * t_curr
+            
+            if text_embedding is not None:
+                velocity = transformer(x_t, t_tensor, text_embedding.to(device))
+            else:
+                velocity = transformer(x_t, t_tensor)
+                
+            x_t = x_t + velocity * dt
+            if (i + 1) % 5 == 0 or (i + 1) == steps:
+                print(f"  [~] Прогресс ODE: {int(((i + 1) / steps) * 100)}%")
+
+    decode_latents_to_rgb(x_t, vae_model, output_path)
 
 if __name__ == "__main__":
-    init_ok = init_final_decoder()
-    if init_ok:
-        # Пример вызова для финала плавки (путь к чекпоинту)
+    vae_model = init_final_decoder()
+    if vae_model:
         target_check = r"Z:\flowch\checkpoints\chroma1_mangala_lora_epoch_150.safetensors"
-        run_final_inference(target_check, epoch=150)
+        
+        # Автоматически пытаемся вытащить валидационный текстовый эмбеддинг из датасета для честного теста
+        val_emb = None
+        try:
+            from src.models import ChromaDataset
+            dataset = ChromaDataset()
+            val_emb = dataset['t5_hidden'].unsqueeze(0).to(device)
+            print("🎯 Валидационный текстовый компас T5-XXL успешно подключен к финишному рендеру!")
+        except Exception:
+            print("⚠ Текстовый компас не найден. Запуск в режиме базового контекста.")
 
+        run_final_inference(target_check, vae_model, epoch=150, text_embedding=val_emb)
