@@ -122,9 +122,6 @@ def main_train_loop():
         if (global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS) >= (TrainConfig.MAX_TRAIN_STEPS // TrainConfig.GRADIENT_ACCUMULATION_STEPS):
             break
 
-    # Аварийная зачистка кэша и сбор мусора после каждого шага плавки батча
-    torch.cuda.empty_cache()
-    gc.collect()
 
 
 if __name__ == "__main__":
