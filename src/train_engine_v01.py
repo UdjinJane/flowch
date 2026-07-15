@@ -87,7 +87,7 @@ def main_train_loop():
             timesteps_attr = t.squeeze().view(-1) * 1000.0
             
             # СНАЙПЕРСКИЙ ФИКС: Извлекаем строго количество токенов (256) как одномерное целое число!
-            txt_len = prompt_embeds.shape[0]
+            txt_len = prompt_embeds.shape[1]
             txt_ids = torch.zeros(txt_len, 3, device="cuda", dtype=torch.bfloat16)
             
             # Генерируем пустой, валидный pooled_projections формы [B, 768] для обхода None-краша
