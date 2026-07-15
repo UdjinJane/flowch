@@ -8,9 +8,10 @@ numpy>=1.26.0
 pillow>=10.0.0
 psutil>=5.9.0
 transformers>=4.40.0
+diffusers>=0.31.0
+peft>=0.11.0
 accelerate>=0.30.0
 huggingface_hub>=0.23.0
 sentencepiece>=0.2.0
+protobuf
 tiktoken>=0.7.0
-
-
