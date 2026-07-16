@@ -3,6 +3,7 @@ import sys
 import gc
 import shutil
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from config import TrainConfig
 from generate_v02 import run_inference_v02
