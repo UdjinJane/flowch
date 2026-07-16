@@ -8,7 +8,6 @@ from torch.optim import AdamW
 from config import TrainConfig
 from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
-from flow_math_v01 import FluxFlowMathV01
 from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
 
