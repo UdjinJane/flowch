@@ -89,7 +89,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     v_conf = {
         "_class_name": "AutoencoderKL",
         "_diffusers_version": "0.30.0",
-        "block_out_channels":(128, 256, 512, 512),
+        "block_out_channels": (128, 256, 512, 512),
         "in_channels": 3,
         "latent_channels": 16,
         "layers_per_block": 2,
@@ -97,8 +97,16 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         "out_channels": 3,
         "sample_size": 1024,
         "scaling_factor": 0.3611,
-        "shift_factor": 0.1159
+        "shift_factor": 0.1159,
+        # Добавляем недостающие блоки для корректного сужения каналов
+        "up_block_types": (
+            "UpDecoderBlock2D",
+            "UpDecoderBlock2D",
+            "UpDecoderBlock2D",
+            "UpDecoderBlock2D"
+        )
     }
+
 
 
     
