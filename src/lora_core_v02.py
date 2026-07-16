@@ -1,12 +1,14 @@
 # === БЛОК ЯДРА LORA V02 СТАРТ ===
 import os
-import sys
 import json
 import torch
+from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-from safetensors.torch import load_file, save_file
-from config import TrainConfig
+from peft import get_peft_model, LoraConfig
+from src.config import TrainConfig
+# Инжектируем нативный квантовый инструмент PyTorch Foundation
+from torchao.quantization import quantize_, float8_weight_only
+
 
 
 class FluxLoraCoreV02:
@@ -39,8 +41,15 @@ class FluxLoraCoreV02:
         transformer.load_state_dict(clean_state_dict, strict=False)
         transformer = transformer.to(torch.bfloat16)
 
+        print("[ОБТ] Запуск нативного квантования TorchAO FP8 (Изоляция x_embedder)...")
+        # Хирургический фильтр: квантуем все Linear слои, КРОМЕ входного эмбеддера x_embedder
+        def filter_fn(mod, name):
+            if "x_embedder" in name:
+                return False
+            return isinstance(mod, torch.nn.Linear)
 
-
+        # Переводим веса базовой Хромы в float8 на месте прямо внутри VRAM
+        quantize_(transformer, float8_weight_only(), filter_fn)
         
         # НАМЕРТВО ЗАМОРАЖИВАЕМ БАЗУ (оригинальные веса Хромы не изменятся)
         transformer.requires_grad_(False)
