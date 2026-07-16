@@ -138,17 +138,12 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         b_sz = x_t.shape[0]
         latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
         latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
-    
-    # Каноническое обратное масштабирование латентов для декодера Flux VAE
-    latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
-    
-    # with torch.no_grad():
-        # Маршевый проход через VAE декодер в цвет
+        latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
         rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]
-        
-    # Кастуем RGB-тензор [-1, 1] в стандартный numpy массив байтов [0, 255]
-    rgb_tensor = (rgb_tensor / 2 + 0.5).clamp(0, 1)
-    img_array = (rgb_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+    
+        # Кастинг и сохранение вынесены наружу для мгновенной зачистки тяжелых объектов
+        rgb_tensor = (rgb_tensor / 2 + 0.5).clamp(0, 1)
+        img_array = (rgb_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
     
     output_dir = os.path.join(TrainConfig.OUTPUT_DIR, "images")
     os.makedirs(output_dir, exist_ok=True)
