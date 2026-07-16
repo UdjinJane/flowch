@@ -62,16 +62,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 return_dict=False
             )
 
+            # Истинный флотский буравчик: разматывает любую вложенность кортежей/списков до тензора
+            pred_tensor = velocity
+            while isinstance(pred_tensor, (tuple, list)):
+                pred_tensor = pred_tensor[0]
             
-            # Бронебойное извлечение тензора из любых вложенных кортежей PEFT/diffusers
-            if isinstance(velocity, (tuple, list)):
-                pred_tensor = velocity[0]
-                # На случай двойной вложенности кортежей
-                if isinstance(pred_tensor, (tuple, list)):
-                    pred_tensor = pred_tensor[0]
-            else:
-                pred_tensor = velocity.sample if hasattr(velocity, "sample") else velocity
-
+            # Если это объект diffusers output, забираем его sample
+            if hasattr(pred_tensor, "sample"):
+                pred_tensor = pred_tensor.sample
             
             # Шаг по траектории потока
             x_t = x_t + pred_tensor * dt
