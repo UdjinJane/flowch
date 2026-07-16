@@ -128,14 +128,15 @@ def main_train_loop():
             loss.backward()
             
             # Физический замер протечки градиентов в матрицы LoRA
-            if global_step == 1:
+            # [ОТК] Бортовой термометр: мониторинг динамики градиентов каждые 10 шагов плавки
+            if current_step_real % 10 == 0 or current_step_real == 0:
                 grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
                 avg_grad = sum(grads) / len(grads) if grads else 0.0
-                print(f"[ОТК] >>> КОНТРОЛЬ ДИНАМИКИ ГРАДИЕНТОВ (Шаг #1) <<<")
-                print(f" └── Тензоров с живыми градиентами: {len(grads)} из {len(trainable_params)}")
-                print(f" └── Средняя амплитуда дельты градиента: {avg_grad:.8f}")
+                print(f"\n[ОТК] >>> ТЕЛЕМЕТРИЯ РЕАКТОРА (Шаг #{current_step_real}) <<<")
+                print(f" └── Живых тензоров LoRA под нагрузкой: {len(grads)} из {len(trainable_params)}")
+                print(f" └── Актуальная амплитуда дельты градиента: {avg_grad:.8f}")
                 if avg_grad == 0.0:
-                    print(" [КРИТИЧЕСКИЙ ОТКАЗ] ГРАФ ВЫЧИСЛЕНИЙ РАЗОРВАН! Лосс не питает веса LoRA!")
+                    print(" [КРИТИЧЕСКИЙ ОТКАЗ] ПОТОК ГРАДИЕНТОВ ПРЕРВАН НАМЕРТВО!")
 
             
             global_step += 1
