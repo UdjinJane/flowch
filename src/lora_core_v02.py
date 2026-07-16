@@ -5,7 +5,7 @@ import torch
 from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
-from src.config import TrainConfig
+from config import TrainConfig
 # Инжектируем нативный квантовый инструмент PyTorch Foundation
 from torchao.quantization import quantize_, float8_weight_only
 
