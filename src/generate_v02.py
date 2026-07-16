@@ -5,6 +5,8 @@ from PIL import Image
 from config import TrainConfig
 from diffusers import AutoencoderKL
 from safetensors.torch import load_file
+from model_runner_v02 import run_lora_model_step
+
 
 
 def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=None, steps=25, device='cuda'):
@@ -54,15 +56,17 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             t_curr = i * dt
             t_tensor = torch.ones(1, device=device) * t_curr
             
-            # Маршевый проход через трансформер с полной стыковкой эмбеддингов
-            velocity = loaded_transformer(
-                hidden_states=x_t, 
-                timestep=t_tensor, 
-                encoder_hidden_states=cond, 
-                pooled_projections=pooled_projections,
-                img_ids=img_ids, 
-                txt_ids=txt_ids,
-                return_dict=False
+            # Маршевый проход через изолированный раннер с полной врезкой LoRA-весов
+            batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bfloat16)}
+            velocity = run_lora_model_step(
+                loaded_transformer,
+                batch_stub,
+                x_t,
+                t_tensor,
+                cond,
+                pooled_projections,
+                txt_ids,
+                img_ids
             )
 
             # Истинный флотский буравчик: снайперски выбивает нулевой элемент до чистого тензора
