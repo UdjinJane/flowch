@@ -15,7 +15,8 @@ class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
         print("[ОБТ] Шаг А: Считывание локальной геометрии transformer_config.json...")
-        config_json_path = os.path.join(os.path.dirname(__file__), "transformer_config.json")
+        config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
+
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
         
@@ -102,10 +103,11 @@ class FluxLoraCoreV02:
 
 
 if __name__ == "__main__":
-
     import shutil
-    if os.path.exists("src/__pycache__"):
-        shutil.rmtree("src/__pycache__")
+    pycache_path = os.path.join(TrainConfig.SRC_DIR, "__pycache__")
+    if os.path.exists(pycache_path):
+        shutil.rmtree(pycache_path)
+
         
     print("[ОБТ] Холодный тест отсека инжекции V02...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
