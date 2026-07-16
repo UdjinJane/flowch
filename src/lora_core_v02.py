@@ -45,7 +45,10 @@ class FluxLoraCoreV02:
         # Отрезаем '.0' и строим жесткую регулярку конца имени для PEFT.
         # Результат для hard_object: '.*\\.(to_q|to_out)$'
         clean_targets = [t.replace('.0', '') for t in TrainConfig.TARGET_MODULES]
-        target_regex = f".*\\.({'|'.join(clean_targets)})$"
+        # Добавляем strict-постфикс block. Теперь регулярка ловит только конечные Linear-матрицы
+        # Результат для hard_object: '.*\\.(to_q|to_out)\\.weight$'
+        target_regex = f".*\\.({'|'.join(clean_targets)})\\.weight$"
+
 
 
         lora_config = LoraConfig(
