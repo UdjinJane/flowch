@@ -29,6 +29,19 @@ class TrainConfig:
     MAX_TRAIN_STEPS = 1500
     LORA_RANK = 16
     LORA_ALPHA = 16
-    TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+    # --- СНАЙПЕРСКИЙ СЕЛЕКТОР МИШЕНЕЙ LoRA ПОД ТИП ОБЪЕКТА ---
+    # Доступные пресеты: 
+    # "hard_object"   - Железо, мангалы, коробки (срез нагрузки на AdamW в 2 раза, только контуры)
+    # "organic_body"  - Тела, люди, животные, плавные переходы, реки (фокус на пластику)
+    # "full_attn"     - Стандартный тяжелый режим по умолчанию (все проекции внимания)
+    LORA_PRESET = "hard_object"
+
+    if LORA_PRESET == "hard_object":
+        TARGET_MODULES = ["to_q.0", "to_out.0"]
+    elif LORA_PRESET == "organic_body":
+        TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0"]
+    else:
+        TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+
 
 
