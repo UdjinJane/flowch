@@ -61,78 +61,106 @@ def main_train_loop():
     
     lora_model.train()
     
-    for batch in dataloader:
-        # Извлекаем предварительно рассчитанные латенты и эмбеддинги текста из SSD-кэша с изоляцией графа
-        with torch.no_grad():
-            model_latents = batch["latents"].to(device, dtype=torch.bfloat16)
-            prompt_embeds = batch["prompt_embeds"].to(device, dtype=torch.bfloat16)
-            b, c, h, w = model_latents.shape
-            packed_latents = pack_latents_to_patches(model_latents)
+    # Датчики времени для прогнозирования трудозатрат
+    import time
+    start_time = time.time()
+    step_timestamps = []
+    
+    epoch = 1
+    run_reactor = True
+    
+    print(f"[Т] Главные маршевые двигатели запущены. Ожидание стабилизации тяги...")
+    
+    while run_reactor:
+        print(f"[Т] Вход в эпоху плавки № {epoch}")
+        
+        for batch in dataloader:
+            # Извлекаем предварительно рассчитанные латенты и эмбеддинги текста из SSD-кэша с изоляцией графа
+            with torch.no_grad():
+                model_latents = batch["latents"].to(device, dtype=torch.bfloat16)
+                prompt_embeds = batch["prompt_embeds"].to(device, dtype=torch.bfloat16)
+                b, c, h, w = model_latents.shape
+                packed_latents = pack_latents_to_patches(model_latents)
 
-            # Генерация маршевого шума Rectified Flow
-            noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
-
-        
-        # Математика кастомного квадратичного распределения таймстепов по перфокарте
-        t = torch.rand(b, device=device, dtype=torch.bfloat16)
-        t = 1.0 - (t * t)
-
-
-        
-        # Линейный блендинг Rectified Flow шума и латентов
-        t_bc = t.view(-1, 1)
-        packed_noisy_latents = (1.0 - t_bc) * packed_latents + t_bc * noise
-        packed_target_flow = noise - packed_latents
-        
-        # Формируем служебные ID векторов геометрии кадра (строго 2D для diffusers)
-        img_ids_cleaned = generate_flux_img_ids(h, w, device=device)
-        txt_len = int(prompt_embeds.shape[1])
-        txt_ids_cleaned = torch.zeros(txt_len, 3, device=device, dtype=torch.bfloat16)
-        
-        timesteps_attr = t.squeeze().view(-1) * 1000.0
-        pooled_projections = torch.zeros(b, 768, device=device, dtype=torch.bfloat16)
-        
-        # --- НАЧАЛО БЛОКА: МАРШЕВЫЙ ЗАПУСК ИЗОЛИРОВАННОГО РАННЕРА С МАСКИРОВАНИЕМ Т5 ---
-        model_output = run_lora_model_step(
-            lora_model, batch, packed_noisy_latents, timesteps_attr, 
-            prompt_embeds, pooled_projections, txt_ids_cleaned, img_ids_cleaned
-        )
-        # --- КОНЕЦ БЛОКА: МАРШЕВЫЙ ЗАПУСК ИЗОЛИРОВАННОГО РАННЕРА С МАСКИРОВАНИЕМ Т5 ---
-        
-        # Безопасное извлечение тензора предсказания потока из любого типа вывода модели
-        pred_tensor = model_output[0] if isinstance(model_output, tuple) else model_output.sample
-        pred_latents = pred_tensor[:, :, :64]
-
-        # Расчет MSE-лосса
-        loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
-        loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
-        loss.backward()
-        
-        global_step += 1
-        
-        # Проверка окна накопления градиентов (виртуальный батч)
-        if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
-            optimizer.step()
-            optimizer.zero_grad()
+                # Генерация маршевого шума Rectified Flow
+                noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
             
-            current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS
-            print(f"[# {current_step_real}] Маршевый Loss V02 (512px квадрат): {loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS:.6f}")
+            # Математика кастомного квадратичного распределения таймстепов по перфокарте
+            t = torch.rand(b, device=device, dtype=torch.bfloat16)
+            t = 1.0 - (t * t)
             
-            # Консервация весов каждые 200 реальных шагов
-            if current_step_real % 200 == 0 or current_step_real == (TrainConfig.MAX_TRAIN_STEPS // TrainConfig.GRADIENT_ACCUMULATION_STEPS):
-                ckpt_name = f"mng_oks_bl_flux_lora_step_{current_step_real}.safetensors"
-                ckpt_path = os.path.join(TrainConfig.OUTPUT_DIR, ckpt_name)
-                print(f"[Т] Выпечка LoRA чекпоинта на SSD: {ckpt_path}")
+            # Кэшируем физическое среднее таймстепа для анализа динамики лосса
+            avg_t = t.mean().item()
+            
+            # Линейный блендинг Rectified Flow шума и латентов
+            t_bc = t.view(-1, 1)
+            packed_noisy_latents = (1.0 - t_bc) * packed_latents + t_bc * noise
+            packed_target_flow = noise - packed_latents
+            
+            # Формируем служебные ID векторов геометрии кадра (строго 2D для diffusers)
+            img_ids_cleaned = generate_flux_img_ids(h, w, device=device)
+            txt_len = int(prompt_embeds.shape[1])
+            txt_ids_cleaned = torch.zeros(txt_len, 3, device=device, dtype=torch.bfloat16)
+            
+            timesteps_attr = t.squeeze().view(-1) * 1000.0
+            pooled_projections = torch.zeros(b, 768, device=device, dtype=torch.bfloat16)
+            
+            # Маршевый запуск изолированного раннера с маскированием Т5
+            model_output = run_lora_model_step(
+                lora_model, batch, packed_noisy_latents, timesteps_attr, 
+                prompt_embeds, pooled_projections, txt_ids_cleaned, img_ids_cleaned
+            )
+            
+            pred_tensor = model_output if isinstance(model_output, tuple) else model_output.sample
+            pred_latents = pred_tensor[:, :, :64]
+            
+            # Расчет MSE-лосса
+            loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
+            loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
+            loss.backward()
+            
+            global_step += 1
+            
+            # Проверка окна накопления градиентов (виртуальный батч)
+            if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
+                optimizer.step()
+                optimizer.zero_grad()
                 
-                lora_state_dict = FluxLoraCoreV02.get_peft_model_state_dict(lora_model)
-                clean_lora_dict = {k: v.to(torch.bfloat16) for k, v in lora_state_dict.items()}
-                FluxLoraCoreV02.save_file(clean_lora_dict, ckpt_path)
-                print(f"[УСПЕХ] Чекпоинт {ckpt_name} запечен успешно!")
+                current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS
                 
-        if (global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS) >= (TrainConfig.MAX_TRAIN_STEPS // TrainConfig.GRADIENT_ACCUMULATION_STEPS):
-            break
-
-
+                # Расчет скорости и ETA
+                step_timestamps.append(time.time())
+                if len(step_timestamps) > 1:
+                    step_time = step_timestamps[-1] - step_timestamps[-2]
+                else:
+                    step_time = time.time() - start_time
+                
+                steps_left = TrainConfig.MAX_TRAIN_STEPS - current_step_real
+                eta_seconds = steps_left * step_time
+                eta_str = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
+                
+                # Лог запекания: [# Шаг] Loss | Скорость | Осталось | Физика шума (Средний t)
+                print(f"[# {current_step_real}/{TrainConfig.MAX_TRAIN_STEPS}] "
+                      f"Loss: {loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS:.5f} | "
+                      f"T-Step: {step_time:.2f}s | ETA: {eta_str} | "
+                      f"Физика: avg_t={avg_t:.3f} (эпоха {epoch})")
+                
+                # Консервация весов каждые 200 реальных шагов
+                if current_step_real % 200 == 0 or current_step_real == TrainConfig.MAX_TRAIN_STEPS:
+                    ckpt_name = f"mng_oks_bl_flux_lora_step_{current_step_real}.safetensors"
+                    ckpt_path = os.path.join(TrainConfig.OUTPUT_DIR, ckpt_name)
+                    print(f"[Т] Выпечка LoRA чекпоинта на SSD: {ckpt_path}")
+                    
+                    lora_state_dict = FluxLoraCoreV02.get_peft_model_state_dict(lora_model)
+                    clean_lora_dict = {k: v.to(torch.bfloat16) for k, v in lora_state_dict.items()}
+                    FluxLoraCoreV02.save_file(clean_lora_dict, ckpt_path)
+                    print(f"[УСПЕХ] Чекпоинт {ckpt_name} запечен успешно!")
+                
+                if current_step_real >= TrainConfig.MAX_TRAIN_STEPS:
+                    run_reactor = False
+                    break
+        
+        epoch += 1
 
 if __name__ == "__main__":
     main_train_loop()
