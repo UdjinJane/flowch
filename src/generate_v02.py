@@ -3,6 +3,8 @@ import torch
 import time
 from PIL import Image
 from config import TrainConfig
+from diffusers import AutoencoderKL
+
 
 def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=None, steps=25, device='cuda'):
     """
@@ -81,22 +83,51 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             if (i + 1) % 5 == 0 or (i + 1) == steps:
                 print(f" [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | Текущий t = {t_curr:.3f}")
 
-    print("[ОБТ] Фаза Е: Траектория завершена! Схлопывание 2D патчей в ЧБ-матрицу...")
-    # Преобразуем плоские 1024 токена обратно в геометрию кадра 32х32 для экспресс-визуализации
-    x_t_vis = x_t.mean(dim=-1).view(1, 1, 32, 32).repeat(1, 3, 1, 1)
-    x_t_vis = (x_t_vis - x_t_vis.min()) / (x_t_vis.max() - x_t_vis.min() + 1e-5)
+    print("[ОБТ] Фаза Е: Траектория завершена! Ленивая загрузка Flux VAE во VRAM...")
+    # Считываем кастомные сдвиги и масштабы из vae_config.json
+    vae_config_path = os.path.join(os.path.dirname(__file__), "vae_config.json")
+    with open(vae_config_path, "r", encoding="utf-8") as f:
+        import json
+        v_conf = json.load(f)
     
-    print("[ОБТ] Фаза Ж: Интерполяция матрицы до 512px и сохранение на SSD...")
-    img_tensor = torch.nn.functional.interpolate(x_t_vis, size=(512, 512), mode='bilinear')
-    # Принудительно сбрасываем bfloat16 в float32 перед отправкой в numpy массив
-    img_array = (img_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+    # Инициализируем каркас автоэнкодера
+    vae = AutoencoderKL.from_config(v_conf)
+    vae_state = torch.load(TrainConfig.VAE_PATH, map_location="cpu", weights_only=True)
+    
+    # Очистка префиксов если есть
+    vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
+    vae.load_state_dict(vae_clean, strict=True)
+    vae = vae.to(device=device, dtype=torch.bfloat16)
 
+    print("[ОБТ] Фаза Ж: Распаковка 2D патчей обратно в 4D латенты и маршевый VAE-декод...")
+    # Возвращаем 1024 токена обратно в 4D шейп латентов Flux [B, 16, H//2, W//2] -> [1, 16, 32, 32]
+    # Наш x_t имеет форму [1, 1024, 64]. Решейпим каналы 64 -> (16, 2, 2)
+    b_sz = x_t.shape[0]
+    latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
+    latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
     
-    output_dir = os.path.join(TrainConfig.ROOT_DIR, "output", "images")
+    # Применяем обратное масштабирование Rectified Flow по каноническому конфигу VAE
+    latents_decoded = (latents_4d / v_conf.get("scaling_factor", 0.3611)) + v_conf.get("shift_factor", 0.1159)
+    
+    with torch.no_grad():
+        # Маршевый проход через VAE декодер в цвет
+        rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]
+        
+    # Кастуем RGB-тензор [-1, 1] в стандартный numpy массив байтов [0, 255]
+    rgb_tensor = (rgb_tensor / 2 + 0.5).clamp(0, 1)
+    img_array = (rgb_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+    
+    output_dir = os.path.join(TrainConfig.OUTPUT_DIR, "images")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"mng_render_step_{current_step}.png")
-    
     Image.fromarray(img_array).save(output_path)
+    
+    # Безусловное выжигание VAE из памяти для удержания лимита VRAM
+    del vae, vae_state, vae_clean, latents_4d, latents_decoded, rgb_tensor
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+
     
     print("[ОБТ] Фаза З: Деактивация контура инференса, возврат флагов .train()...")
     if was_training: 
