@@ -10,7 +10,6 @@
 import os
 import torch
 import torch.nn.functional as F
-import gc
 from torch.optim import AdamW
 from config import TrainConfig
 from dataset_v02 import get_dataloader_v02
@@ -90,9 +89,10 @@ def main_train_loop():
         )
         # --- КОНЕЦ БЛОКА: МАРШЕВЫЙ ЗАПУСК ИЗОЛИРОВАННОГО РАННЕРА С МАСКИРОВАНИЕМ Т5 ---
         
-        pred_tensor = model_output[0]
+        # Безопасное извлечение тензора предсказания потока из любого типа вывода модели
+        pred_tensor = model_output[0] if isinstance(model_output, tuple) else model_output.sample
         pred_latents = pred_tensor[:, :, :64]
-        
+
         # Расчет MSE-лосса
         loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
         loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
