@@ -60,8 +60,12 @@ class FluxLoraCoreV02:
             if orig_tune_ao is not None: peft.tuners.tuners_utils.is_torchao_available = orig_tune_ao
 
         print("[ОБТ] Шаг З: Запуск нативного квантования TorchAO FP8 (Фильтрация слоев)...")
+        # Жесткий флотский фильтр: полностью изолируем веса LoRA от квантования FP8, оставляя их в обучаемом bf16
         def filter_fn(mod, name):
-            return not ("x_embedder" in name or "lora_" in name) and isinstance(mod, torch.nn.Linear)
+            is_linear = isinstance(mod, torch.nn.Linear)
+            is_base_layer = not ("x_embedder" in name or "lora" in name or "base_layer" in name)
+            return is_linear and is_base_layer
+
         quantize_(lora_model, float8_weight_only(), filter_fn)
 
         print("[ОБТ] Шаг И: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
