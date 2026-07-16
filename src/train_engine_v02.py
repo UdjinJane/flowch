@@ -9,6 +9,7 @@
 
 import os
 import torch
+import gc
 import torch.nn.functional as F
 from torch.optim import AdamW
 from config import TrainConfig
@@ -34,9 +35,18 @@ def generate_flux_img_ids(latent_h, latent_w, device):
 def main_train_loop():
     print("[Т] Запуск финального экономного диспетчера: train_engine_v02")
     
-    # Инициализация стерильных лоудеров и инжекция LoRA в bfloat16-трансформер
+    # Инициализация лоудеров и инжекция LoRA с принудительной очисткой памяти
+    import gc
     dataloader = get_dataloader_v02()
+    # Жестко переводим лоудер в однопоточный режим во избежание deadlock в Windows
+    dataloader.num_workers = 0
+    
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
+    
+    # Выжигаем остаточный мусор из ОЗУ и VRAM перед пуском
+    gc.collect()
+    torch.cuda.empty_cache()
+
     
     # Собираем только обучаемые параметры LoRA-адаптеров для оптимизатора
     trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
