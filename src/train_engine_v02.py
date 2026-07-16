@@ -45,12 +45,19 @@ def main_train_loop():
     # Выжигаем остаточный мусор из ОЗУ и VRAM перед пуском
     gc.collect()
     torch.cuda.empty_cache()
-
     
-    # Собираем только обучаемые параметры LoRA-адаптеров для оптимизатора
+    # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA START ---
     trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
+    print(f"[ОТК] >>> ФИЗИЧЕСКИЙ КОНТРОЛЬ ЯДРА LoRA <<<")
+    print(f" └── Найдено обучаемых тензоров в ОЗУ: {len(trainable_params)}")
+    total_trainable_elements = sum(p.numel() for p in trainable_params)
+    print(f" └── Общее число обучаемых весов: {total_trainable_elements}")
+    if len(trainable_params) == 0:
+        print(" [КРИТИЧЕСКИЙ ОТКАЗ] ЛОРА АДАПТЕР ПОЛНОСТЬЮ ОБЕЗГЛАВЛЕН! Градиенты заблокированы!")
+    # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA END ---
+
+    # Собираем только обучаемые параметры LoRA-адаптеров для оптимизатора
     optimizer = AdamW(trainable_params, lr=TrainConfig.LEARNING_RATE)
-    
     device = torch.device("cuda")
     global_step = 0
     current_step_real = 0
