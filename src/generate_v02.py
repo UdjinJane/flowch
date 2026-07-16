@@ -83,12 +83,26 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             if (i + 1) % 5 == 0 or (i + 1) == steps:
                 print(f" [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | Текущий t = {t_curr:.3f}")
 
-    print("[ОБТ] Фаза Е: Траектория завершена! Ленивая загрузка Flux VAE во VRAM...")
-    # Считываем кастомные сдвиги и масштабы из vae_config.json
-    vae_config_path = os.path.join(os.path.dirname(__file__), "vae_config.json")
-    with open(vae_config_path, "r", encoding="utf-8-sig") as f:
-        import json
-        v_conf = json.load(f)
+    print("[ОБТ] Фаза Е: Траектория завершена! Сборка чистого inline-конфига Flux VAE...")
+    import json
+    # Задаем эталонную структуру строкой для обхода битых локальных JSON на SSD
+    vae_json_string = """
+    {
+      "_class_name": "AutoencoderKL",
+      "_diffusers_version": "0.30.0",
+      "block_out_channels":,
+      "in_channels": 3,
+      "latent_channels": 16,
+      "layers_per_block": 2,
+      "norm_num_groups": 32,
+      "out_channels": 3,
+      "sample_size": 1024,
+      "scaling_factor": 0.3611,
+      "shift_factor": 0.1159
+    }
+    """
+    v_conf = json.loads(vae_json_string)
+
     
     # Инициализируем каркас автоэнкодера
     vae = AutoencoderKL.from_config(v_conf)
