@@ -45,8 +45,17 @@ def main_train_loop():
     gc.collect()
     torch.cuda.empty_cache()
     
-    # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA START ---
+    # 1. ПРИНУДИТЕЛЬНАЯ ЗАМОРОЗКА (Выжигаем лишнее ДО любого сбора параметров)
+    for name, param in lora_model.named_parameters():
+        if "lora_" in name and any(t.replace('.0', '') in name for t in TrainConfig.TARGET_MODULES):
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
+    # 2. СТРОГО ЕДИНСТВЕННЫЙ СБОР АКТИВНЫХ ТЕНЗОРОВ (AdamW увидит только их)
     trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
+
+    # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA START ---
     print(f"[ОТК] >>> ФИЗИЧЕСКИЙ КОНТРОЛЬ ЯДРА LoRA <<<")
     print(f" └── Найдено обучаемых тензоров в ОЗУ: {len(trainable_params)}")
     total_trainable_elements = sum(p.numel() for p in trainable_params)
@@ -55,19 +64,9 @@ def main_train_loop():
         print(" [КРИТИЧЕСКИЙ ОТКАЗ] ЛОРА АДАПТЕР ПОЛНОСТЬЮ ОБЕЗГЛАВЛЕН! Градиенты заблокированы!")
     # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA END ---
 
-    # Собираем только обучаемые параметры LoRA-адаптеров для оптимизатора
-    # 1. Принудительная заморозка (фильтр без '.0')
-    for name, param in lora_model.named_parameters():
-        if "lora_" in name and any(t.replace('.0', '') in name for t in TrainConfig.TARGET_MODULES):
-            param.requires_grad = True
-        else: param.requires_grad = False
-
-    # 2. Сбор ТОЛЬКО ПОСЛЕ фильтрации
-    trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
-    print(f"[ОТК] LoRA слоев: {len(trainable_params)}") 
-
-    # 3. Инициализация AdamW
+    # 3. ИНИЦИАЛИЗАЦИЯ AdamW
     optimizer = AdamW(trainable_params, lr=TrainConfig.LEARNING_RATE)
+
 
     device = torch.device("cuda")
     global_step = 0
