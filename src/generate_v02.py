@@ -88,7 +88,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     
     print("[ОБТ] Фаза Ж: Интерполяция матрицы до 512px и сохранение на SSD...")
     img_tensor = torch.nn.functional.interpolate(x_t_vis, size=(512, 512), mode='bilinear')
-    img_array = (img_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).astype('uint8')
+    # Принудительно сбрасываем bfloat16 в float32 перед отправкой в numpy массив
+    img_array = (img_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+
     
     output_dir = os.path.join(TrainConfig.ROOT_DIR, "output", "images")
     os.makedirs(output_dir, exist_ok=True)
