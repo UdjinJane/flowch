@@ -28,5 +28,7 @@ class TrainConfig:
     LEARNING_RATE = 2e-5
     MAX_TRAIN_STEPS = 1500
     LORA_RANK = 16
+    LORA_ALPHA = 16
+
 
 print("[Т] Конфигурация TrainConfig успешно переведена на относительные пути.")
