@@ -52,12 +52,19 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         cond = torch.zeros(1, 256, 4096, device=device, dtype=torch.bfloat16)
     
     print(f"[ОБТ] Фаза Д: Запуск ODE траектории Rectified Flow ({steps} шагов Эйлера)...")
-    dt = 1.0 / steps
-    
     with torch.no_grad():
+        # Строим логарифмически-смещенную сетку таймстепов Эйлера
+        t_lines = torch.linspace(0.0, 1.0, steps + 1, device=device)
+        # Математический сдвиг сетки к началу координат для проработки геометрии мангала
+        steps_grid = t_lines / (1.0 + (1.0 - t_lines) * 0.5) 
+
         for i in range(steps):
-            t_curr = i * dt
+            t_curr = steps_grid[i].item()
+            t_next = steps_grid[i+1].item()
+            dt = t_next - t_curr  # Динамический калиброванный шаг
+            
             t_tensor = torch.ones(1, device=device) * t_curr
+
             
             # Маршевый проход через изолированный раннер с полной врезкой LoRA-весов
             # batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bfloat16)}
