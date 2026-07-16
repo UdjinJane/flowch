@@ -103,7 +103,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     
     # Инициализируем каркас автоэнкодера
     vae = AutoencoderKL.from_config(v_conf)
-    vae_state = torch.load(TrainConfig.VAE_PATH, map_location="cpu", weights_only=True)
+    # Отключаем параноидальный флаг weights_only для успешной распаковки кастомных метаданных Flux VAE
+    vae_state = torch.load(TrainConfig.VAE_PATH, map_location="cpu", weights_only=False)
+
     
     # Очистка префиксов если есть
     vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
