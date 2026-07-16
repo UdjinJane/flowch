@@ -86,7 +86,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     print("[ОБТ] Фаза Е: Траектория завершена! Ленивая загрузка Flux VAE во VRAM...")
     # Считываем кастомные сдвиги и масштабы из vae_config.json
     vae_config_path = os.path.join(os.path.dirname(__file__), "vae_config.json")
-    with open(vae_config_path, "r", encoding="utf-8") as f:
+    with open(vae_config_path, "r", encoding="utf-8-sig") as f:
         import json
         v_conf = json.load(f)
     
