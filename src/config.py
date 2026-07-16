@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 class TrainConfig:
     # --- МОДУЛЬ АВТОНОМНОЙ НАВИГАЦИИ (ОТНОСИТЕЛЬНЫЕ ПУТИ) ---
@@ -31,6 +31,3 @@ class TrainConfig:
     LORA_ALPHA = 16
     TARGET_MODULES = ["to_q", "to_k", "to_v", "to_out"]
 
-
-
-print("[Т] Конфигурация TrainConfig успешно переведена на относительные пути.")
