@@ -1,23 +1,19 @@
-﻿def main_train_loop():
-    print("[Т] Запуск финального экономного диспетчера: train_engine_v02")
-    
-    # Жесткое выжигание кэша импортов перед стартом плавки по умолчанию
-    import shutil
-    shutil.rmtree(os.path.join(os.path.dirname(__file__), "__pycache__"), ignore_errors=True)
-    print("[ОТК] Локальный кэш __pycache__ принудительно зачищен.")
-
-
-import os
-import torch
+﻿import os
+import sys
 import gc
-import torch.nn.functional as F
-from torch.optim import AdamW
+import shutil
+import torch
 from config import TrainConfig
 from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
 from flow_math_v01 import FluxFlowMathV01
 from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
+
+# Жесткое выжигание кэша
+shutil.rmtree(os.path.join(os.path.dirname(os.path.abspath(__file__)), "__pycache__"), ignore_errors=True)
+print("[ОТК] Локальный кэш __pycache__ принудительно зачищен.")
+
 
 def pack_latents_to_patches(latents):
     b, c, h, w = latents.shape
