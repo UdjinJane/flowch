@@ -1,7 +1,13 @@
 # === БЛОК ЯДРА LORA V02 СТАРТ ===
 import os
+import sys
 import json
 import torch
+from safetensors.torch import load_file, save_file as st_save_file
+from diffusers import FluxTransformer2DModel
+from peft import get_peft_model, LoraConfig, get_peft_model_state_dict as peft_get_state_dict
+# ... (новые импорты)
+
 from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
@@ -49,27 +55,25 @@ class FluxLoraCoreV02:
             return isinstance(mod, torch.nn.Linear)
 
         # Переводим веса базовой Хромы в float8 на месте прямо внутри VRAM
-        quantize_(transformer, float8_weight_only(), filter_fn)
-        
-        # НАМЕРТВО ЗАМОРАЖИВАЕМ БАЗУ (оригинальные веса Хромы не изменятся)
-        transformer.requires_grad_(False)
-        
-        # КРИТИЧЕСКИЙ АНТИ-OOM МАНЕВР: Активируем градиентный чекпоинтинг для тотальной разгрузки VRAM!
-        # Выметает матрицы активаций внимания из физической памяти GPU, обнуляя заезд в Shared Memory.
-        transformer.enable_gradient_checkpointing()
-        print("[ОТК] Аппаратный градиентный чекпоинтинг успешно активирован в слоях трансформера.")
-        
-        print(f"[ОБТ] Инжекция LoRA адаптеров V02 (Rank: {TrainConfig.LORA_RANK}, Alpha: {TrainConfig.LORA_ALPHA})...")
-        lora_config = LoraConfig(
-            r=TrainConfig.LORA_RANK,
-            lora_alpha=TrainConfig.LORA_ALPHA,
-            target_modules=TrainConfig.TARGET_MODULES,
-            lora_dropout=0.0,
-            bias="none",
-            init_lora_weights="gaussian"
-        )
-        
+        # === РАБОЧИЙ БЛОК: ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ СТАРТ ===
+        transformer.load_state_dict(clean_state_dict, strict=False)
+        transformer = transformer.to(torch.bfloat16)
+
+        # 1. Сначала LoRA на bf16
         lora_model = get_peft_model(transformer, lora_config)
+
+        # 2. Квантование (игнорируя 'lora_' в фильтре)
+        def filter_fn(mod, name):
+            if "x_embedder" in name or "lora_" in name: return False
+            return isinstance(mod, torch.nn.Linear)
+        quantize_(lora_model, float8_weight_only(), filter_fn)
+
+        # 3. Фиксация
+        transformer.requires_grad_(False)
+        transformer.enable_gradient_checkpointing()
+        lora_model = lora_model.to(device="cuda")
+# === РАБОЧИЙ БЛОК: ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ ФИНАЛ ===
+
         lora_model = lora_model.to(device="cuda")
         # Принудительно оставляем только обучаемые параметры LoRA в bfloat16 для стабильности градиентов
         for p in lora_model.parameters():
@@ -80,11 +84,12 @@ class FluxLoraCoreV02:
 
     @staticmethod
     def get_peft_model_state_dict(lora_model):
-        return get_peft_model_state_dict(lora_model)
+        return peft_get_state_dict(lora_model)
 
     @staticmethod
     def save_file(tensor_dict, filepath):
-        save_file(tensor_dict, filepath)
+        st_save_file(tensor_dict, filepath)
+
 
 
 if __name__ == "__main__":
