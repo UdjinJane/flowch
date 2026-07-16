@@ -51,9 +51,9 @@ class FluxLoraCoreV02:
             r=TrainConfig.LORA_RANK,
             lora_alpha=TrainConfig.LORA_ALPHA,
             target_modules=target_regex,
-            use_regex=True,
             bias="none"
         )
+
 
         
         import peft.tuners.lora.torchao
