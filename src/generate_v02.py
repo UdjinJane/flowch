@@ -4,6 +4,7 @@ import time
 from PIL import Image
 from config import TrainConfig
 from diffusers import AutoencoderKL
+from safetensors.torch import load_file
 
 
 def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=None, steps=25, device='cuda'):
@@ -103,8 +104,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     
     # Инициализируем каркас автоэнкодера
     vae = AutoencoderKL.from_config(v_conf)
-    # Отключаем параноидальный флаг weights_only для успешной распаковки кастомных метаданных Flux VAE
-    vae_state = torch.load(TrainConfig.VAE_PATH, map_location="cpu", weights_only=False)
+    # Вычитываем веса из монолита .safetensors безопасным и нативным методом без использования pickle
+    vae_state = load_file(TrainConfig.VAE_PATH, device="cpu")
+
 
     
     # Очистка префиксов если есть
