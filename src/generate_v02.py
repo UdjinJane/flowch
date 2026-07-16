@@ -62,10 +62,11 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 return_dict=False
             )
 
-            # Истинный флотский буравчик: разматывает любую вложенность кортежей/списков до тензора
+            # Истинный флотский буравчик: снайперски выбивает нулевой элемент до чистого тензора
             pred_tensor = velocity
             while isinstance(pred_tensor, (tuple, list)):
                 pred_tensor = pred_tensor[0]
+
             
             # Если это объект diffusers output, забираем его sample
             if hasattr(pred_tensor, "sample"):
