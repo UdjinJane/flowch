@@ -84,10 +84,15 @@ class FluxLoraCoreV02:
         # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
         transformer.requires_grad_(False)
         
-        # Принудительно проверяем и размораживаем только веса LoRA для оптимизатора
+        # Интеллектуальный флотский фильтр градиентов LoRA на основе конфигурации
         for name, param in lora_model.named_parameters():
             if "lora_" in name:
-                param.requires_grad = True
+                # Проверяем, совпадает ли текущий слой LoRA с пресетом из TrainConfig
+                if any(target in name for target in TrainConfig.TARGET_MODULES):
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False  # Выжигаем градиенты для лишних слоёв (to_k, to_v)
+
                 
         transformer.enable_gradient_checkpointing()
 
