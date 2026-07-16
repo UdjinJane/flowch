@@ -68,9 +68,17 @@ class FluxLoraCoreV02:
             return not ("x_embedder" in name or "lora_" in name) and isinstance(mod, torch.nn.Linear)
         quantize_(lora_model, float8_weight_only(), filter_fn)
 
-        print("[ОБТ] Шаг И: Заморозка базовых матриц и активация градиентного чекпоинтинга...")
+        print("[ОБТ] Шаг И: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
+        # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
         transformer.requires_grad_(False)
+        
+        # Принудительно проверяем и размораживаем только веса LoRA для оптимизатора
+        for name, param in lora_model.named_parameters():
+            if "lora_" in name:
+                param.requires_grad = True
+                
         transformer.enable_gradient_checkpointing()
+
         
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
         lora_model = lora_model.to(device="cuda")
