@@ -149,8 +149,10 @@ def main_train_loop():
                       f"T-Step: {step_time:.2f}s | ETA: {eta_str} | "
                       f"Физика: avg_t={avg_t:.3f} (эпоха {epoch})")
                 
-                # Консервация весов каждые 200 реальных шагов
-                if current_step_real % 200 == 0 or current_step_real == TrainConfig.MAX_TRAIN_STEPS:
+                # Консервация весов каждые 10 реальных шагов - 1 эпоха.
+                # Генерация сэмпла и лоры каждую эпоху для контроля динамики предмета
+                if current_step_real % 10 == 0 or current_step_real == TrainConfig.MAX_TRAIN_STEPS:
+
                 # Ручной запуск визуализации текущей эпохи плавки перед выпечкой весов
                     run_inference_v02(
                         loaded_transformer=lora_model,
