@@ -67,13 +67,16 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             while isinstance(pred_tensor, (tuple, list)):
                 pred_tensor = pred_tensor[0]
 
-            
             # Если это объект diffusers output, забираем его sample
             if hasattr(pred_tensor, "sample"):
                 pred_tensor = pred_tensor.sample
             
-            # Шаг по траектории потока
-            x_t = x_t + pred_tensor * dt
+            # Снайперский флотский срез: забираем строго первые 64 канала изображения, отсекая текстовый мусор
+            pred_latents = pred_tensor[:, :, :64]
+
+            # Шаг по траектории потока изображения
+            x_t = x_t + pred_latents * dt
+
             
             if (i + 1) % 5 == 0 or (i + 1) == steps:
                 print(f" [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | Текущий t = {t_curr:.3f}")
