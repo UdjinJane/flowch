@@ -57,3 +57,8 @@ dataset/mng_oks_bl/DSC_0569.txt
 dataset/mng_oks_bl/DSC_0570.txt
 dataset/mng_oks_bl/DSC_0571.txt
 dataset/mng_oks_bl/DSC_0572.txt
+/src/__pycache__
+*.pyc
+/output/images
+/dataset/output
+/output/images
