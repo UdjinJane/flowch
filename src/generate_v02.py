@@ -111,7 +111,8 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     
     # Очистка префиксов если есть
     vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
-    vae.load_state_dict(vae_clean, strict=True)
+    # Переводим в strict=False: бережно игнорируем ключи энкодера, загружая только нужный нам декодер Flux VAE
+    vae.load_state_dict(vae_clean, strict=False)
     vae = vae.to(device=device, dtype=torch.bfloat16)
 
     print("[ОБТ] Фаза Ж: Распаковка 2D патчей обратно в 4D латенты и маршевый VAE-декод...")
