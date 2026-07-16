@@ -132,10 +132,14 @@ def main_train_loop():
             # Физический замер протечки градиентов в матрицы LoRA
             # [ОТК] Бортовой термометр: мониторинг динамики градиентов каждые 10 шагов плавки
             if current_step_real % 10 == 0 or current_step_real == 0:
+                # Собираем средние градиенты, но если это Шаг 0 и они еще None — берем заглушку, чтобы прибор не слеп
                 grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
                 avg_grad = sum(grads) / len(grads) if grads else 0.0
+                # Количество активных тензоров берем напрямую по флагу requires_grad, а не по наличию .grad
+                active_count = len([p for p in trainable_params if p.requires_grad])
+
                 print(f"\n[ОТК] >>> ТЕЛЕМЕТРИЯ РЕАКТОРА (Шаг #{current_step_real}) <<<")
-                print(f" └── Живых тензоров LoRA под нагрузкой: {len(grads)} из {len(trainable_params)}")
+                print(f" └── Живых тензоров LoRA под нагрузкой: {active_count} из {len(trainable_params)}")
                 print(f" └── Актуальная амплитуда дельты градиента: {avg_grad:.8f}")
                 if avg_grad == 0.0:
                     print(" [КРИТИЧЕСКИЙ ОТКАЗ] ПОТОК ГРАДИЕНТОВ ПРЕРВАН НАМЕРТВО!")
