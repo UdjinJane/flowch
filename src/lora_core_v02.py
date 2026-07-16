@@ -15,72 +15,60 @@ from config import TrainConfig
 # Инжектируем нативный квантовый инструмент PyTorch Foundation
 from torchao.quantization import quantize_, float8_weight_only
 
-
-
 class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
+        # Сборка и загрузка модели
         config_json_path = os.path.join(os.path.dirname(__file__), "transformer_config.json")
-        print(f"[ОБТ] Шаг 5.3: Сборка каркаса Transformer V02 из локального чертежа: {config_json_path}")
-        
-        if not os.path.exists(TrainConfig.MODEL_SINGLE_FILE):
-            print(f"[КРИТ] Чекпоинт Chroma1-Base не найден: {TrainConfig.MODEL_SINGLE_FILE}")
-            sys.exit(1)
-            
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
         
-        print("[ОБТ] Сборка каркаса Transformer V02...")
         transformer = FluxTransformer2DModel.from_config(config_dict)
-
-        print(f"[ОБТ] Загрузка физических весов трансформера из монолита: {TrainConfig.MODEL_SINGLE_FILE}")
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-        clean_state_dict = {}
-        for k, v in state_dict.items():
-            if k.startswith("model.diffusion_model."):
-                clean_state_dict[k.replace("model.diffusion_model.", "")] = v
-            else:
-                clean_state_dict[k] = v
-
-        print("[ОБТ] Развертывание базовых матриц Хромы на тензорные ядра CUDA...")
-        transformer = transformer.to_empty(device="cuda")
+        
+        # Очистка ключей и загрузка весов
+        clean_state_dict = {
+            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v 
+            for k, v in state_dict.items()
+        }
+        transformer.to_empty(device="cuda")
         transformer.load_state_dict(clean_state_dict, strict=False)
-        transformer = transformer.to(torch.bfloat16)
+        transformer.to(torch.bfloat16)
 
-        print("[ОБТ] Запуск нативного квантования TorchAO FP8 (Изоляция x_embedder)...")
-        # Хирургический фильтр: квантуем все Linear слои, КРОМЕ входного эмбеддера x_embedder
+        # Инжекция LoRA с временной изоляцией старой версии torchao от PEFT
+        lora_config = LoraConfig(
+            r=TrainConfig.LORA_RANK, 
+            lora_alpha=TrainConfig.LORA_ALPHA, 
+            target_modules=TrainConfig.TARGET_MODULES, 
+            bias="none"
+        )
+        
+        # Динамический хак: заставляем PEFT думать, что torchao не установлен
+        import peft.import_utils
+        original_check = peft.import_utils.is_torchao_available
+        peft.import_utils.is_torchao_available = lambda: False
+
+        try:
+            lora_model = get_peft_model(transformer, lora_config)
+        finally:
+            # Восстанавливаем оригинальную проверку после инжекции
+            peft.import_utils.is_torchao_available = original_check
+
+
+        # Квантование TorchAO FP8 (за исключением x_embedder и lora_)
         def filter_fn(mod, name):
-            if "x_embedder" in name:
-                return False
-            return isinstance(mod, torch.nn.Linear)
-
-        # Переводим веса базовой Хромы в float8 на месте прямо внутри VRAM
-        # === РАБОЧИЙ БЛОК: ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ СТАРТ ===
-        transformer.load_state_dict(clean_state_dict, strict=False)
-        transformer = transformer.to(torch.bfloat16)
-
-        # 1. Сначала LoRA на bf16
-        lora_model = get_peft_model(transformer, lora_config)
-
-        # 2. Квантование (игнорируя 'lora_' в фильтре)
-        def filter_fn(mod, name):
-            if "x_embedder" in name or "lora_" in name: return False
-            return isinstance(mod, torch.nn.Linear)
+            return not ("x_embedder" in name or "lora_" in name) and isinstance(mod, torch.nn.Linear)
         quantize_(lora_model, float8_weight_only(), filter_fn)
 
-        # 3. Фиксация
+        # Фиксация и финализация
         transformer.requires_grad_(False)
         transformer.enable_gradient_checkpointing()
-        lora_model = lora_model.to(device="cuda")
-# === РАБОЧИЙ БЛОК: ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ ФИНАЛ ===
-
-        lora_model = lora_model.to(device="cuda")
-        # Принудительно оставляем только обучаемые параметры LoRA в bfloat16 для стабильности градиентов
-        for p in lora_model.parameters():
-            if p.requires_grad:
-                p.data = p.data.to(torch.bfloat16)
+        lora_model.to(device="cuda").to(torch.bfloat16)
+        
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
         return lora_model
+
+
 
     @staticmethod
     def get_peft_model_state_dict(lora_model):
