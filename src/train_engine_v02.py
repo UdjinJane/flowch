@@ -128,6 +128,17 @@ def main_train_loop():
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
             loss.backward()
             
+            # Физический замер протечки градиентов в матрицы LoRA
+            if global_step == 1:
+                grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
+                avg_grad = sum(grads) / len(grads) if grads else 0.0
+                print(f"[ОТК] >>> КОНТРОЛЬ ДИНАМИКИ ГРАДИЕНТОВ (Шаг #1) <<<")
+                print(f" └── Тензоров с живыми градиентами: {len(grads)} из {len(trainable_params)}")
+                print(f" └── Средняя амплитуда дельты градиента: {avg_grad:.8f}")
+                if avg_grad == 0.0:
+                    print(" [КРИТИЧЕСКИЙ ОТКАЗ] ГРАФ ВЫЧИСЛЕНИЙ РАЗОРВАН! Лосс не питает веса LoRA!")
+
+            
             global_step += 1
             
             # Проверка окна накопления градиентов (виртуальный батч)
