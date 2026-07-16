@@ -1,7 +1,12 @@
 ﻿{
   "_class_name": "AutoencoderKL",
   "_diffusers_version": "0.30.0",
-  "block_out_channels":,
+  "block_out_channels": [
+    128,
+    256,
+    512,
+    512
+  ],
   "in_channels": 3,
   "latent_channels": 16,
   "layers_per_block": 2,
