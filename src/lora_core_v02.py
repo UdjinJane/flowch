@@ -41,7 +41,11 @@ class FluxLoraCoreV02:
         # Превращаем список слоев в строгое регулярное выражение для PEFT
         # Пример: '.*(to_q\.0|to_out\.0)$' гарантирует инжекцию только в указанные узлы
         import re
-        target_regex = f".*({'|'.join([m.replace('.', '\\.') for m in TrainConfig.TARGET_MODULES])})$"
+        # Сначала спокойно экранируем точки в обычном массиве строк
+        escaped_modules = [m.replace('.', '\\.') for m in TrainConfig.TARGET_MODULES]
+        # Собираем финальную регулярку без использования обратных слэшей внутри f-складки
+        target_regex = f".*({'|'.join(escaped_modules)})$"
+
 
         lora_config = LoraConfig(
             r=TrainConfig.LORA_RANK,
