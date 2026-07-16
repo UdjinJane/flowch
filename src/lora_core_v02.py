@@ -84,17 +84,17 @@ class FluxLoraCoreV02:
         # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
         transformer.requires_grad_(False)
         
-        # Интеллектуальный флотский фильтр градиентов LoRA на основе конфигурации
+        # Сначала включаем чекпоинтинг, пусть он делает свои сбросы параметров
+        transformer.enable_gradient_checkpointing()
+
+        # И только теперь ЖЕСТКО и финально выжигаем градиенты для неактивных слоев LoRA
         for name, param in lora_model.named_parameters():
             if "lora_" in name:
-                # Проверяем, совпадает ли текущий слой LoRA с пресетом из TrainConfig
                 if any(target in name for target in TrainConfig.TARGET_MODULES):
                     param.requires_grad = True
                 else:
-                    param.requires_grad = False  # Выжигаем градиенты для лишних слоёв (to_k, to_v)
+                    param.requires_grad = False # Контрольный выстрел по градиентам to_k и to_v
 
-                
-        transformer.enable_gradient_checkpointing()
 
         
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
