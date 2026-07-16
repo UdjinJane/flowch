@@ -97,7 +97,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
 
             
             if (i + 1) % 5 == 0 or (i + 1) == steps:
-                print(f" [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | Текущий t = {t_curr:.3f}")
+                t_show = t_next if (i + 1) == steps else t_curr
+                print(f" [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | Текущий t = {t_show:.3f}")
+
 
     print("[ОБТ] Фаза Е: Траектория завершена! Сборка нативного словаря параметров Flux VAE...")
     # Полностью исключаем json-парсер, задаем конфигурацию чистым кодом Python
