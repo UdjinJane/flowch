@@ -152,13 +152,13 @@ def main_train_loop():
                 # Консервация весов каждые 200 реальных шагов
                 if current_step_real % 200 == 0 or current_step_real == TrainConfig.MAX_TRAIN_STEPS:
                 # Ручной запуск визуализации текущей эпохи плавки перед выпечкой весов
-                run_inference_v02(
-                    loaded_transformer=lora_model,
-                    current_step=current_step_real,
-                    text_embedding=prompt_embeds,
-                    steps=25,
-                    device=device
-                )
+                    run_inference_v02(
+                        loaded_transformer=lora_model,
+                        current_step=current_step_real,
+                        text_embedding=prompt_embeds,
+                        steps=25,
+                        device=device
+                    )
 
                     ckpt_name = f"mng_oks_bl_flux_lora_step_{current_step_real}.safetensors"
                     ckpt_path = os.path.join(TrainConfig.OUTPUT_DIR, ckpt_name)
