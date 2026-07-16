@@ -171,9 +171,9 @@ def main_train_loop():
                 # Генерация сэмпла и лоры каждую эпоху для контроля динамики предмета
                 if current_step_real % 10 == 0 or current_step_real == TrainConfig.MAX_TRAIN_STEPS:
 
-                # Ручной запуск визуализации текущей эпохи плавки перед выпечкой весов
-                # Передаем экономные 14 шагов ODE на основе хака OneTrainer
-                run_inference_v02(lora_model, current_step=global_step, text_embedding=batch["prompt_embeds"], steps=14)
+                    # Ручной запуск визуализации текущей эпохи плавки перед выпечкой весов
+                    # Передаем экономные 14 шагов ODE на основе хака OneTrainer
+                    run_inference_v02(lora_model, current_step=global_step, text_embedding=batch["prompt_embeds"], steps=14)
     
 
                     ckpt_name = f"mng_oks_bl_flux_lora_step_{current_step_real}.safetensors"
