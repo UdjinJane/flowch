@@ -106,8 +106,8 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
     latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
     
-    # Применяем обратное масштабирование Rectified Flow по каноническому конфигу VAE
-    latents_decoded = (latents_4d / v_conf.get("scaling_factor", 0.3611)) + v_conf.get("shift_factor", 0.1159)
+    # Каноническое обратное масштабирование латентов для декодера Flux VAE
+    latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
     
     with torch.no_grad():
         # Маршевый проход через VAE декодер в цвет
