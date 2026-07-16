@@ -56,7 +56,19 @@ def main_train_loop():
     # --- ДАТЧИКИ ТОТАЛЬНОГО ФИЗИЧЕСКОГО КОНТРОЛЯ ГРАДИЕНТОВ LORA END ---
 
     # Собираем только обучаемые параметры LoRA-адаптеров для оптимизатора
+    # 1. Принудительная заморозка (фильтр без '.0')
+    for name, param in lora_model.named_parameters():
+        if "lora_" in name and any(t.replace('.0', '') in name for t in TrainConfig.TARGET_MODULES):
+            param.requires_grad = True
+        else: param.requires_grad = False
+
+    # 2. Сбор ТОЛЬКО ПОСЛЕ фильтрации
+    trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
+    print(f"[ОТК] LoRA слоев: {len(trainable_params)}") 
+
+    # 3. Инициализация AdamW
     optimizer = AdamW(trainable_params, lr=TrainConfig.LEARNING_RATE)
+
     device = torch.device("cuda")
     global_step = 0
     current_step_real = 0
