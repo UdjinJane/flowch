@@ -38,12 +38,19 @@ class FluxLoraCoreV02:
         print("[УСПЕХ] Базовая модель полностью собрана в ОЗУ в чистом bf16. VRAM не задета.")
 
         print("[ОБТ] Шаг Е: Подготовка адаптеров LoRA (глушение внутренних проверок PEFT)...")
+        # Превращаем список слоев в строгое регулярное выражение для PEFT
+        # Пример: '.*(to_q\.0|to_out\.0)$' гарантирует инжекцию только в указанные узлы
+        import re
+        target_regex = f".*({'|'.join([m.replace('.', '\\.') for m in TrainConfig.TARGET_MODULES])})$"
+
         lora_config = LoraConfig(
-            r=TrainConfig.LORA_RANK, 
-            lora_alpha=TrainConfig.LORA_ALPHA, 
-            target_modules=TrainConfig.TARGET_MODULES, 
+            r=TrainConfig.LORA_RANK,
+            lora_alpha=TrainConfig.LORA_ALPHA,
+            target_modules=target_regex,
+            use_regex=True,
             bias="none"
         )
+
         
         import peft.tuners.lora.torchao
         import peft.tuners.tuners_utils
