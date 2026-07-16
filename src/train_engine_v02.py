@@ -102,7 +102,8 @@ def main_train_loop():
             txt_len = int(prompt_embeds.shape[1])
             txt_ids_cleaned = torch.zeros(txt_len, 3, device=device, dtype=torch.bfloat16)
             
-            timesteps_attr = t.squeeze().view(-1) * 1000.0
+            # Передаем чистый физический таймстеп [B] для Rectified Flow весов ComfyUI без умножения на 1000
+            timesteps_attr = t.view(-1)
             pooled_projections = torch.zeros(b, 768, device=device, dtype=torch.bfloat16)
             
             # Маршевый запуск изолированного раннера с маскированием Т5
