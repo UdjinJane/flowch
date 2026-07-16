@@ -42,9 +42,10 @@ class FluxLoraCoreV02:
         # Пример: '.*(to_q\.0|to_out\.0)$' гарантирует инжекцию только в указанные узлы
         import re
         # Сначала спокойно экранируем точки в обычном массиве строк
-        escaped_modules = [m.replace('.', '\\.') for m in TrainConfig.TARGET_MODULES]
-        # Собираем финальную регулярку без использования обратных слэшей внутри f-складки
-        target_regex = f".*({'|'.join(escaped_modules)})$"
+        # Отрезаем '.0' и строим жесткую регулярку конца имени для PEFT.
+        # Результат для hard_object: '.*\\.(to_q|to_out)$'
+        clean_targets = [t.replace('.0', '') for t in TrainConfig.TARGET_MODULES]
+        target_regex = f".*\\.({'|'.join(clean_targets)})$"
 
 
         lora_config = LoraConfig(
