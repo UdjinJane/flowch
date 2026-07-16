@@ -32,12 +32,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     x_t = torch.randn(1, total_tokens, 64, device=device, dtype=torch.bfloat16)
     
     print("[ОБТ] Фаза В: Развёртывание 2D геометрии img_ids и заглушек txt_ids...")
-    grid_h = torch.arange(32, device=device)[:, None].repeat(1, 32)
-    grid_w = torch.arange(32, device=device)[None, :].repeat(32, 1)
+    #grid_h = torch.arange(32, device=device)[:, None].repeat(1, 32)
+    #grid_w = torch.arange(32, device=device)[None, :].repeat(32, 1)
+    grid_h = torch.arange(32, device=device, dtype=torch.bfloat16)[:, None].repeat(1, 32)
+    grid_w = torch.arange(32, device=device, dtype=torch.bfloat16)[None, :].repeat(32, 1)
     img_ids = torch.zeros(total_tokens, 3, device=device, dtype=torch.bfloat16)
     img_ids[:, 1], img_ids[:, 2] = grid_h.flatten(), grid_w.flatten()
     txt_ids = torch.zeros(256, 3, device=device, dtype=torch.bfloat16)
-    
+
+
     # Добавляем обязательный пулинг для эмбеддера времени
     pooled_projections = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
 
@@ -57,7 +60,8 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             t_tensor = torch.ones(1, device=device) * t_curr
             
             # Маршевый проход через изолированный раннер с полной врезкой LoRA-весов
-            batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bfloat16)}
+            # batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bfloat16)}
+            batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bool)}
             velocity = run_lora_model_step(
                 loaded_transformer,
                 batch_stub,
@@ -130,14 +134,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     print("[ОБТ] Фаза Ж: Распаковка 2D патчей обратно в 4D латенты и маршевый VAE-декод...")
     # Возвращаем 1024 токена обратно в 4D шейп латентов Flux [B, 16, H//2, W//2] -> [1, 16, 32, 32]
     # Наш x_t имеет форму [1, 1024, 64]. Решейпим каналы 64 -> (16, 2, 2)
-    b_sz = x_t.shape[0]
-    latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
-    latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
+    with torch.no_grad():
+        b_sz = x_t.shape[0]
+        latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
+        latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
     
     # Каноническое обратное масштабирование латентов для декодера Flux VAE
     latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
     
-    with torch.no_grad():
+    # with torch.no_grad():
         # Маршевый проход через VAE декодер в цвет
         rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]
         
