@@ -63,8 +63,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             )
 
             
-            # Обработка кортежа вывода
-            pred_tensor = velocity if isinstance(velocity, tuple) else velocity.sample
+            # Бронебойное извлечение тензора из любых вложенных кортежей PEFT/diffusers
+            if isinstance(velocity, (tuple, list)):
+                pred_tensor = velocity[0]
+                # На случай двойной вложенности кортежей
+                if isinstance(pred_tensor, (tuple, list)):
+                    pred_tensor = pred_tensor[0]
+            else:
+                pred_tensor = velocity.sample if hasattr(velocity, "sample") else velocity
+
             
             # Шаг по траектории потока
             x_t = x_t + pred_tensor * dt
