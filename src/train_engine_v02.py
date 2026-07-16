@@ -91,7 +91,9 @@ def main_train_loop():
                 noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
             
             # Математика кастомного квадратичного распределения таймстепов по перфокарте
-            t = torch.rand(b, device=device, dtype=torch.bfloat16)
+            # t = torch.rand(b, device=device, dtype=torch.bfloat16)
+            # Генерируем в чистом float32 и кастим в bfloat16, спасая ядро Windows от падения
+            t = torch.rand(b, device=device, dtype=torch.float32).to(torch.bfloat16)
             t = 1.0 - (t * t)
             
             # Кэшируем физическое среднее таймстепа для анализа динамики лосса
