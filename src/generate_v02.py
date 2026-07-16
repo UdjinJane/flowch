@@ -32,6 +32,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     img_ids = torch.zeros(total_tokens, 3, device=device, dtype=torch.bfloat16)
     img_ids[:, 1], img_ids[:, 2] = grid_h.flatten(), grid_w.flatten()
     txt_ids = torch.zeros(256, 3, device=device, dtype=torch.bfloat16)
+    
+    # Добавляем обязательный пулинг для эмбеддера времени
+    pooled_projections = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
 
     print("[ОБТ] Фаза Г: Кастинг текстовых эмбеддингов Т5 в bfloat16...")
     if text_embedding is not None:
@@ -48,15 +51,17 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             t_curr = i * dt
             t_tensor = torch.ones(1, device=device) * t_curr
             
-            # Маршевый проход через трансформер
+            # Маршевый проход через трансформер с полной стыковкой эмбеддингов
             velocity = loaded_transformer(
                 hidden_states=x_t, 
                 timestep=t_tensor, 
                 encoder_hidden_states=cond, 
+                pooled_projections=pooled_projections,
                 img_ids=img_ids, 
                 txt_ids=txt_ids,
                 return_dict=False
             )
+
             
             # Обработка кортежа вывода
             pred_tensor = velocity if isinstance(velocity, tuple) else velocity.sample
