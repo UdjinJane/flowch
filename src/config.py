@@ -29,5 +29,6 @@ class TrainConfig:
     MAX_TRAIN_STEPS = 1500
     LORA_RANK = 16
     LORA_ALPHA = 16
-    TARGET_MODULES = ["to_q", "to_k", "to_v", "to_out"]
+    TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+
 
