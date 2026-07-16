@@ -6,14 +6,10 @@ import torch
 from safetensors.torch import load_file, save_file as st_save_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig, get_peft_model_state_dict as peft_get_state_dict
-# ... (новые импорты)
-
-from safetensors.torch import load_file
-from diffusers import FluxTransformer2DModel
-from peft import get_peft_model, LoraConfig
 from config import TrainConfig
-# Инжектируем нативный квантовый инструмент PyTorch Foundation
 from torchao.quantization import quantize_, float8_weight_only
+
+
 
 class FluxLoraCoreV02:
     @staticmethod
@@ -81,7 +77,9 @@ class FluxLoraCoreV02:
 
         
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
-        lora_model = lora_model.to(device="cuda")
+        # Явный маршевый перенос на видеокарту без использования внешних переменных
+        lora_model = lora_model.to("cuda")
+
         
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
         return lora_model
