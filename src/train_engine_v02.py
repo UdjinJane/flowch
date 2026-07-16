@@ -111,8 +111,10 @@ def main_train_loop():
                 prompt_embeds, pooled_projections, txt_ids_cleaned, img_ids_cleaned
             )
             
-            pred_tensor = model_output if isinstance(model_output, tuple) else model_output.sample
+            # Точное извлечение тензора: если кортеж, берем нулевой элемент
+            pred_tensor = model_output[0] if isinstance(model_output, tuple) else model_output.sample
             pred_latents = pred_tensor[:, :, :64]
+
             
             # Расчет MSE-лосса
             loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
