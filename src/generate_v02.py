@@ -89,7 +89,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     v_conf = {
         "_class_name": "AutoencoderKL",
         "_diffusers_version": "0.30.0",
-        "block_out_channels":(32, 32, 32, 32),
+        "block_out_channels":(128, 256, 512, 512),
         "in_channels": 3,
         "latent_channels": 16,
         "layers_per_block": 2,
