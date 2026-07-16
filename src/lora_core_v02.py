@@ -43,16 +43,23 @@ class FluxLoraCoreV02:
             bias="none"
         )
         
-        # Динамический хак: заставляем PEFT думать, что torchao не установлен
-        import peft.import_utils
-        original_check = peft.import_utils.is_torchao_available
-        peft.import_utils.is_torchao_available = lambda: False
+        # Тотальный перехват: выжигаем проверку прямо в модулях диспетчера PEFT
+        import peft.tuners.lora.torchao
+        import peft.tuners.tuners_utils
+        
+        orig_lora_ao = getattr(peft.tuners.lora.torchao, "is_torchao_available", None)
+        orig_tune_ao = getattr(peft.tuners.tuners_utils, "is_torchao_available", None)
+        
+        peft.tuners.lora.torchao.is_torchao_available = lambda: False
+        peft.tuners.tuners_utils.is_torchao_available = lambda: False
 
         try:
             lora_model = get_peft_model(transformer, lora_config)
         finally:
-            # Восстанавливаем оригинальную проверку после инжекции
-            peft.import_utils.is_torchao_available = original_check
+            # Безусловное восстановление магистралей
+            if orig_lora_ao is not None: peft.tuners.lora.torchao.is_torchao_available = orig_lora_ao
+            if orig_tune_ao is not None: peft.tuners.tuners_utils.is_torchao_available = orig_tune_ao
+
 
 
         # Квантование TorchAO FP8 (за исключением x_embedder и lora_)
