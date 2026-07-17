@@ -23,7 +23,8 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     print("[ОБТ] Фаза А: Изоляция RNG-генератора и фиксация состояния .eval()...")
     old_rng = torch.get_rng_state()
     was_training = loaded_transformer.training
-    torch.manual_seed(42)
+    # Привязываем сид к текущему шагу. Шум оживет, и мы сразу увидим тектонический сдвиг геометрии!
+    torch.manual_seed(42 + current_step)
     loaded_transformer.eval()
 
     print("[ОБТ] Фаза Б: Аллокация маршевого шума Chroma1 (1, 1024 токена, 64 канала)...")
