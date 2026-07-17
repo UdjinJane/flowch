@@ -49,7 +49,6 @@ class FluxLoraCoreV02:
         # Оставляем каноничные индексы '.0' (to_q.0, to_out.0). 
         # PEFT увидит суффикс '.0', зайдет внутрь ModuleList и обернет чистый nn.Linear!
         target_modules_list = list(TrainConfig.TARGET_MODULES)
-]
 
         lora_config = LoraConfig(
             r=TrainConfig.LORA_RANK,
@@ -57,8 +56,6 @@ class FluxLoraCoreV02:
             target_modules=target_modules_list, # Передаем чистый list вместо str-регулярки
             bias="none"
         )
-
-
 
         
         import peft.tuners.lora.torchao
