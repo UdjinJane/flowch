@@ -142,26 +142,19 @@ def main_train_loop():
             loss.backward()
             global_step += 1
 
-            # Проверка окна накопления
+            # Единая точка сборки виртуального батча (исправлено)
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
-                # Пересчитываем реальный шаг ДО обнуления
                 current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS
-    
-                # [ОТК] Бортовой термометр: срабатывает на полных градиентах
+        
+                # [ОТК] Бортовой термометр: замеряем накопленный градиент
                 if current_step_real % 10 == 0 or current_step_real == 1:
-                grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
-                # ... (вывод логов)
-    
-                optimizer.step()
-                optimizer.zero_grad()
-
-            
-            # Проверка окна накопления градиентов (виртуальный батч)
-            if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
-                optimizer.step()
-                optimizer.zero_grad()
-                
-                current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS
+                    grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
+                    # ... (логирование)
+        
+                    # Применяем дельты и очищаем буфер
+                    optimizer.step()
+                    optimizer.zero_grad()
+           
                 
                 # Расчет скорости и ETA
                 step_timestamps.append(time.time())
