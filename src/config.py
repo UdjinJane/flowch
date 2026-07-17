@@ -1,5 +1,9 @@
 import os
 
+# Боевая конфигурация аллокатора PyTorch до инициализации контекста CUDA
+# Запрещаем агрессивное дробление памяти и выставляем порог сбора мусора в 80%
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512,garbage_collection_threshold:0.8"
+
 class TrainConfig:
     # --- МОДУЛЬ АВТОНОМНОЙ НАВИГАЦИИ (ОТНОСИТЕЛЬНЫЕ ПУТИ) ---
     SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +28,7 @@ class TrainConfig:
     MAX_SEQUENCE_LENGTH = 256
     RESOLUTION = 512
     BATCH_SIZE = 1
-    GRADIENT_ACCUMULATION_STEPS = 4
+    GRADIENT_ACCUMULATION_STEPS = 2
     LEARNING_RATE = 2e-5
     MAX_TRAIN_STEPS = 1500
     LORA_RANK = 16
@@ -33,7 +37,8 @@ class TrainConfig:
     # Доступные пресеты: 
     # Базовые маршевые мишени внимания для Flux-архитектуры diffusers
     TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
-
+    # Добавляем параметр лимита VRAM для мониторинга
+    VRAM_LIMIT_GB = 21.0
 
 
 

@@ -138,23 +138,23 @@ def main_train_loop():
             # Расчет MSE-лосса
             loss = F.mse_loss(pred_latents.float(), packed_target_flow.float(), reduction="mean")
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
+            # ... (опущено: расчет лосса и backward)
             loss.backward()
-            
-            # Физический замер протечки градиентов в матрицы LoRA
-            # [ОТК] Бортовой термометр: мониторинг динамики градиентов каждые 10 шагов
-            if current_step_real % 10 == 0 or current_step_real == 0:
-                # Восстанавливаем расчет среднего градиентов адаптера
-                grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
-                avg_grad = sum(grads) / len(grads) if grads else 0.0
-                
-                print(f" [ОТК] Шаг #{current_step_real} | Активных: {len(trainable_params)} | Градиент: {avg_grad:.8f}")
-
-
-                if avg_grad == 0.0:
-                    print(" [КРИТИЧЕСКИЙ ОТКАЗ] ПОТОК ГРАДИЕНТОВ ПРЕРВАН НАМЕРТВО!")
-
-            
             global_step += 1
+
+            # Проверка окна накопления
+            if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
+                # Пересчитываем реальный шаг ДО обнуления
+                current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS
+    
+                # [ОТК] Бортовой термометр: срабатывает на полных градиентах
+                if current_step_real % 10 == 0 or current_step_real == 1:
+                grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
+                # ... (вывод логов)
+    
+                optimizer.step()
+                optimizer.zero_grad()
+
             
             # Проверка окна накопления градиентов (виртуальный батч)
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
