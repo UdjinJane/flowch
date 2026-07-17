@@ -141,11 +141,14 @@ def main_train_loop():
             loss.backward()
             
             # Физический замер протечки градиентов в матрицы LoRA
-            # [ОТК] Бортовой термометр: мониторинг динамики градиентов каждые 10 шагов плавки
+            # [ОТК] Бортовой термометр: мониторинг динамики градиентов каждые 10 шагов
             if current_step_real % 10 == 0 or current_step_real == 0:
-                # ... вычисление avg_grad ...
-                # Схлопываем 4 строки в один лаконичный лог
+                # Восстанавливаем расчет среднего градиентов адаптера
+                grads = [p.grad.abs().mean().item() for p in trainable_params if p.grad is not None]
+                avg_grad = sum(grads) / len(grads) if grads else 0.0
+                
                 print(f" [ОТК] Шаг #{current_step_real} | Активных: {len(trainable_params)} | Градиент: {avg_grad:.8f}")
+
 
                 if avg_grad == 0.0:
                     print(" [КРИТИЧЕСКИЙ ОТКАЗ] ПОТОК ГРАДИЕНТОВ ПРЕРВАН НАМЕРТВО!")
