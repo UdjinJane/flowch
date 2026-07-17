@@ -146,8 +146,11 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # Наш x_t имеет форму [1, 1024, 64]. Решейпим каналы 64 -> (16, 2, 2)
     with torch.no_grad():
         b_sz = x_t.shape[0]
+        # Из [B, 1024, 64] восстанавливаем 2D сетку патчей [B, 32, 32, 16, 2, 2]
         latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
+        # Собираем каналы и пространственные оси обратно в шейп Flux [B, 16, 64, 64]
         latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
+
         latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
         rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]
     
