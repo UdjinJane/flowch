@@ -47,16 +47,17 @@ class FluxLoraCoreV02:
         clean_targets = [t.replace('.0', '') for t in TrainConfig.TARGET_MODULES]
         # Добавляем strict-постфикс block. Теперь регулярка ловит только конечные Linear-матрицы
         # Результат для hard_object: '.*\\.(to_q|to_out)\\.weight$'
-        target_regex = f".*\\.({'|'.join(clean_targets)})\\.weight$"
-
-
+        # Полностью отказываемся от глючных регулярок PEFT. Скармливаем ему чистый список суффиксов.
+        # Библиотека сама найдет внутри FluxTransformer только nn.Linear узлы с такими именами.
+        target_modules_list = [t.replace('.0', '') for t in TrainConfig.TARGET_MODULES]
 
         lora_config = LoraConfig(
             r=TrainConfig.LORA_RANK,
             lora_alpha=TrainConfig.LORA_ALPHA,
-            target_modules=target_regex,
+            target_modules=target_modules_list, # Передаем чистый list вместо str-регулярки
             bias="none"
         )
+
 
 
         
