@@ -1,0 +1,33 @@
+{
+  "status": "mixed_precision_stabilization_protocol",
+  "target_environment": "PyTorch 2.5.1+cu121 | torchao 0.7.0 | NVIDIA RTX 3090 (24GB VRAM)",
+  "precision_map": {
+    "transformer_backbone": "FP8 (e4m3fn) via learned SVD compression (Frozen, 8.9 GB)",
+    "lora_adapters": "bfloat16 (trainable, requires_grad=True)",
+    "text_encoders_and_vae": "bfloat16 (frozen / lazy decoding)",
+    "master_weights_and_optimizer": "float32 (AdamW / Adafactor master parameters)"
+  },
+  "critical_stability_risks": [
+    {
+      "type": "Underflow & Under-representation",
+      "issue": "Формат FP8 (e4m3fn) имеет всего 3 бита под мантиссу. Мелкие градиенты LoRA, проходя через линейные слои скелета, мгновенно округляются до нуля (underflow). Обучение останавливается, веса LoRA не обновляются, а VAE декодирует чистый шум.",
+      "remedy": "Применение статического или динамического масштабирования градиентов (Gradient Scaling) специально для весов LoRA, обущающихся на стыке с FP8-слоями."
+    },
+    {
+      "type": "Cast Alignment Failure",
+      "issue": "Прямое умножение тензора во float8 на тензор в bfloat16 вызывает скрытый автокаст PyTorch, который переводит операцию в float32, сжирая память VRAM, либо роняет CUDA-ядра из-за нестыковки типов данных.",
+      "remedy": "Принудительный кастинг входных активаций LoRA во bfloat16 перед сложением с выходом базового слоя."
+    }
+  ],
+  "torchao_best_practices": {
+    "filter_fn_logic": "При вызове `quantize_(model, int8_weight_only())` или аналогичных методов `torchao`, функция-фильтр ДОЛЖНА явно проверять: `if hasattr(module, 'requires_grad') and module.requires_grad: return False`. Обучаемые параметры LoRA должны быть полностью изолированы от квантования.",
+    "scaling_guard": "Слои масштабирования (AdaLN-Zero) и входные эмбеддинги (`x_embedder`) категорически запрещено переводить в FP8. Они должны оставаться в оригинальном `bfloat16`."
+  },
+  "action_items_for_lora_core": {
+    "lora_core_v02.py": [
+      "Внедрить явный `torch.cuda.amp.autocast(dtype=torch.bfloat16)` внутрь метода `forward()` класса `LoRAModule` вокруг операции `self.lora_up(self.lora_down(x)) * self.scale`.",
+      "Добавить метод проверки: `assert p.dtype == torch.bfloat16` для каждого параметра, у которого `requires_grad=True`, перед передачей в оптимизатор.",
+      "Обеспечить, чтобы градиенты LoRA перед шагом оптимизатора копировались в `float32` мастер-веса для предотвращения деградации точности при обновлении весов (Master Weights Strategy)."
+    ]
+  }
+}

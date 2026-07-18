@@ -1,0 +1,67 @@
+{
+  "status": "unified_gold_specification",
+  "project": "Z:\\flowch\\",
+  "hardware_target": "RTX 3090 (24GB VRAM) | Isolated bfloat16/float32 LoRA over torchao FP8 backbone",
+  "core_math_mechanics": {
+    "qkv_blocks": {
+      "strategy": "Combined QKV block logic natively",
+      "split_qkv": false,
+      "reference": "kohya_gold.txt:663"
+    },
+    "forward_override": {
+      "mechanism": "Forceful forward injection via wrapper",
+      "logic": "self.org_module.forward = self.forward (Preserve original parameters via self.org_forward(x))",
+      "reference": "kohya_gold.txt:122"
+    },
+    "dropout_scaling": {
+      "mechanism": "Dynamic rank-dropout multiplier calculation",
+      "formula": "scale = self.scale * (1.0 / (1.0 - self.rank_dropout))",
+      "reference": "kohya_gold.txt:152"
+    },
+    "timestep_adaptation": {
+      "shift_calculation": "shift = self.model.calculate_timestep_shift(H, W)",
+      "scheduler_scaling": "mu = math.log(shift)",
+      "reference": "onetrainer_gold.txt:104-108"
+    }
+  },
+  "architectural_critical_fixes": [
+    {
+      "component": "initialize_norm_cache",
+      "file_target": "lora_core_v02.py",
+      "issue": "Processing mathematical norms or indexing configurations inside quantized layers causes runtime crash.",
+      "solution": "Forcefully isolate tensor slices to high precision via weights_float32 = org_module_weight.to(dtype=torch.float32) BEFORE sampling operations.",
+      "reference": "kohya_gold.txt:206"
+    },
+    {
+      "component": "merge_to (Inference Node)",
+      "file_target": "lora_core_v02.py",
+      "issue": "Model conversion pipelines bypassing standard floating points generate high-frequency pixel anomalies (sand noise).",
+      "solution": "Execute matrix adaptation strictly inside standard floating formats via weight = weight.to(torch.float) before final execution reductions.",
+      "reference": "kohya_gold.txt:333"
+    },
+    {
+      "component": "FluxSampler / Timestep Normalization",
+      "file_target": "generate_v02.py",
+      "issue": "AdaLayerNorm-Zero modulation blocks receive integer scales (0-1000) instead of float boundaries (0.0-1.0), breaking latent vectors scale.",
+      "solution": "Divide expanded_timestep strictly by 1000.0 directly at the transformer cross-attention ingestion layer.",
+      "reference": "onetrainer_gold.txt:133"
+    },
+    {
+      "component": "ModuleFilter Protocol",
+      "file_target": "lora_core_v02.py",
+      "issue": "Accidental quantization of sensitive entry modules (like x_embedder) inside torchao hooks due to broad regex matching rules.",
+      "solution": "Implement explicit comma-separated layer substring matching filters to bypass critical precision boundaries.",
+      "reference": "onetrainer_gold.txt:33"
+    }
+  ],
+  "action_items_by_target": {
+    "lora_core_v02.py": [
+      "Mirror Kohya line 206 tracking logic: enclose all norm validation lookups inside pure torch.float32 containers.",
+      "Implement substring pattern filters to tightly guard trainable parameters from torchao fp8 transformation hooks.",
+      "Inject gradient norm logging sequences directly mimicking target model dynamic evaluation loop updates."
+    ],
+    "generate_v02.py": [
+      "Inject timestep = expanded_timestep / 1000.0 right into the transformer parameter call to secure precise Rectified Flow scaling."
+    ]
+  }
+}

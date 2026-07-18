@@ -1,0 +1,30 @@
+{
+  "status": "rectified_flow_stability_protocol",
+  "target_framework": "Flux MMDiT / LoRA Finetuning Stability inside Mixed Precision",
+  "mathematical_core": {
+    "objective": "L_RF = E_t,z0,z1 [ || v_theta(z_t, t) - (z_1 - z_0) ||^2 ]",
+    "dynamics": "Deterministic straight-line Ordinary Differential Equation (ODE) trajectories linking clean data (z_1) and Gaussian noise (z_0).",
+    "gradient_variance": "Low gradient variance regimes natively favor rigid pairing memorization. If trajectories intersect under low-precision boundaries, optimization destabilizes instantly."
+  },
+  "stability_failure_modes": [
+    {
+      "component": "Logit-Normal Time-Step Bias",
+      "issue": "Standard uniform sampling of t over [0.0, 1.0] causes training divergence. The boundaries (t->0 and t->1) contain minimal perceptually relevant structural data, wasting gradient updates.",
+      "solution": "Forcefully apply Logit-Normal time-step sampling biased heavily towards the middle of the trajectory (t~0.5), where structural flow matching tasks are mathematically hardest.",
+      "reference": "Stability AI / Esser et al. (SD3/Flux scaling benchmarks)"
+    },
+    {
+      "component": "AdaLN-Zero Scaling Collapse",
+      "issue": "When target layers compute velocity drift field states inside torchao FP8 bounds, extreme scale/shift coefficient amplification factors overflow, injecting immediate chaotic noise across the linear path.",
+      "solution": "Clamp intermediate modulation scale vectors or isolate timestep embedding MLPs strictly inside torch.bfloat16 containers before multiplying features.",
+      "reference": "Hugging Face / Photoroom MMDiT Production Guide"
+    }
+  ],
+  "action_items_for_engine": {
+    "train_engine_v02.py": [
+      "Replace uniform t sampling: t = torch.sigmoid(torch.randn(b, device=dev) * sigma_scale) to natively enact logit-normal distribution constraints.",
+      "Inject a strict gradient clip step: torch.nn.utils.clip_grad_norm_(lora_params, max_norm=1.0) directly before optimizer steps to mitigate sudden gradient variance spikes.",
+      "Enforce deterministic data coupling: avoid random interpolation shuffling inside a single mini-batch to preserve the non-crossing property of the learned linear paths."
+    ]
+  }
+}
