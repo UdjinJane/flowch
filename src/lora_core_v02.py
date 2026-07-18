@@ -62,14 +62,10 @@ class FluxLoraCoreV02:
         lora_model = get_peft_model(transformer, lora_config)
 
         # --- СИЛОВАЯ ИНЖЕКЦИЯ LoRA ---
-        # Увеличиваем начальный масштаб весов адаптеров, чтобы они не тонули в FP8
+        # Увеличиваем начальный масштаб весов адаптеров, чтобы они не тонули в FP8 (УДАЛЕНО)
         for name, param in lora_model.named_parameters():
-            if "lora_A" in name:
-                # Масштабируем веса матрицы A (ответственные за направление)
-                param.data.mul_(2.0)
-            if "lora_B" in name:
-                # Масштабируем веса матрицы B (ответственные за амплитуду)
-                param.data.mul_(2.0)
+            if "lora_A" in name or "lora_B" in name:
+                # Масштабирование удалено: param.data.mul_(2.0)
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА ---
         print(f"[ОТК] ДИАГНОСТИКА ИНЖЕКЦИИ LORA:")
@@ -101,8 +97,14 @@ class FluxLoraCoreV02:
         except Exception as e:
             print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
             print(f"  └── Сообщение ошибки: {e}")
-        # ---------------------------------------
 
+        # Проверка размерностей базовых слоев
+        print(f"[ОТК] Размерности базовых слоев:")
+        for name, module in target_obj.named_modules():
+            if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
+                print(f"  └── {name}: {module.weight.shape}")
+
+        # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА END ---
         print("[ОБТ] Шаг З: Запуск нативного квантования TorchAO FP8 (Фильтрация слоев)...")
 
         # Жесткий флотский фильтр: полностью изолируем веса LoRA от квантования FP8, оставляя их в обучаемом bf16
@@ -112,6 +114,8 @@ class FluxLoraCoreV02:
             return is_linear and is_base_layer
 
         quantize_(lora_model, float8_weight_only(), filter_fn)
+
+        print(f"[ОТК] Квантование: Фильтр пропустил {len([m for m in lora_model.modules() if filter_fn(m, '')])} слоев")
 
         print("[ОБТ] Шаг И: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
         # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
@@ -126,7 +130,7 @@ class FluxLoraCoreV02:
                 if any(target in name for target in TrainConfig.TARGET_MODULES):
                     param.requires_grad = True
                 else:
-                    param.requires_grad = False # Контрольный выстрел по градиентам to_k и to_v
+                    param.requires_grad = False  # Контрольный выстрел по градиентам to_k и to_v
 
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
         # Явный маршевый перенос на видеокарту без использования внешних переменных

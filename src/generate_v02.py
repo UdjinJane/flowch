@@ -100,7 +100,12 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     v_conf = {
         "_class_name": "AutoencoderKL",
         "_diffusers_version": "0.30.0",
-        "block_out_channels": (128, 256, 512, 512),
+        "block_out_channels": (
+            128,
+            256,
+            512,
+            512,
+        ),
         "in_channels": 3,
         "latent_channels": 16,
         "layers_per_block": 2,
@@ -125,8 +130,12 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
 
     # Очистка префиксов если есть
     vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
-    # Переводим в strict=False: бережно игнорируем ключи энкодера, загружая только нужный нам декодер Flux VAE
-    vae.load_state_dict(vae_clean, strict=False)
+
+    # Проверка на корректность загрузки VAE-весов (strict=True)
+    missing_keys, unexpected_keys = vae.load_state_dict(vae_clean, strict=True)
+    if missing_keys or unexpected_keys:
+        print(f"[КРИТИЧЕСКИЙ ОТКАЗ] VAE state dict mismatch: {missing_keys}, {unexpected_keys}")
+
     vae = vae.to(device=device, dtype=torch.bfloat16)
 
     print("[ОБТ] Фаза Ж: Распаковка 2D патчей обратно в 4D латенты и маршевый VAE-декод...")
@@ -138,6 +147,13 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
         # Собираем каналы и пространственные оси обратно в шейп Flux [B, 16, 64, 64]
         latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
+
+        # Проверка размерностей латентных векторов
+        assert latents_4d.shape == (b_sz, 16, 64, 64), f"Unexpected latent shape after reshaping: {latents_4d.shape}"
+
+        # Проверка на NaN/Inf в латентных векторах
+        if torch.isnan(latents_4d).any() or torch.isinf(latents_4d).any():
+            print(f"[КРИТИЧЕСКИЙ ОТКАЗ] NaN/Inf detected in latents!")
 
         latents_decoded = (latents_4d - v_conf.get("shift_factor", 0.1159)) / v_conf.get("scaling_factor", 0.3611)
         rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]

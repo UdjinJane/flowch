@@ -104,7 +104,11 @@ def main_train_loop():
                 model_latents = batch["latents"].to(device, dtype=torch.bfloat16)
                 prompt_embeds = batch["prompt_embeds"].to(device, dtype=torch.bfloat16)
                 b, c, h, w = model_latents.shape
+
+                # Проверка размерностей латентных векторов
+                assert (h % 2 == 0) and (w % 2 == 0), f"Unexpected latent dimensions: {model_latents.shape}"
                 packed_latents = pack_latents_to_patches(model_latents)
+                assert packed_latents.dim() == 3, f"Unexpected packed latents dimension: {packed_latents.dim()}"
 
             # Генерация маршевого шума Rectified Flow
             noise = torch.randn_like(packed_latents, device=device, dtype=torch.bfloat16)
@@ -112,6 +116,10 @@ def main_train_loop():
             # Математика кастомного квадратичного распределения таймстепов по перфокарте
             t_f32 = torch.rand(b, device=device, dtype=torch.float32)
             timesteps_attr = (1.0 - (t_f32 * t_f32)).to(torch.bfloat16)
+
+            # Проверка на NaN/Inf в таймстепах
+            if torch.isnan(timesteps_attr).any() or torch.isinf(timesteps_attr).any():
+                print(f"[КРИТИЧЕСКИЙ ОТКАЗ] Invalid timestep values!")
 
             # Кэшируем физическое среднее таймстепа для анализа динамики лосса
             avg_t = timesteps_attr.mean().item()
@@ -123,6 +131,7 @@ def main_train_loop():
 
             # Формируем служебные ID векторов геометрии кадра (строго 2D для diffusers)
             img_ids_cleaned = generate_flux_img_ids(h, w, device=device)
+            assert img_ids_cleaned.shape[0] == (h // 2) * (w // 2), f"Unexpected img_ids shape: {img_ids_cleaned.shape}"
             txt_len = int(prompt_embeds.shape[1])
             txt_ids_cleaned = torch.zeros(txt_len, 3, device=device, dtype=torch.bfloat16)
 
@@ -132,16 +141,35 @@ def main_train_loop():
 
             # Маршевый запуск изолированного раннера с маскированием Т5
             model_output = run_lora_model_step(
-                lora_model, batch, packed_noisy_latents, timesteps_attr,
-                prompt_embeds, pooled_projections, txt_ids_cleaned, img_ids_cleaned
+                lora_model,
+                batch,
+                packed_noisy_latents,
+                timesteps_attr,
+                prompt_embeds,
+                pooled_projections,
+                txt_ids_cleaned,
+                img_ids_cleaned
             )
 
             # Точное извлечение тензора: если кортеж, берем нулевой элемент
-            pred_tensor = model_output[0] if isinstance(model_output, tuple) else model_output.sample
+            if isinstance(model_output, tuple):
+                pred_tensor = model_output[0]
+            elif hasattr(model_output, "sample"):
+                pred_tensor = model_output.sample
+            else:
+                assert isinstance(model_output, torch.Tensor), f"Unexpected output type: {type(model_output)}"
+                pred_tensor = model_output
 
-            # Расчет MSE-лосса
-            loss = F.mse_loss(pred_tensor.float(), packed_target_flow.float(), reduction="mean")
+            # Проверка размерностей выходного тензора
+            assert pred_tensor.dim() == 4, f"Unexpected output dimension: {pred_tensor.dim()}"
+
+            # Расчет MSE-лосса (переведено в bfloat16)
+            loss = F.mse_loss(pred_tensor.bfloat16(), packed_target_flow.bfloat16(), reduction="mean")
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
+
+            # Проверка на NaN/Inf в лоссе
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"[КРИТИЧЕСКИЙ ОТКАЗ] Loss exploded: {loss.item()}")
 
             # Выносим расчет реального шага наружу, чтобы его видел блок скорости и ETA
             current_step_real = global_step // TrainConfig.GRADIENT_ACCUMULATION_STEPS

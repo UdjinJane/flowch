@@ -4,8 +4,6 @@ import torch
 
 def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr, prompt_embeds, pooled_projections, txt_ids, img_ids):
     # --- НАЧАЛО БЛОКА: ИЗОЛИРОВАННЫЙ РАСЧЕТ И МАСКИРОВАНИЕ Т5 ---
-
-    # Убираем депрекации размерностей diffusers внутри изолированного контура
     txt_ids_cleaned = txt_ids.squeeze(0) if txt_ids.dim() == 3 else txt_ids
     img_ids_cleaned = img_ids.squeeze(0) if img_ids.dim() == 3 else img_ids
 
@@ -28,6 +26,11 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         model_output = model_output[0]
     elif hasattr(model_output, "sample"):
         model_output = model_output.sample
+    else:
+        # Добавлена обработка случая, когда модель возвращает чистый тензор
+        assert isinstance(model_output, torch.Tensor), f"Unexpected output type: {type(model_output)}"
+        assert model_output.dim() == 4, f"Unexpected output dimension: {model_output.dim()}"
 
     return model_output
-    # --- КОНЕЦ БЛОКА: ИЗОЛИРОВАННЫЙ РАСЧЕТ И МАСКИРОВАНИЕ Т5 ---
+
+
