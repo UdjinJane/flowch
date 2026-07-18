@@ -1,5 +1,3 @@
-# Финальная версия lora_core_v02.py с примененными правками:
-
 # === БЛОК ЯДРА LORA V02 СТАРТ ===
 import os
 import sys
@@ -11,6 +9,8 @@ from peft import get_peft_model, LoraConfig, get_peft_model_state_dict as peft_g
 from config import TrainConfig
 from torchao.quantization import quantize_, float8_weight_only
 
+
+
 class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
@@ -19,92 +19,61 @@ class FluxLoraCoreV02:
 
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
-
+        
         print("[ОБТ] Шаг Б: Разворачивание пустого каркаса Chroma1 в оперативной памяти CPU...")
         transformer = FluxTransformer2DModel.from_config(config_dict)
-
+        
         print(f"[ОБТ] Шаг В: Вычитывание физического монолита весов с диска: {TrainConfig.MODEL_SINGLE_FILE}")
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-
+        
         print("[ОБТ] Шаг Г: Фильтрация ключей и зачистка префиксов ComfyUI...")
         clean_state_dict = {
-            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v
+            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v 
             for k, v in state_dict.items()
         }
-
+        
         print("[ОБТ] Шаг Д: Послойная заливка весов в каркас на CPU и каст в bfloat16...")
         transformer.load_state_dict(clean_state_dict, strict=False)
         transformer = transformer.to(torch.bfloat16)
         print("[УСПЕХ] Базовая модель полностью собрана в ОЗУ в чистом bf16. VRAM не задета.")
 
         print("[ОБТ] Шаг Е: Подготовка адаптеров LoRA (глушение внутренних проверок PEFT)...")
-
         # Превращаем список слоев в строгое регулярное выражение для PEFT
+        # Пример: '.*(to_q\.0|to_out\.0)$' гарантирует инжекцию только в указанные узлы
         import re
+        # Сначала спокойно экранируем точки в обычном массиве строк
+        # Отрезаем '.0' и строим жесткую регулярку конца имени для PEFT.
+        # Результат для hard_object: '.*\\.(to_q|to_out)$'
+        clean_targets = [t.replace('.0', '') for t in TrainConfig.TARGET_MODULES]
+        # Добавляем strict-постфикс block. Теперь регулярка ловит только конечные Linear-матрицы
+        # Оставляем каноничные индексы '.0' (to_q.0, to_out.0). 
+        # PEFT увидит суффикс '.0', зайдет внутрь ModuleList и обернет чистый nn.Linear!
         target_modules_list = list(TrainConfig.TARGET_MODULES)
 
         lora_config = LoraConfig(
             r=TrainConfig.LORA_RANK,
             lora_alpha=TrainConfig.LORA_ALPHA,
-            target_modules=target_modules_list,
+            target_modules=target_modules_list, # Передаем чистый list вместо str-регулярки
             bias="none"
         )
 
+        
         import peft.tuners.lora.torchao
         import peft.tuners.tuners_utils
         orig_lora_ao = getattr(peft.tuners.lora.torchao, "is_torchao_available", None)
         orig_tune_ao = getattr(peft.tuners.tuners_utils, "is_torchao_available", None)
-
+        
         peft.tuners.lora.torchao.is_torchao_available = lambda: False
         peft.tuners.tuners_utils.is_torchao_available = lambda: False
 
-        print("[ОБТ] Шаг Ж: Инжекция LoRA-адаптеров в bf16-граф на CPU...")
-        lora_model = get_peft_model(transformer, lora_config)
-
-        # --- СИЛОВАЯ ИНЖЕКЦИЯ LoRA ---
-        # Увеличиваем начальный масштаб весов адаптеров, чтобы они не тонули в FP8
-        for name, param in lora_model.named_parameters():
-            if "lora_A" in name:
-                # Масштабируем веса матрицы A (ответственные за направление)
-                param.data.mul_(2.0)
-            if "lora_B" in name:
-                # Масштабируем веса матрицы B (ответственные за амплитуду)
-                param.data.mul_(2.0)
-
-        # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА ---
-        print(f"[ОТК] ДИАГНОСТИКА ИНЖЕКЦИИ LORA:")
-
-        # Универсальный поиск модели в структуре
-        target_obj = lora_model
-        if isinstance(lora_model, tuple):
-            target_obj = lora_model[0]
-        if isinstance(target_obj, tuple):
-            target_obj = target_obj[0]
-
-        # Безопасный подсчет параметров
         try:
-            params = list(target_obj.parameters())
-            trainable_params = [p for p in params if p.requires_grad]
-            trainable_params_count = sum(p.numel() for p in trainable_params)
-            print(f"  └── Всего обучаемых параметров: {trainable_params_count:,}")
-
-            captured_layers = []
-            for name, module in target_obj.named_modules():
-                if "lora" in name.lower():
-                    captured_layers.append(name)
-
-            print(f"  └── Количество захваченных слоев: {len(captured_layers)}")
-            if len(captured_layers) > 0:
-                print(f"  └── Список захваченных слоев (первые 10): {captured_layers[:10]}")
-            else:
-                print("  └── [КРИТИЧЕСКАЯ ОШИБКА] ПЕFT НЕ НАШЕЛ НИ ОДНОГО СЛОЯ! LoRA НЕ РАБОТАЕТ!")
-        except Exception as e:
-            print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
-            print(f"  └── Сообщение ошибки: {e}")
-        # ---------------------------------------
+            print("[ОБТ] Шаг Ж: Инжекция LoRA-адаптеров в bf16-граф на CPU...")
+            lora_model = get_peft_model(transformer, lora_config)
+        finally:
+            if orig_lora_ao is not None: peft.tuners.lora.torchao.is_torchao_available = orig_lora_ao
+            if orig_tune_ao is not None: peft.tuners.tuners_utils.is_torchao_available = orig_tune_ao
 
         print("[ОБТ] Шаг З: Запуск нативного квантования TorchAO FP8 (Фильтрация слоев)...")
-
         # Жесткий флотский фильтр: полностью изолируем веса LoRA от квантования FP8, оставляя их в обучаемом bf16
         def filter_fn(mod, name):
             is_linear = isinstance(mod, torch.nn.Linear)
@@ -116,7 +85,7 @@ class FluxLoraCoreV02:
         print("[ОБТ] Шаг И: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
         # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
         transformer.requires_grad_(False)
-
+        
         # Сначала включаем чекпоинтинг, пусть он делает свои сбросы параметров
         transformer.enable_gradient_checkpointing()
 
@@ -128,12 +97,18 @@ class FluxLoraCoreV02:
                 else:
                     param.requires_grad = False # Контрольный выстрел по градиентам to_k и to_v
 
+
+        
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
         # Явный маршевый перенос на видеокарту без использования внешних переменных
         lora_model = lora_model.to("cuda")
 
+        
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
         return lora_model
+
+
+
 
     @staticmethod
     def get_peft_model_state_dict(lora_model):
@@ -143,14 +118,18 @@ class FluxLoraCoreV02:
     def save_file(tensor_dict, filepath):
         st_save_file(tensor_dict, filepath)
 
+
+
 if __name__ == "__main__":
     import shutil
     pycache_path = os.path.join(TrainConfig.SRC_DIR, "__pycache__")
     if os.path.exists(pycache_path):
         shutil.rmtree(pycache_path)
 
+        
     print("[ОБТ] Холодный тест отсека инжекции V02...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
     trainable_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
     print(f"--- [ОТК] ТЕСТ ИНЖЕКЦИИ LORA V02 ПРОЙДЕН (Активные веса: {trainable_params:,}) ---")
 # === БЛОК ЯДРА LORA V02 ФИНАЛ ===
+

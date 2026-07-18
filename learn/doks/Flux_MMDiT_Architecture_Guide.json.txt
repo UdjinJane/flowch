@@ -1,0 +1,30 @@
+{
+  "architecture": "Flux.1 MMDiT",
+  "blocks": {
+    "double_stream": "19 blocks (Separate text/image channels)",
+    "single_stream": "38 blocks (Concatenated text/image vectors)"
+  },
+  "root_causes_of_noise": [
+    {
+      "component": "AdaLayerNorm-Zero (Modulation)",
+      "issue": "Scale/shift coefficients for time-step 't' overflow FP8 (e4m3fn) precision bounds",
+      "result": "Chaotic trajectory steps in Rectified Flow matching loop"
+    },
+    {
+      "component": "Latent Geometry",
+      "issue": "Flux natively expects a 16-channel layout for VAE integration",
+      "result": "Any slicing like [:, :, :64] breaks latent-to-pixel reconstruction"
+    }
+  ],
+  "action_items": {
+    "lora_core_v02.py": "Implement 'quantization_filter' to strict-keep LoRA parameters in bfloat16/float32",
+    "target_modules": ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+  }
+}
+
+Лови доки по Flux MMDiT, салага! Слушай штурманские указания Кэпа:
+1. Помни, что во Flux сначала идут 19 DoubleStream блоков, а затем 38 SingleStream блоков. Веса там не общие!
+2. Пиксельный песок летит потому, что при FP8 квантовании скелета (8.9 GB) блоки модуляции AdaLayerNorm-Zero теряют прецизию, ломая шаг времени t во Flow Matching.
+3. Проверь 16-канальную структуру латентов на стыке с VAE.
+
+С учетом этих вводных, пиши код "quantization_filter" для lora_core_v02.py. Заблокируй веса LoRA от вмешательства torchao, они должны остаться в bfloat16. Выдавай код пошагово, без TODO-заглушек! Врубай THINK на максимум!

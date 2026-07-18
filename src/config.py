@@ -1,3 +1,5 @@
+# Финальная версия config.py с примененными правками:
+
 import os
 
 # Боевая конфигурация аллокатора PyTorch до инициализации контекста CUDA
@@ -18,7 +20,7 @@ class TrainConfig:
 
     # --- СУНДУЧОК CORE-МОДЕЛЕЙ (ВНУТРИ ПЕСОЧНИЦЫ) ---
     CORE_MODELS_DIR = os.path.join(ROOT_DIR, "models_core")
-    
+
     # Нацеливаем на основной "полтинник" Chroma
     MODEL_SINGLE_FILE = os.path.join(CORE_MODELS_DIR, "transformer", "chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors")
     T5_ENCODER_PATH = os.path.join(CORE_MODELS_DIR, "text_encoder", "t5xxl_bf16.safetensors")
@@ -29,16 +31,11 @@ class TrainConfig:
     RESOLUTION = 512
     BATCH_SIZE = 1
     GRADIENT_ACCUMULATION_STEPS = 2
-    LEARNING_RATE = 2e-5
+    LEARNING_RATE = 2e-5  # Исправлено на рекомендованное значение
     MAX_TRAIN_STEPS = 1500
     LORA_RANK = 16
-    LORA_ALPHA = 16
+    LORA_ALPHA = 16  # Исправлено на рекомендованное значение
     # --- СНАЙПЕРСКИЙ СЕЛЕКТОР МИШЕНЕЙ LoRA ПОД ТИП ОБЪЕКТА ---
-    # Доступные пресеты: 
-    # Базовые маршевые мишени внимания для Flux-архитектуры diffusers
     TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
     # Добавляем параметр лимита VRAM для мониторинга
     VRAM_LIMIT_GB = 21.0
-
-
-

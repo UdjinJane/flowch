@@ -1,0 +1,167 @@
+{
+  "project_context": {
+    "model_name": "Chroma-fp8-scaled (v50)",
+    "architecture": "Flux MMDiT / Rectified Flow",
+    "training_goal": "LoRA fine-tuning on cached latents"
+  },
+  "symptom": "Inference samples are static noise and do not change between epochs.",
+  "hypotheses": [
+    {
+      "id": "H-01",
+      "title": "Double Freeze Conflict: Gradient Blocking at Base Model Level",
+      "description": "The base transformer is frozen in lora_core_v02.py using 'transformer.requires_grad_(False)' after PEFT injection. This may propagate a non-gradient state to the LoRA adapter weights despite subsequent manual enabling of requires_grad=True by name.",
+      "check_paths": [
+        "lora_core_v02.py -> FluxLoraCoreV02.init_transformer_with_lora()",
+        "train_engine_v02.py -> main_train_loop() [Debug block]"
+      ],
+      "actions": [
+        {
+          "type": "verify",
+          "instruction": "Check if gradients for trainable_params are None before loss.backward(). Add debug print: sum(p.grad is None for p in trainable_params)"
+        },
+        {
+          "type": "fix",
+          "instruction": "Remove line 'transformer.requires_grad_(False)' from lora_core_v02.py. Rely solely on the explicit freezing loop in train_engine_v02.py."
+        }
+      ]
+    },
+    {
+      "id": "H-02",
+      "title": "TorchAO FP8 Quantization Leakage into LoRA Adapters",
+      "description": "Function filter_fn in lora_core_v02.py might be misconfigured, allowing quantize_() to convert LoRA_A and LoRA_B matrices to float8. Training cannot update int8/float8 tensors without specific kernels, resulting in zero effective learning.",
+      "check_paths": [
+        "lora_core_v02.py -> init_transformer_with_lora() [filter_fn definition]",
+        "lora_core_v02.py -> named_parameters() inspection"
+      ],
+      "actions": [
+        {
+          "type": "verify",
+          "instruction": "Inspect dtype of first trainable parameter: print(f'First param dtype: {trainable_params[0].dtype}')"
+        },
+        {
+          "type": "fix",
+          "instruction": "Ensure filter_fn strictly excludes any module containing 'lora' or parameters with names containing 'lora_' from TorchAO quantization."
+        }
+      ]
+    },
+    {
+      "id": "H-03",
+      "title": "Latent Channel Misalignment (Pred vs Target Shape Mismatch)",
+      "description": "run_lora_model_step returns full channel depth (e.g., 77 channels), but engine slices only [:, :, :64]. If actual signal data resides in channels 65+, the model predicts zeros for the sliced region used in MSE loss.",
+      "check_paths": [
+        "model_runner_v02.py -> run_lora_model_step()",
+        "train_engine_v02.py -> pred_latents extraction logic"
+      ],
+      "actions": [
+        {
+          "type": "verify",
+          "instruction": "Print shapes inside training loop: print(f'Model out shape: {pred_tensor.shape}, Target shape: {packed_target_flow.shape}')"
+        },
+        {
+          "type": "fix",
+          "instruction": "Align slicing indices. Ensure target packed_target_flow matches the exact channel count output by the transformer."
+        }
+      ]
+    },
+    {
+      "id": "H-04",
+      "title": "Rectified Flow Time Schedule Precision Loss",
+      "description": "Time steps 't' are generated and squared directly in bfloat16. For small values, precision collapse occurs, narrowing the time distribution. The model sees almost no early diffusion steps where structure recovery happens.",
+      "check_paths": [
+        "train_engine_v02.py -> t generation formula"
+      ],
+      "actions": [
+        {
+          "type": "verify",
+          "instruction": "Log histogram of timesteps_attr: print(torch.histc(timesteps_attr.cpu(), bins=10))"
+        },
+        {
+          "type": "fix",
+          "instruction": "Compute r*r and 1-(r*r) in torch.float32, then cast final result to bfloat16."
+        }
+      ]
+    },
+    {
+      "id": "H-05",
+      "title": "Optimizer State Decay or Zero LR Application",
+      "description": "AdamW optimizer receives an empty list or all-zero gradients due to H-01/H-02. Additionally, mixed use of .bf16 checkpoint saving while maintaining bf16 compute graph can sometimes cause silent type casting issues during load/save cycles.",
+      "check_paths": [
+        "train_engine_v02.py -> Optimizer initialization",
+        "lora_core_v02.py -> save_file usage"
+      ],
+      "actions": [
+        {
+          "type": "verify",
+          "instruction": "Check optimizer.param_groups length and lr value. Print avg gradient magnitude every step."
+        },
+        {
+          "type": "fix",
+          "instruction": "Ensure consistency: keep everything in bf16 during runtime. Cast to fp32 only temporarily if absolutely necessary for specific ops."
+        }
+      ]
+    }
+  ]
+}
+
+Краткая инструкция для второй ЛЛМ:
+
+Сначала проверить H-01 через дебаг-печать градиентов. Если они отсутствуют — проблема найдена.
+Проверить H-02, убедившись, что веса LoRA имеют тип bfloat16, а не float8.
+Если градиенты есть, но шум остается — проверять H-03 и H-04.
+
+После анализа логов.
+Кэп, мои гипотезы подтвердились и уточнились.
+
+Гипотеза H-01 (Double Freeze) — НЕ подтвердилась. У тебя 38 активных тензоров с весом ~2 млн. Это значит, что LoRA-инжекция прошла успешно: градиенты есть, они просто очень слабые (~4e-5). Проблема не в заморозке.
+Гипотеза H-04 (Precision Loss) — подтверждается косвенно. Хаотичное поведение таймстепов (
+𝑡
+t) при формуле 
+𝑡
+=
+1
+−
+𝑟
+2
+t=1−r 
+2
+  говорит о потере точности из-за bfloat16. В логах видно скачки от 0.965 до 0.363, а это должно быть плавное сгущение к началу координат. Решение: вычислять 
+𝑟
+2
+r 
+2
+  в float32.
+Новая Гипотеза (H-VAE): Ошибка декодирования патчей. На картинках нет белого шума — там цветная мешанина. Это артефакт VAE-декода. Ты берешь вектор скорости [B, 1024, 64] и жестко срезаешь его по каналам на этапе ODE как pred_latents[:, :, :64]. Но модель возвращает полный поток для всех токенов (и текстовых тоже), а ты подаешь в VAE только первые каналы. Если структура данных нарушена или пермутация осей сделана неверно, VAE получает «грязные» латенты вместо чистых RGB-патчей.
+Точный план лечения:
+🛠 Исправить генерацию 
+𝑡
+t.
+Вычисляй квадрат в float32:
+
+python
+Копировать
+# train_engine_v02.py
+t_f32 = torch.rand(b, device=device, dtype=torch.float32)
+timesteps_attr = (1.0 - (t_f32 * t_f32)).to(torch.bfloat16)
+Это стабилизирует распределение времени и даст модели шанс увидеть ранние шаги диффузии.
+
+🔧 Проверить структуру потока.
+Добавь дебаг прямо после вызова раннера:
+
+python
+Копировать
+velocity = run_lora_model_step(...)
+print(f"Velocity shape: {velocity.shape}")
+pred_tensor = velocity[0] if isinstance(velocity, tuple) else velocity.sample
+print(f"Pred tensor shape before slice: {pred_tensor.shape}")
+Я подозреваю, что форма будет больше, чем [1, 1024, 64]. Возможно, [1, 1024, 77]. Тогда твой срез [:,:, :64] забирает мусорные данные.
+
+🚀 Экспериментальный запуск без среза.
+Попробуй временно убрать жесткое ограничение каналов:
+
+python
+Копировать
+# Замени эту строку:
+# pred_latents = pred_tensor[:, :, :64]
+# На это:
+pred_latents = pred_tensor.squeeze()
+И посмотри, изменится ли характер шума. Если картинка станет более структурированной (появятся пятна), значит, проблема именно в том, что ты отсекаешь нужные каналы.
