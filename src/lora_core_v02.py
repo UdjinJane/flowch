@@ -1,5 +1,3 @@
-# Финальная версия lora_core_v02.py с примененными правками:
-
 # === БЛОК ЯДРА LORA V02 СТАРТ ===
 import os
 import sys
@@ -9,7 +7,6 @@ from safetensors.torch import load_file, save_file as st_save_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig, get_peft_model_state_dict as peft_get_state_dict
 from config import TrainConfig
-from torchao.quantization import quantize_, float8_weight_only
 
 class FluxLoraCoreV02:
     @staticmethod
@@ -39,8 +36,6 @@ class FluxLoraCoreV02:
 
         print("[ОБТ] Шаг Е: Подготовка адаптеров LoRA (глушение внутренних проверок PEFT)...")
 
-        # Превращаем список слоев в строгое регулярное выражение для PEFT
-        import re
         target_modules_list = list(TrainConfig.TARGET_MODULES)
 
         lora_config = LoraConfig(
@@ -61,23 +56,15 @@ class FluxLoraCoreV02:
         print("[ОБТ] Шаг Ж: Инжекция LoRA-адаптеров в bf16-граф на CPU...")
         lora_model = get_peft_model(transformer, lora_config)
 
-        # --- СИЛОВАЯ ИНЖЕКЦИЯ LoRA ---
-        # Увеличиваем начальный масштаб весов адаптеров, чтобы они не тонули в FP8 (УДАЛЕНО)
-        for name, param in lora_model.named_parameters():
-            if "lora_A" in name or "lora_B" in name:
-                # Масштабирование удалено: param.data.mul_(2.0)
-
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА ---
         print(f"[ОТК] ДИАГНОСТИКА ИНЖЕКЦИИ LORA:")
 
-        # Универсальный поиск модели в структуре
         target_obj = lora_model
         if isinstance(lora_model, tuple):
             target_obj = lora_model[0]
         if isinstance(target_obj, tuple):
             target_obj = target_obj[0]
 
-        # Безопасный подсчет параметров
         try:
             params = list(target_obj.parameters())
             trainable_params = [p for p in params if p.requires_grad]
@@ -86,8 +73,8 @@ class FluxLoraCoreV02:
 
             captured_layers = []
             for name, module in target_obj.named_modules():
-                if "lora" in name.lower():
-                    captured_layers.append(name)
+                if "lora" in name.lower():  # <-- Исправлен отступ (4 пробела)
+                    captured_layers.append(name)  # <-- Исправлен отступ
 
             print(f"  └── Количество захваченных слоев: {len(captured_layers)}")
             if len(captured_layers) > 0:
@@ -98,42 +85,25 @@ class FluxLoraCoreV02:
             print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
             print(f"  └── Сообщение ошибки: {e}")
 
-        # Проверка размерностей базовых слоев
         print(f"[ОТК] Размерности базовых слоев:")
         for name, module in target_obj.named_modules():
             if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
                 print(f"  └── {name}: {module.weight.shape}")
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА END ---
-        print("[ОБТ] Шаг З: Запуск нативного квантования TorchAO FP8 (Фильтрация слоев)...")
+        print("[ОБТ] Шаг З: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
 
-        # Жесткий флотский фильтр: полностью изолируем веса LoRA от квантования FP8, оставляя их в обучаемом bf16
-        def filter_fn(mod, name):
-            is_linear = isinstance(mod, torch.nn.Linear)
-            is_base_layer = not ("x_embedder" in name or "lora" in name or "base_layer" in name)
-            return is_linear and is_base_layer
-
-        quantize_(lora_model, float8_weight_only(), filter_fn)
-
-        print(f"[ОТК] Квантование: Фильтр пропустил {len([m for m in lora_model.modules() if filter_fn(m, '')])} слоев")
-
-        print("[ОБТ] Шаг И: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
-        # Замораживаем только базовую модель, оставляя адаптеры LoRA нетронутыми
         transformer.requires_grad_(False)
-
-        # Сначала включаем чекпоинтинг, пусть он делает свои сбросы параметров
         transformer.enable_gradient_checkpointing()
 
-        # И только теперь ЖЕСТКО и финально выжигаем градиенты для неактивных слоев LoRA
         for name, param in lora_model.named_parameters():
             if "lora_" in name:
                 if any(target in name for target in TrainConfig.TARGET_MODULES):
                     param.requires_grad = True
                 else:
-                    param.requires_grad = False  # Контрольный выстрел по градиентам to_k и to_v
+                    param.requires_grad = False
 
         print("[ОБТ] Шаг К: Маршевый перенос готового квантованного пирога во VRAM CUDA...")
-        # Явный маршевый перенос на видеокарту без использования внешних переменных
         lora_model = lora_model.to("cuda")
 
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 полностью герметизировано на GPU.")
