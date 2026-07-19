@@ -24,15 +24,15 @@ class FluxLoraCoreV02:
             torch.cuda.reset_peak_memory_stats()
 # === КОНЕЦ БЛОКА 1 ===
 
-# === БЛОК 2: ЧЕСТНЫЙ FP8 И ЗАЩИТА ЭМБЕДДЕРА ===
+# === БЛОК 2: ЧЕСТНЫЙ FP8 И ЗАЩИТА СИГНАЛЬНЫХ ЗОН ЭМБЕДДЕРОВ ===
 # [Этот блок считывает конфигурацию, собирает базовый каркас,]
-# [заливает веса в нативном FP8 и защищает bfloat16-зону x_embedder]
+# [заливает веса в нативном FP8 и защищает bfloat16-зоны x_embedder и time_text_embed]
         # Безопасное чтение конфигурации с подавлением UTF-8 BOM маркера
         config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
         
-        # Разворачиваем каркас сразу в типе float8_e4m3fn для жесткой экономии VRAM
+        # Razворачиваем каркас сразу в типе float8_e4m3fn для жесткой экономии VRAM
         transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
         
         # Холодная вычитка монолита весов с диска напрямую в память CPU
@@ -47,12 +47,16 @@ class FluxLoraCoreV02:
         # Накатываем веса на FP8 каркас
         transformer.load_state_dict(clean_state_dict, strict=False)
         
-        # ХАРДКОРНЫЙ ФИКС: Принудительно возвращаем x_embedder в bfloat16 (требование Flux)
+        # ХАРДКОРНЫЙ ФИКС: Принудительно возвращаем критические эмбеддеры в bfloat16 (требование Flux)
         if hasattr(transformer, "x_embedder"):
             transformer.x_embedder = transformer.x_embedder.to(dtype=torch.bfloat16)
             
-        print("[УСПЕХ] Базовая модель герметизирована в честном FP8. X_Embedder защищен.")
+        if hasattr(transformer, "time_text_embed"):
+            transformer.time_text_embed = transformer.time_text_embed.to(dtype=torch.bfloat16)
+            
+        print("[УСПЕХ] Базовая модель герметизирована в честном FP8. Сигнальные зоны x_embedder и time_text_embed переведены в bfloat16.")
 # === КОНЕЦ БЛОКА 2 ===
+
 
 # === БЛОК 3: ИНЖЕКЦИЯ LORA С ПРИНУДИТЕЛЬНЫМ ВЫКЛЮЧЕНИЕМ TORCHAO ===
 # [Этот блок настраивает PEFT-адаптеры, блокирует конфликты с torchao]
