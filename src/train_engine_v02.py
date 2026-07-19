@@ -146,10 +146,20 @@ def main_train_loop():
             
             if global_step % 10 == 0:
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                log_msg = f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | MSE Лосс: {current_loss:.4f}\n"
-                print(log_msg.strip())
+                
+                # Снимаем показатели времени и памяти шхуны
+                allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+                
+                # Формируем расширенный рапорт для Мистральчика
+                console_msg = (
+                    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+                    f"MSE Лосс: {current_loss:.4f} | VRAM: {allocated_vram:.2f} GB"
+                )
+                file_msg = f"Шаг: {global_step} | Loss: {current_loss:.4f} | VRAM: {allocated_vram:.2f}GB\n"
+                
+                print(console_msg) # В консоль летит красивый рапорт
                 with open(log_file_path, "a", encoding="utf-8") as lf:
-                    lf.write(log_msg)
+                    lf.write(file_msg) # В файл пишется чистая строка без дублей
                     
             if global_step % TrainConfig.SAVE_STEPS == 0:
                 print(f"[Т] Рубеж сохранения. Запекаем чекпоинт на шаге {global_step}...")

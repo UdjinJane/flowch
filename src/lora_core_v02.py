@@ -76,13 +76,13 @@ class FluxLoraCoreV02:
                     captured_layers.append(name)
 
             print(f"  └── Количество захваченных слоев: {len(captured_layers)}")
-            if len(captured_layers) > 0:
-                print(f"  └── Список захваченных слоев (первые 10): {captured_layers[:10]}")
-            else:
-                print("  └── [КРИТИЧЕСКАЯ ОШИБКА] ПЕFT НЕ НАШЕЛ НИ ОДНОГО СЛОЯ! LoRA НЕ РАБОТАЕТ!")
-        except Exception as e:
-            print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
-            print(f"  └── Сообщение ошибки: {e}")
+            #if len(captured_layers) > 0:
+            #    print(f"  └── Список захваченных слоев (первые 10): {captured_layers[:10]}")
+            #else:
+            #    print("  └── [КРИТИЧЕСКАЯ ОШИБКА] ПЕFT НЕ НАШЕЛ НИ ОДНОГО СЛОЯ! LoRA НЕ РАБОТАЕТ!")
+        #except Exception as e:
+            #print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
+            #print(f"  └── Сообщение ошибки: {e}")
 
         print(f"[ОТК] Размерности базовых слоев:")
         for name, module in target_obj.named_modules():

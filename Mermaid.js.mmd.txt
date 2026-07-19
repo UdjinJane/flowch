@@ -36,6 +36,30 @@ graph TD
     A --> R[Logs: Console + Z:\flowch\output\train_logs.txt]
     E --> R
 
+graph TD
+
+    %% Директории и Модули
+    subgraph SRC_DIR [Отсек Исходного Кода /src/]
+        A[train_engine_v02.py] -->|Вызов шага| B[model_runner_v02.py]
+        A -->|Авто-инжекция int8| C[ao_optim_monolith_v02.py]
+        A -->|Тестовый рендер| G[generate_v02.py]
+    end
+
+    subgraph MODELS_CORE [Ангар Моделей /models_core/]
+        D[Chroma1 Transformer FP8]
+        E[T5XXL Text Encoder bf16]
+        F[Flux VAE bf16]
+    end
+
+    %% Потоки данных при плавке
+    CACHE[(/cache/ латенты 4D)] -->|Загрузка батча| A
+    C -->|Квантование моментов| VRAM{VRAM CUDA RTX 3090}
+    B -->|Стриминг 2D-RoPE ID| D
+    D -->|LoRA веса| VRAM
+    G -->|Выгрузка кадров| OUT[/output/images/ *.png]
+    A -->|Запись журнала| LOG[/output/logs/ train_logs.txt]
+	
+	
     %% Problematic Blocks (Лакуны)
     N1[Лакуна 1: AdaLayerNorm-Zero FP8 Overflow] --> B
     N2[Лакуна 2: LoRA Gradient Underflow] --> G
