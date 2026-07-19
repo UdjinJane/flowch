@@ -1,5 +1,13 @@
 # === БЛОК ЯДРА LORA V02 СТАРТ ===
-import os, json, time, torch
+import os
+import json
+import logging
+import torch
+
+# Гасим отрыжку логгера diffusers до инициализации модели
+logging.getLogger("diffusers").setLevel(logging.ERROR)
+
+from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
 from config import TrainConfig
@@ -8,6 +16,10 @@ class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
         print("[ОБТ] Магистральный запуск инжектора: lora_core_v02")
+        
+        # Включаем встроенный термометр VRAM
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
 
         # === БЛОК 2: БЕЗОПАСНОЕ ЧТЕНИЕ И КАСТ В BF16 ===
         # Считывание конфигурации ядра с подавлением UTF-8 BOM маркера
@@ -58,3 +70,28 @@ class FluxLoraCoreV02:
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
         return model.to("cuda")
 # === БЛОК ЯДРА LORA V02 ФИНАЛ ===
+if __name__ == "__main__":
+    import sys
+    print("[ОБТ] Ручной запуск холодного теста ядра...")
+    try:
+        tested_model = FluxLoraCoreV02.init_transformer_with_lora()
+        
+        # Подсчет параметров и опрос термометров VRAM
+        trainable_params = sum(p.numel() for p in tested_model.parameters() if p.requires_grad)
+        
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+            peak = torch.cuda.max_memory_allocated() / (1024 ** 3)
+            mem_report = f"| VRAM Текущая: {allocated:.2f} GB | Пик: {peak:.2f} GB"
+        else:
+            mem_report = "| CUDA недоступна"
+
+        print(f"[ОТК] ТЕСТ ПРОЙДЕН УСПЕШНО! {mem_report}")
+        print(f"[ОТК] Активных LoRA мишеней в bf16: {trainable_params:,}")
+        
+    except Exception as e:
+        print(f"[АВАРИЯ] Ядро выбросило критическое исключение: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
