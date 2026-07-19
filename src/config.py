@@ -7,6 +7,7 @@ class TrainConfig:
     """
     # --- Системные пути ---
     ROOT_DIR = "Z:\\flowch"
+    SRC_DIR = os.path.join(ROOT_DIR, "src")
     DATASET_DIR = os.path.join(ROOT_DIR, "dataset", "mng_oks_bl")
     CACHE_DIR = os.path.join(ROOT_DIR, "cache")
     OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
