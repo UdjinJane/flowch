@@ -14,8 +14,19 @@ class TrainConfig:
     CACHE_TEXT_DIR = os.path.join(CACHE_DIR, "text_embeds")
     CACHE_LATENT_DIR = os.path.join(CACHE_DIR, "latent_embeds")
     
-    # Путь к физическому монолиту весов (добавлено)
-    MODEL_SINGLE_FILE = os.path.join(ROOT_DIR, "base_model", "flux1-dev-fp8.safetensors")
+    # --- Пути к локальным моделям (согласно скриншотам) ---
+    # 1. Трансформер Chroma1
+    MODEL_SINGLE_FILE = os.path.join(
+        MODELS_CORE_DIR, "transformer", "chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors"
+    )
+    # 2. Текстовый энкодер
+    TEXT_ENCODER_PATH = os.path.join(
+        MODELS_CORE_DIR, "text_encoder", "t5xxl_bf16.safetensors"
+    )
+    # 3. VAE
+    VAE_PATH = os.path.join(
+        MODELS_CORE_DIR, "vae", "flux-vae-bf16.safetensors"
+    )
 
     # Гиперпараметры и геометрия
     BATCH_SIZE = 1                        
