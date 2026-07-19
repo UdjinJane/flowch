@@ -38,8 +38,7 @@ transformer.load_state_dict(clean_state_dict, strict=False)
 for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
     if hasattr(transformer, attr):
         setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
-
-print("[УСПЕХ] Модель в FP8, входные эмбеддеры переведены в bfloat16.")
+    print("[УСПЕХ] Модель в FP8, входные эмбеддеры переведены в bfloat16.")
 # === КОНЕЦ БЛОКА 2 ===
 
 # === БЛОК 3: ИНЖЕКЦИЯ LORA (ФИКС ОТСТУПОВ И СИНТАКСИСА) ===
