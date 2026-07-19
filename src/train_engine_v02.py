@@ -93,17 +93,16 @@ def main_train_loop():
             
             packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
             
-            # --- СНАЙПЕРСКИЙ РОПЕ-КОНТУР V03 (СТРОКИ 88-92) ---
-            # Извлекаем физическую латентную геометрию прямо с приборов [64, 64]
+            # --- ФИНАЛЬНЫЙ МАТЕМАТИЧЕСКИЙ РОПЕ-КОНТУР V04 (СТРОКИ 94-95) ---
+            # Извлекаем латентную геометрию: 64 и 64
             latents_h, latents_w = latents.shape[2], latents.shape[3]
             
-            # Генерируемimg_ids строго на основе латентных осей (64 и 64 -> выдаст)
-            img_ids = generate_flux_img_ids(latents_h * 2, latents_w * 2, device).to(torch.bfloat16)
+            # Передаем чистые латенты. Функция сама сделает // 2 и выдаст сетку 32x32 (1024 патча)
+            img_ids = generate_flux_img_ids(latents_h, latents_w, device).to(torch.bfloat16)
             
             # txt_ids: строго 2D под длину текстового контекста prompt_embeds [256, 3]
             txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
-            # --------------------------------------------------
-            
+            # --------------------------------------------------------------
             
             # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
             pred_tensor = run_lora_model_step(
