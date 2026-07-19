@@ -77,9 +77,9 @@ def main_train_loop():
         
         for step, batch in enumerate(dataloader):
             # --- ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ЗОНД ОМНИССИИ ---
-            print(f"[ПРИБОР] Форма latents из кэша: {batch['latents'].shape}")
-            print(f"[ПРИБОР] Форма prompt_embeds из кэша: {batch['prompt_embeds'].shape}")
-            sys.exit(0) # Аварийный стоп после первого замера!
+            # print(f"[ПРИБОР] Форма latents из кэша: {batch['latents'].shape}")
+            # print(f"[ПРИБОР] Форма prompt_embeds из кэша: {batch['prompt_embeds'].shape}")
+            # sys.exit(0) # Аварийный стоп после первого замера!
             # ------------------------------------------
 
             global_step += 1
