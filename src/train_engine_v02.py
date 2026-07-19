@@ -96,12 +96,19 @@ def main_train_loop():
             # --------------------------------------------------------------
 
             
+            # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
             pred_tensor = run_lora_model_step(
-                lora_model=lora_model, batch=batch, packed_noisy_latents=packed_noisy_latents,
-                timesteps_attr=t_attr, prompt_embeds=prompt_embeds,
+                lora_model=lora_model, 
+                batch=batch, 
+                packed_noisy_latents=packed_noisy_latents,
+                timesteps_attr=t_attr, 
+                prompt_embeds=prompt_embeds,
                 pooled_projections=torch.zeros(b_size, 768, device=device, dtype=torch.bfloat16),
-                txt_ids=txt_ids, img_ids=img_ids
-            )
+                txt_ids=txt_ids, 
+                img_ids=img_ids
+            ) # Закрывающая скобка строго здесь!
+            # ----------------------------------------------------
+
             
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16)
             target_flow = (noise - latents).to(dtype=torch.bfloat16)
