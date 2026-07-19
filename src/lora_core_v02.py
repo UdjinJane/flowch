@@ -1,4 +1,6 @@
 # === БЛОК 1: СИСТЕМНЫЕ ИМПОРТЫ И ИНИЦИАЛИЗАЦИЯ ОКРУЖЕНИЯ ===
+# [Этот блок настраивает глушение отрыжки логгеров, импортирует монолитные]
+# [зависимости и объявляет каркас класса инжектора lora_core_v02]
 import os
 import json
 import logging
@@ -19,26 +21,44 @@ class FluxLoraCoreV02:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-        # Чтение конфигурации и инициализация модели в FP8
-        config_dict = json.load(open(os.path.join(TrainConfig.SRC_DIR, "transformer_config.json"), "r", encoding="utf-8-sig"))
+# === БЛОК 2: ЧЕСТНЫЙ FP8 И ПОЛНАЯ ЗАЩИТА ВХОДНЫХ ЭМБЕДДЕРОВ ===
+# [Этот блок считывает конфигурацию, собирает базовый каркас,]
+# [заливает веса в нативном FP8 и защищает bfloat16-зоны эмбеддеров и AdaLayerNorm]
+        # Чтение конфигурации ядра с подавлением UTF-8 BOM маркера
+        config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
+        with open(config_json_path, "r", encoding="utf-8-sig") as f:
+            config_dict = json.load(f)
+        
+        # Разворачиваем каркас сразу в типе float8_e4m3fn для жесткой экономии VRAM
         transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
-
-        # Загрузка и очистка весов
+        
+        # Холодная вычитка монолита весов с диска напрямую в память CPU
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-        clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
+        clean_state_dict = {
+            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v
+            for k, v in state_dict.items()
+        }
         transformer.load_state_dict(clean_state_dict, strict=False)
-
-        # Фикс эмбеддеров (перевод в bfloat16 для стабильности)
+        
+        # 1. ЗАЩИТА СИГНАЛЬНЫХ ВХОДНЫХ ЭМБЕДДЕРОВ (bfloat16)
         for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
             if hasattr(transformer, attr):
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
-        print("[УСПЕХ] Модель в FP8, входные эмбеддеры переведены в bfloat16.")
+        
+        # 2. ФИКС ADALAYERNORM: Принудительный перевод модулирующих linear слоев в bfloat16
+        # Проходим по всей топологии 57 блоков внимания в поисках слоев модуляции нормализации
+        for name, module in transformer.named_modules():
+            if "norm" in name.lower() and hasattr(module, "linear") and module.linear is not None:
+                module.linear = module.linear.to(dtype=torch.bfloat16)
+            
+        print("[УСПЕХ] Базовая модель в FP8. Эмбеддеры и внутренние linear-модуляторы AdaLayerNorm переведены в bfloat16.")
+# === КОНЕЦ БЛОКА 2 ===
 
-        # Импорты для LoRA, строго внутри метода
+# === БЛОК 3: ИНЖЕКЦИЯ LORA (ФИКС ОТСТУПОВ И СИНТАКСИСА) ===
         import peft.tuners.lora.torchao
         import peft.tuners.tuners_utils
 
-        # Принудительное отключение torchao
+        # Принудительное отключение torchao для предотвращения конфликтов
         peft.tuners.lora.torchao.is_torchao_available = lambda: False
         peft.tuners.tuners_utils.is_torchao_available = lambda: False
 
@@ -50,7 +70,7 @@ class FluxLoraCoreV02:
         )
         model = get_peft_model(transformer, lora_config)
 
-        # Замораживаем основу, оставляем градиенты только для LoRA
+        # Замораживаем основу, оставляем градиенты только для LoRA в bfloat16
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.data = param.data.to(torch.bfloat16)
@@ -68,8 +88,10 @@ if __name__ == "__main__":
     try:
         tested_model = FluxLoraCoreV02.init_transformer_with_lora()
 
+        # Подсчет обучаемых параметров адаптера
         trainable_params = sum(p.numel() for p in tested_model.parameters() if p.requires_grad)
 
+        # Снятие показаний с датчиков утилизации видеопамяти
         if torch.cuda.is_available():
             allocated = torch.cuda.memory_allocated() / (1024 ** 3)
             peak = torch.cuda.max_memory_allocated() / (1024 ** 3)
