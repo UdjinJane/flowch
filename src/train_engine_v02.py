@@ -132,6 +132,7 @@ def main_train_loop():
             if pred_tensor.shape != packed_target_flow.shape:
                 # Если ранер вернул объединенный контекст (с текстом), режем строго под картинку
                 pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :]
+
             
             # Расчет среднеквадратичной ошибки
             loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
