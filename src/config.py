@@ -14,6 +14,10 @@ class TrainConfig:
     METADATA_PATH = os.path.join(DATASET_DIR, "metadata.jsonl")
     TEXT_EMBEDS_CACHE = os.path.join(CACHE_DIR, "text_embeds")
     LATENT_EMBEDS_CACHE = os.path.join(CACHE_DIR, "latent_embeds")
+    
+    # Стыковочные узлы для dataset_v02.py (Исправлено!)
+    CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "cache", "text_embeds")
+    CACHE_LATENT_DIR = os.path.join(ROOT_DIR, "cache", "latent_embeds
 
     # --- Параметры плавки (Гиперпараметры) ---
     NUM_EPOCHS = 1                        # Теперь контролируется отсюда! Никакого хардкода!
