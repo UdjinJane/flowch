@@ -122,8 +122,11 @@ def main_train_loop():
             target_flow = (noise - latents).to(dtype=torch.bfloat16)
             packed_target_flow = pack_latents_to_patches(target_flow)
             
+            # --- ИСПРАВЛЕННЫЙ СНАЙПЕРСКИЙ СРЕЗ КАНАЛОВ (СТРОКА 126) ---
+            # Принудительно выравниваем и длину последовательности (dim 1), и каналы (dim 2)
             if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :]
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
+            # ----------------------------------------------------------
             
             loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
             
