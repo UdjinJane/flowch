@@ -20,6 +20,7 @@ class TrainConfig:
     CACHE_LATENT_DIR = os.path.join(ROOT_DIR, "cache", "latent_embeds")
 
     # --- Параметры плавки (Гиперпараметры) ---
+    BATCH_SIZE = 1
     NUM_EPOCHS = 1                        # Теперь контролируется отсюда! Никакого хардкода!
     LEARNING_RATE = 2e-5                  # Скорость обучения для стабильных весов AdamW
     GRADIENT_ACCUMULATION_STEPS = 4        # Накопление градиентов для виртуального увеличения батча
