@@ -1,0 +1,650 @@
+{
+  "Flux_MMDiT_Architecture": {
+    "known": true,
+    "new": false,
+    "details": {
+      "blocks": {
+        "double_stream": 19,
+        "single_stream": 38
+      },
+      "issues": {
+        "AdaLayerNorm-Zero": "FP8 overflow in time-step modulation",
+        "Latent Geometry": "Strict 16-channel layout required for VAE"
+      }
+    }
+  },
+  "LoRA_Quantization_Best_Practices": {
+    "known": true,
+    "new": false,
+    "details": {
+      "precision_map": {
+        "transformer_backbone": "FP8 (e4m3fn)",
+        "lora_adapters": "bfloat16 (trainable, requires_grad=True)",
+        "text_encoders_and_vae": "bfloat16 (frozen / lazy decoding)",
+        "master_weights_and_optimizer": "float32"
+      },
+      "critical_risks": [
+        {
+          "type": "Underflow & Under-representation",
+          "issue": "FP8 (e4m3fn) rounds small LoRA gradients to zero",
+          "remedy": "Gradient Scaling for LoRA weights"
+        },
+        {
+          "type": "Cast Alignment Failure",
+          "issue": "Mixed precision (float8 + bfloat16) causes CUDA crashes or VRAM overflow",
+          "remedy": "Force cast inputs to bfloat16 before addition"
+        }
+      ],
+      "torchao_best_practices": {
+        "filter_fn_logic": "Exclude trainable params from quantization: `if hasattr(module, 'requires_grad') and module.requires_grad: return False`",
+        "scaling_guard": "Avoid FP8 for AdaLN-Zero and x_embedder layers"
+      },
+      "action_items_for_lora_core": [
+        "Add `torch.cuda.amp.autocast(dtype=torch.bfloat16)` in LoRA forward()",
+        "Assert `p.dtype == torch.bfloat16` for trainable params before optimization",
+        "Copy LoRA gradients to float32 master weights"
+      ]
+    }
+  },
+  "Rectified_Flow_Training_Stability": {
+    "known": true,
+    "new": false,
+    "details": {
+      "issues": [
+        "Chaotic trajectory steps in Rectified Flow due to AdaLayerNorm-Zero FP8 overflow",
+        "Strict 16-channel latent structure required for VAE integration"
+      ]
+    }
+  },
+  "BF16FP8_Mixed_Precision_Training": {
+    "known": true,
+    "new": false,
+    "details": {
+      "precision_map": {
+        "transformer_backbone": "FP8 (e4m3fn)",
+        "lora_adapters": "bfloat16",
+        "text_encoders_and_vae": "bfloat16",
+        "master_weights_and_optimizer": "float32"
+      },
+      "critical_risks": [
+        {
+          "type": "Underflow & Under-representation",
+          "issue": "FP8 (e4m3fn) rounds small LoRA gradients to zero",
+          "remedy": "Gradient Scaling for LoRA weights"
+        },
+        {
+          "type": "Cast Alignment Failure",
+          "issue": "Mixed precision causes CUDA crashes or VRAM overflow",
+          "remedy": "Force cast inputs to bfloat16 before addition"
+        }
+      ],
+      "torchao_best_practices": {
+        "filter_fn_logic": "Exclude trainable params from quantization: `if hasattr(module, 'requires_grad') and module.requires_grad: return False`",
+        "scaling_guard": "Avoid FP8 for AdaLN-Zero and x_embedder layers"
+      },
+      "action_items_for_lora_core": [
+        "Add `torch.cuda.amp.autocast(dtype=torch.bfloat16)` in LoRA forward()",
+        "Assert `p.dtype == torch.bfloat16` for trainable params before optimization",
+        "Copy LoRA gradients to float32 master weights"
+      ]
+    }
+  },
+  "Additional_Notes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "environment_setup": [
+        "Ensure CUDA RNG state consistency",
+        "Avoid aggressive memory splitting (max_split_size_mb:512)"
+      ]
+    }
+  },
+  "Critical_Fixes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_validation": [
+        "Strict 16-channel check in generate_v02.py",
+        "No slicing like [:, :, :64] for latent-to-pixel reconstruction"
+      ],
+      "lora_quantization_filter": [
+        "Block torchao interference with LoRA weights",
+        "Enforce bfloat16/float32 for trainable parameters"
+      ]
+    }
+  }
+}
+{
+  "Flux_MMDiT_Architecture": {
+    "known": true,
+    "new": false,
+    "details": {
+      "blocks": {
+        "double_stream": 19,
+        "single_stream": 38
+      },
+      "issues": {
+        "AdaLayerNorm-Zero": {
+          "description": "FP8 (e4m3fn) overflow in time-step modulation coefficients",
+          "impact": "Chaotic trajectory steps in Rectified Flow"
+        },
+        "Latent Geometry": {
+          "description": "Strict 16-channel layout required for VAE integration",
+          "warning": "Any slicing like [:, :, :64] breaks reconstruction"
+        }
+      }
+    }
+  },
+  "LoRA_Quantization_Filter": {
+    "known": true,
+    "new": false,
+    "details": {
+      "action_items": [
+        "Block FP8 quantization for LoRA weights",
+        "Enforce bfloat16/float32 for trainable parameters",
+        "Add 'quantization_filter' to lora_core_v02.py"
+      ]
+    }
+  },
+  "Latent_Validation": {
+    "known": true,
+    "new": false,
+    "details": {
+      "requirements": [
+        "Strict 16-channel check in generate_v02.py",
+        "No slicing operations that alter latent dimensions"
+      ]
+    }
+  }
+}
+{
+  "LoRA_Quantization_Best_Practices": {
+    "known": true,
+    "new": false,
+    "details": {
+      "core_math_mechanics": {
+        "qkv_blocks": {
+          "strategy": "Combined QKV block logic natively",
+          "split_qkv": false
+        },
+        "forward_override": {
+          "mechanism": "Forceful forward injection via wrapper",
+          "logic": "self.org_module.forward = self.forward (Preserve original parameters via self.org_forward(x))"
+        },
+        "dropout_scaling": {
+          "formula": "scale = self.scale * (1.0 / (1.0 - self.rank_dropout))"
+        },
+        "timestep_adaptation": {
+          "shift_calculation": "shift = self.model.calculate_timestep_shift(H, W)",
+          "scheduler_scaling": "mu = math.log(shift)"
+        }
+      },
+      "architectural_critical_fixes": [
+        {
+          "component": "initialize_norm_cache",
+          "solution": "Forcefully isolate tensor slices to float32 BEFORE sampling"
+        },
+        {
+          "component": "merge_to (Inference Node)",
+          "solution": "Execute matrix adaptation strictly inside standard floating formats"
+        },
+        {
+          "component": "FluxSampler / Timestep Normalization",
+          "solution": "Divide expanded_timestep by 1000.0 in transformer cross-attention ingestion layer"
+        },
+        {
+          "component": "ModuleFilter Protocol",
+          "solution": "Implement explicit comma-separated layer substring matching filters"
+        }
+      ],
+      "action_items_by_target": {
+        "lora_core_v02.py": [
+          "Mirror Kohya line 206 tracking logic for norm validation in float32",
+          "Inject gradient norm logging sequences mimicking target model updates",
+          "Implement substring pattern filters to guard trainable parameters from torchao FP8 hooks"
+        ],
+        "generate_v02.py": [
+          "Inject timestep = expanded_timestep / 1000.0 in transformer parameter call"
+        ]
+      }
+    }
+  },
+  "QKV_Blocks": {
+    "known": true,
+    "new": false,
+    "details": {
+      "strategy": "Combined QKV block logic natively",
+      "split_qkv": false
+    }
+  },
+  "Forward_Override": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "Forceful forward injection via wrapper",
+      "logic": "self.org_module.forward = self.forward (Preserve original parameters via self.org_forward(x))"
+    }
+  },
+  "Dropout_Scaling": {
+    "known": true,
+    "new": false,
+    "details": {
+      "formula": "scale = self.scale * (1.0 / (1.0 - self.rank_dropout))"
+    }
+  },
+  "Timestep_Adaptation": {
+    "known": true,
+    "new": false,
+    "details": {
+      "shift_calculation": "shift = self.model.calculate_timestep_shift(H, W)",
+      "scheduler_scaling": "mu = math.log(shift)"
+    }
+  },
+  "Critical_Fixes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "initialize_norm_cache": "Isolate tensor slices to float32 before sampling",
+      "merge_to_Inference_Node": "Execute matrix adaptation in standard floating formats",
+      "FluxSampler_Timestep_Normalization": "Divide expanded_timestep by 1000.0 in transformer layer",
+      "ModuleFilter_Protocol": "Use strict substring matching for critical layers"
+    }
+  }
+}
+{
+  "Rectified_Flow_Training_Stability": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mathematical_core": {
+        "objective": "L_RF = E_t,z0,z1 [ || v_theta(z_t, t) - (z_1 - z_0) ||^2 ]",
+        "dynamics": "Deterministic ODE trajectories between clean data (z_1) and Gaussian noise (z_0)",
+        "gradient_variance": "Low variance stabilizes training; low-precision boundaries destabilize"
+      },
+      "stability_failure_modes": [
+        {
+          "component": "Logit-Normal Time-Step Bias",
+          "issue": "Uniform sampling wastes gradients at t->0 and t->1",
+          "solution": "Force logit-normal distribution bias towards t~0.5"
+        },
+        {
+          "component": "AdaLN-Zero Scaling Collapse",
+          "issue": "FP8 overflow in scale/shift coefficients injects chaotic noise",
+          "solution": "Clamp or isolate timestep embedding MLPs in bfloat16"
+        }
+      ],
+      "action_items_for_engine": [
+        {
+          "target": "train_engine_v02.py",
+          "actions": [
+            "Replace uniform t sampling with logit-normal distribution",
+            "Inject gradient clipping (max_norm=1.0) before optimizer step",
+            "Avoid random interpolation shuffling within mini-batch"
+          ]
+        }
+      ]
+    }
+  },
+  "Logit_Normal_Sampling": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "t = torch.sigmoid(torch.randn(b, device=dev) * sigma_scale)",
+      "purpose": "Bias sampling towards t~0.5 for structural flow matching"
+    }
+  },
+  "Gradient_Clipping": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "torch.nn.utils.clip_grad_norm_(lora_params, max_norm=1.0)",
+      "purpose": "Mitigate sudden gradient variance spikes"
+    }
+  },
+  "AdaLN_Zero_Scaling_Fix": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "Isolate timestep embedding MLPs in bfloat16",
+      "purpose": "Prevent FP8 overflow and chaotic noise injection"
+    }
+  }
+}
+{
+  "Flux_MMDiT_Architecture": {
+    "known": true,
+    "new": false,
+    "details": {
+      "phases": {
+        "double_stream": {
+          "blocks": 19,
+          "description": "Parallel text/image streams with independent QKV weights"
+        },
+        "single_stream": {
+          "blocks": 38,
+          "description": "Concatenated stream with shared QKV weights"
+        }
+      },
+      "positional_embedding": {
+        "mechanism": "Rotary Positional Embedding (RoPE) on H/W axes",
+        "purpose": "Adapt to aspect ratios without structural distortion"
+      }
+    }
+  },
+  "LoRA_Quantization_with_TorchAO": {
+    "known": true,
+    "new": false,
+    "details": {
+      "quantization_strategy": {
+        "base_model": "FP8/NF4 (frozen)",
+        "lora_adapters": "bfloat16/float32 (trainable)"
+      },
+      "filter_fn_logic": {
+        "description": "Ignore layers with 'lora' in name to prevent quantization"
+      },
+      "gradient_updates": {
+        "mechanism": "Master Weights (float32) for LoRA gradient updates",
+        "purpose": "Preserve optimization precision"
+      }
+    }
+  },
+  "Rectified_Flow_Training_Stability": {
+    "known": true,
+    "new": false,
+    "details": {
+      "trajectory_properties": {
+        "non_crossing": "ODE paths must not intersect to avoid singularity",
+        "distribution": "Logit-Normal or U-shaped t-sampling for stability"
+      }
+    }
+  },
+  "BF16FP8_Mixed_Precision": {
+    "known": true,
+    "new": false,
+    "details": {
+      "precision_map": {
+        "bfloat16": "8 exp, 7 mantissa",
+        "fp8_e4m3fn": "4 exp, 3 mantissa"
+      },
+      "critical_risks": [
+        {
+          "type": "Underflow in MatMul",
+          "solution": "Dynamic scaling for FP8/bfloat16 operations"
+        },
+        {
+          "type": "Normalization Layer Precision Loss",
+          "solution": "Isolate LayerNorm/AdaLN in bfloat16"
+        }
+      ]
+    }
+  },
+  "Flux_VAE_Compatibility": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_space": {
+        "structure": "(B, 16, H, W)",
+        "scaling_shift": "latents = (latent_image / scaling_factor) + shift_factor"
+      },
+      "packing_unpacking": {
+        "mechanism": "2x2 patch packing/unpacking for 4D tensor processing",
+        "warning": "Avoid slicing like [:64] without unpack_latents"
+      }
+    }
+  },
+  "PEFT_LoRA_Implementation": {
+    "known": true,
+    "new": false,
+    "details": {
+      "forward_formula": "Y = XW0 + (XA * B) * scale",
+      "initialization": {
+        "A": "Gaussian random",
+        "B": "Zero-initialized"
+      },
+      "gradient_clipping": {
+        "mechanism": "torch.nn.utils.clip_grad_norm_ (max_norm=1.0)",
+        "purpose": "Prevent gradient spikes in FP8 training"
+      }
+    }
+  },
+  "Critical_Fixes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_patching": "Implement pack/unpack for 2x2 patches",
+      "positional_embedding": "Add RoPE for H/W axes",
+      "gradient_clipping": "Enforce max_norm=1.0 in train_engine_v02.py",
+      "normalization_isolation": "Isolate AdaLN/LayerNorm in bfloat16"
+    }
+  }
+}
+{
+  "Flux_MMDiT_Architecture": {
+    "known": true,
+    "new": false,
+    "details": {
+      "phases": {
+        "double_stream": {
+          "blocks": 19,
+          "description": "Parallel text/image streams with independent QKV weights"
+        },
+        "single_stream": {
+          "blocks": 38,
+          "description": "Concatenated stream with shared QKV weights"
+        }
+      },
+      "positional_embedding": {
+        "mechanism": "Rotary Positional Embedding (RoPE) on H/W axes",
+        "purpose": "Adapt to aspect ratios without structural distortion"
+      }
+    }
+  },
+  "LoRA_Quantization_with_TorchAO": {
+    "known": true,
+    "new": false,
+    "details": {
+      "quantization_strategy": {
+        "base_model": "FP8/NF4 (frozen)",
+        "lora_adapters": "bfloat16/float32 (trainable)"
+      },
+      "filter_fn_logic": {
+        "description": "Ignore layers with 'lora' in name to prevent quantization"
+      },
+      "gradient_updates": {
+        "mechanism": "Master Weights (float32) for LoRA gradient updates",
+        "purpose": "Preserve optimization precision"
+      }
+    }
+  },
+  "Rectified_Flow_Training_Stability": {
+    "known": true,
+    "new": false,
+    "details": {
+      "trajectory_properties": {
+        "non_crossing": "ODE paths must not intersect to avoid singularity",
+        "distribution": "Logit-Normal or U-shaped t-sampling for stability"
+      }
+    }
+  },
+  "BF16FP8_Mixed_Precision": {
+    "known": true,
+    "new": false,
+    "details": {
+      "precision_map": {
+        "bfloat16": "8 exp, 7 mantissa",
+        "fp8_e4m3fn": "4 exp, 3 mantissa"
+      },
+      "critical_risks": [
+        {
+          "type": "Underflow in MatMul",
+          "solution": "Dynamic scaling for FP8/bfloat16 operations"
+        },
+        {
+          "type": "Normalization Layer Precision Loss",
+          "solution": "Isolate LayerNorm/AdaLN in bfloat16"
+        }
+      ]
+    }
+  },
+  "Flux_VAE_Compatibility": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_space": {
+        "structure": "(B, 16, H, W)",
+        "scaling_shift": "latents = (latent_image / scaling_factor) + shift_factor"
+      },
+      "packing_unpacking": {
+        "mechanism": "2x2 patch packing/unpacking for 4D tensor processing",
+        "warning": "Avoid slicing like [:64] without unpack_latents"
+      }
+    }
+  },
+  "PEFT_LoRA_Implementation": {
+    "known": true,
+    "new": false,
+    "details": {
+      "forward_formula": "Y = XW0 + (XA * B) * scale",
+      "initialization": {
+        "A": "Gaussian random",
+        "B": "Zero-initialized"
+      },
+      "gradient_clipping": {
+        "mechanism": "torch.nn.utils.clip_grad_norm_ (max_norm=1.0)",
+        "purpose": "Prevent gradient spikes in FP8 training"
+      }
+    }
+  },
+  "Critical_Fixes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_patching": "Implement pack/unpack for 2x2 patches",
+      "positional_embedding": "Add RoPE for H/W axes",
+      "gradient_clipping": "Enforce max_norm=1.0 in train_engine_v02.py",
+      "normalization_isolation": "Isolate AdaLN/LayerNorm in bfloat16"
+    }
+  },
+  "Logit_Normal_Sampling": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "t = torch.sigmoid(torch.randn(b, device=dev) * sigma_scale)",
+      "purpose": "Bias sampling towards t~0.5 for structural flow matching"
+    }
+  },
+  "Gradient_Clipping": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "torch.nn.utils.clip_grad_norm_(lora_params, max_norm=1.0)",
+      "purpose": "Mitigate sudden gradient variance spikes"
+    }
+  },
+  "AdaLN_Zero_Scaling_Fix": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "Isolate timestep embedding MLPs in bfloat16",
+      "purpose": "Prevent FP8 overflow and chaotic noise injection"
+    }
+  },
+  "LoRA_Quantization_Best_Practices": {
+    "known": true,
+    "new": false,
+    "details": {
+      "precision_map": {
+        "transformer_backbone": "FP8 (e4m3fn)",
+        "lora_adapters": "bfloat16",
+        "text_encoders_and_vae": "bfloat16",
+        "master_weights_and_optimizer": "float32"
+      },
+      "critical_risks": [
+        {
+          "type": "Underflow & Under-representation",
+          "issue": "FP8 (e4m3fn) rounds small LoRA gradients to zero",
+          "remedy": "Gradient Scaling for LoRA weights"
+        },
+        {
+          "type": "Cast Alignment Failure",
+          "issue": "Mixed precision causes CUDA crashes or VRAM overflow",
+          "remedy": "Force cast inputs to bfloat16 before addition"
+        }
+      ],
+      "torchao_best_practices": {
+        "filter_fn_logic": "Exclude trainable params from quantization: `if hasattr(module, 'requires_grad') and module.requires_grad: return False`",
+        "scaling_guard": "Avoid FP8 for AdaLN-Zero and x_embedder layers"
+      },
+      "action_items_for_lora_core": [
+        "Add `torch.cuda.amp.autocast(dtype=torch.bfloat16)` in LoRA forward()",
+        "Assert `p.dtype == torch.bfloat16` for trainable params before optimization",
+        "Copy LoRA gradients to float32 master weights"
+      ]
+    }
+  },
+  "QKV_Blocks": {
+    "known": true,
+    "new": false,
+    "details": {
+      "strategy": "Combined QKV block logic natively",
+      "split_qkv": false
+    }
+  },
+  "Forward_Override": {
+    "known": true,
+    "new": false,
+    "details": {
+      "mechanism": "Forceful forward injection via wrapper",
+      "logic": "self.org_module.forward = self.forward (Preserve original parameters via self.org_forward(x))"
+    }
+  },
+  "Dropout_Scaling": {
+    "known": true,
+    "new": false,
+    "details": {
+      "formula": "scale = self.scale * (1.0 / (1.0 - self.rank_dropout))"
+    }
+  },
+  "Timestep_Adaptation": {
+    "known": true,
+    "new": false,
+    "details": {
+      "shift_calculation": "shift = self.model.calculate_timestep_shift(H, W)",
+      "scheduler_scaling": "mu = math.log(shift)"
+    }
+  },
+  "Critical_Fixes_Extended": {
+    "known": true,
+    "new": false,
+    "details": {
+      "initialize_norm_cache": "Isolate tensor slices to float32 before sampling",
+      "merge_to_Inference_Node": "Execute matrix adaptation in standard floating formats",
+      "FluxSampler_Timestep_Normalization": "Divide expanded_timestep by 1000.0 in transformer layer",
+      "ModuleFilter_Protocol": "Use strict substring matching for critical layers"
+    }
+  },
+  "Additional_Notes": {
+    "known": true,
+    "new": false,
+    "details": {
+      "environment_setup": [
+        "Ensure CUDA RNG state consistency",
+        "Avoid aggressive memory splitting (max_split_size_mb:512)"
+      ]
+    }
+  },
+  "Critical_Fixes_Original": {
+    "known": true,
+    "new": false,
+    "details": {
+      "latent_validation": [
+        "Strict 16-channel check in generate_v02.py",
+        "No slicing like [:, :, :64] for latent-to-pixel reconstruction"
+      ],
+      "lora_quantization_filter": [
+        "Block torchao interference with LoRA weights",
+        "Enforce bfloat16/float32 for trainable parameters"
+      ]
+    }
+  }
+}

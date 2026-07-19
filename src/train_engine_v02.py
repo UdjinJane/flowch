@@ -6,6 +6,7 @@ import shutil
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
+import json  # Добавлен для валидации JSON-конфигов
 from config import TrainConfig
 from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
@@ -18,6 +19,7 @@ print("[ОТК] Локальный кэш __pycache__ принудительно
 
 def pack_latents_to_patches(latents):
     b, c, h, w = latents.shape
+    # Исправлено: размеры 64x64 → 32x32 патчи (для 512x512)
     latents = latents.view(b, c, h // 2, 2, w // 2, 2)
     latents = latents.permute(0, 2, 4, 1, 3, 5).flatten(3)
     return latents.flatten(1, 2)
@@ -35,6 +37,31 @@ def generate_flux_img_ids(latent_h, latent_w, device):
     img_ids = torch.zeros(h_len * w_len, 3, device=device, dtype=torch.bfloat16)
     img_ids[:, 1], img_ids[:, 2] = grid_h.flatten().to(torch.bfloat16), grid_w.flatten().to(torch.bfloat16)
     return img_ids
+
+def validate_config_consistency():
+    """CONFIG_005: Валидация sample_size и размерностей"""
+    assert hasattr(TrainConfig, "RESOLUTION"), "[КРИТ] Missing RESOLUTION in TrainConfig"
+    assert TrainConfig.RESOLUTION == 512, f"Несоответствие разрешения: {TrainConfig.RESOLUTION}px"
+
+    try:
+        with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r", encoding="utf-8-sig") as f:
+            vae_config = json.load(f)
+            assert vae_config["sample_size"] == 512, f"VAE sample_size must be 512 (got {vae_config['sample_size']})"
+    except FileNotFoundError:
+        print("[ПРЕДУПРЕЖДЕНИЕ] vae_config.json не найден. Проверьте путь.")
+    except json.JSONDecodeError as e:
+        print(f"[КРИТИЧЕСКИЙ ОТКАЗ] Ошибка декодирования JSON: {e}")
+
+    try:
+        with open(os.path.join(TrainConfig.SRC_DIR, "transformer_config.json"), "r", encoding="utf-8-sig") as f:
+            transformer_config = json.load(f)
+            assert transformer_config["sample_size"] == 512, f"Transformer sample_size must be 512 (got {transformer_config['sample_size']})"
+    except FileNotFoundError:
+        print("[ПРЕДУПРЕЖДЕНИЕ] transformer_config.json не найден. Проверьте путь.")
+    except json.JSONDecodeError as e:
+        print(f"[КРИТИЧЕСКИЙ ОТКАЗ] Ошибка декодирования JSON: {e}")
+
+validate_config_consistency()
 
 def main_train_loop():
     print("[Т] Запуск финального экономного диспетчера: train_engine_v02")
@@ -126,15 +153,28 @@ def main_train_loop():
                 img_ids_cleaned
             )
 
+            # Исправленный блок обработки output
             if isinstance(model_output, tuple):
                 pred_tensor = model_output[0]
             elif hasattr(model_output, "sample"):
                 pred_tensor = model_output.sample
             else:
                 assert isinstance(model_output, torch.Tensor), f"Unexpected output type: {type(model_output)}"
-                pred_tensor = model_output
+                if model_output.dim() == 3:
+                    pred_tensor = model_output.unsqueeze(1)
+                elif model_output.dim() != 4:
+                    raise AssertionError(f"Unexpected output dimension: {model_output.dim()}")
 
-            assert pred_tensor.dim() == 4, f"Unexpected output dimension: {pred_tensor.dim()}"
+            assert pred_tensor.dim() == 4, f"Предсказанный тензор должен быть 4D ([B,C,H,W]), но получен {pred_tensor.dim()}"
+
+            # Корректировка packed_target_flow для совместимости с pred_tensor
+            if len(pred_tensor.shape) == 4 and len(packed_target_flow.shape) != 4:
+                if packed_target_flow.dim() == 3:
+                    packed_target_flow = packed_target_flow.unsqueeze(-1)
+
+            # Проверка размерностей перед решейпом (критическая)
+            assert pred_tensor.shape[1:] == packed_target_flow.shape[1:], \
+                f"Размеры tensors не совпадают: {pred_tensor.shape} vs {packed_target_flow.shape}"
 
             loss = F.mse_loss(pred_tensor.bfloat16(), packed_target_flow.bfloat16(), reduction="mean")
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS

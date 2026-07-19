@@ -21,9 +21,7 @@ class CachedFluxDatasetV02(Dataset):
                 data = json.loads(line)
                 img_name = data["file_name"]
 
-                # Извлекаем чистое базовое имя (например, DSC_0465)
                 base_name = os.path.splitext(img_name)[0]
-
                 embed_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
                 mask_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_mask.pt")
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
@@ -44,13 +42,11 @@ class CachedFluxDatasetV02(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
 
-        # СНАЙПЕРСКИЙ ФИКС: Включаем weights_only=True для тотальной зачистки предупреждений в консоли (УДАЛЕНО)
-        prompt_embeds = torch.load(sample["embed_path"], map_location="cpu").squeeze(0)
-        text_ids_mask = torch.load(sample["mask_path"], map_location="cpu").squeeze(0)
-        latents = torch.load(sample["latent_path"], map_location="cpu").squeeze(0)
+        prompt_embeds = torch.load(sample["embed_path"], map_location="cpu", weights_only=True).squeeze(0)
+        text_ids_mask = torch.load(sample["mask_path"], map_location="cpu", weights_only=True).squeeze(0)
+        latents = torch.load(sample["latent_path"], map_location="cpu", weights_only=True).squeeze(0)
 
-        # Проверка размерностей латентных векторов
-        assert latents.shape == (16, 32, 32), f"Unexpected latent shape: {latents.shape}"
+        assert latents.shape == (16, 64, 64), f"Unexpected latent shape: {latents.shape}"
 
         return {
             "prompt_embeds": prompt_embeds,

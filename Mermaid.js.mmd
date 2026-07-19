@@ -1,0 +1,69 @@
+graph TD
+    %% Core Components
+    A[Reactor Core: train_engine_v02.py] --> B[LoRA Core: lora_core_v02.py]
+    A --> C[Model Runner: model_runner_v02.py]
+    A --> D[Dataset: dataset_v02.py]
+    A --> E[Inference: generate_v02.py]
+
+    %% Dependencies
+    B --> F[Flux Transformer 2D Model (diffusers)]
+    B --> G[LoRA Adapters (bfloat16)]
+
+    C --> H[pack_latents_to_patches()]
+    C --> I[generate_flux_img_ids()]
+
+    D --> J[CachedFluxDatasetV02]
+    D --> K[Metadata: Z:\flowch\dataset\mng_oks_bl\metadata.jsonl]
+
+    E --> L[VAE Decoder: AutoencoderKL (diffusers)]
+    E --> M[Rectified Flow ODE Trajectory]
+
+    %% Configuration & External Libs
+    A --> N[Config: config.py]
+    N -->|TrainConfig| B
+    N -->|TrainConfig| C
+    N -->|TrainConfig| D
+    N -->|TrainConfig| E
+
+    A --> O[Diffusers Library]
+    O --> F
+    O --> L
+
+    %% Input/Output & Logging
+    D --> P[Dataset Cache: Z:\flowch\cache\text_embeds/latent_embeds]
+    E --> Q[Output: Z:\flowch\output\images/*.png]
+
+    A --> R[Logs: Console + Z:\flowch\output\train_logs.txt]
+    E --> R
+
+    %% Problematic Blocks (Лакуны)
+    N1[Лакуна 1: AdaLayerNorm-Zero FP8 Overflow] --> B
+    N2[Лакуна 2: LoRA Gradient Underflow] --> G
+    N3[Лакуна 3: Mixed Precision Cast Failures] --> C
+
+    %% Description of files and flows
+    style A fill:#ff9,stroke:#333
+    style B fill:#9f6,stroke:#333
+    style C fill:#6f9,stroke:#333
+    style D fill:#f96,stroke:#333
+    style E fill:#f69,stroke:#333
+
+    %% Tooltips (описания)
+    click A "train_engine_v02.py\n- Основной цикл обучения\n- LoRA training loop\n- Взаимодействие с датасетом и инференсом" _ ""
+    click B "lora_core_v02.py\n- Инжекция LoRA-адаптеров\n- Весовая фильтрация (bfloat16)\n- Проверка обучаемых параметров" _ ""
+    click C "model_runner_v02.py\n- Обработка шагов модели\n- Размерностная валидация\n- Вывод тензоров" _ ""
+    click D "dataset_v02.py\n- Кэширование эмбеддингов\n- Загрузка metadata.jsonl\n- Взаимодействие с train_engine" _ ""
+    click E "generate_v02.py\n- Рендеринг инференса\n- VAE декодинг\n- Rectified Flow ODE" _ ""
+    click N "config.py\n- Конфигурация путей и параметров\n- Проверка разрешения (512px)\n- Лимит VRAM (21GB)" _ ""
+    click O "Diffusers Library\n- FluxTransformer2DModel\n- AutoencoderKL\n- Основные архитектуры" _ ""
+    click P "Dataset Cache\n- Z:\flowch\cache\text_embeds/\n- Z:\flowch\cache\latent_embeds/" _ ""
+    click Q "Output\n- Z:\flowch\output\images/\n- Чекпоинты: .safetensors" _ ""
+
+    %% Лакуны (проблемные места)
+    click N1 "AdaLayerNorm-Zero FP8 Overflow\n- Проблема: Переполнение в модуляции времени\n- Решение: Изолировать в bfloat16" _ ""
+    click N2 "LoRA Gradient Underflow\n- Проблема: Утрата малых градиентов в FP8\n- Решение: Градиентное масштабирование" _ ""
+    click N3 "Mixed Precision Cast Failures\n- Проблема: CUDA краши из-за смешанной точности\n- Решение: Приводить к bfloat16 до операций" _ ""
+
+    %% External Dependencies
+    click K "Metadata JSONL\n- Путь: Z:\flowch\dataset\mng_oks_bl\metadata.jsonl\n- Формат: JSON Lines" _ ""
+    click R "Logging\n- Консоль + Файл: Z:\flowch\output\train_logs.txt\n- Уровни: ОТК, КРИТ, УСПЕХ" _ ""

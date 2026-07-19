@@ -1,9 +1,8 @@
 # Финальная версия model_runner_v02.py с примененными правками:
-
 import torch
 
 def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr, prompt_embeds, pooled_projections, txt_ids, img_ids):
-    # --- НАЧАЛО БЛОКА: ИЗОЛИРОВАННЫЙ РАСЧЕТ И МАСКИРОВАНИЕ Т5 ---
+    # --- НАЧАЛО БЛОКА: ИЗОЛИРОВАННЫЙ РАСЧЕТ И МАСКИРОВАНИЕ T5 ---
     txt_ids_cleaned = txt_ids.squeeze(0) if txt_ids.dim() == 3 else txt_ids
     img_ids_cleaned = img_ids.squeeze(0) if img_ids.dim() == 3 else img_ids
 
@@ -29,8 +28,10 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
     else:
         # Добавлена обработка случая, когда модель возвращает чистый тензор
         assert isinstance(model_output, torch.Tensor), f"Unexpected output type: {type(model_output)}"
-        assert model_output.dim() == 4, f"Unexpected output dimension: {model_output.dim()}"
+        if model_output.dim() == 3:
+            # Если 3D, добавляем фантомный канал (1)
+            model_output = model_output.unsqueeze(1)
+        elif model_output.dim() != 4:
+            raise AssertionError(f"Unexpected output dimension: {model_output.dim()}")
 
     return model_output
-
-

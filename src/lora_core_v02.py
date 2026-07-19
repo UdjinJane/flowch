@@ -12,6 +12,7 @@ class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
         print("[ОБТ] Шаг А: Считывание локальной геометрии transformer_config.json...")
+
         config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
 
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
@@ -35,7 +36,6 @@ class FluxLoraCoreV02:
         print("[УСПЕХ] Базовая модель полностью собрана в ОЗУ в чистом bf16. VRAM не задета.")
 
         print("[ОБТ] Шаг Е: Подготовка адаптеров LoRA (глушение внутренних проверок PEFT)...")
-
         target_modules_list = list(TrainConfig.TARGET_MODULES)
 
         lora_config = LoraConfig(
@@ -58,7 +58,6 @@ class FluxLoraCoreV02:
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА ---
         print(f"[ОТК] ДИАГНОСТИКА ИНЖЕКЦИИ LORA:")
-
         target_obj = lora_model
         if isinstance(lora_model, tuple):
             target_obj = lora_model[0]
@@ -73,8 +72,8 @@ class FluxLoraCoreV02:
 
             captured_layers = []
             for name, module in target_obj.named_modules():
-                if "lora" in name.lower():  # <-- Исправлен отступ (4 пробела)
-                    captured_layers.append(name)  # <-- Исправлен отступ
+                if "lora" in name.lower():
+                    captured_layers.append(name)
 
             print(f"  └── Количество захваченных слоев: {len(captured_layers)}")
             if len(captured_layers) > 0:
@@ -88,7 +87,8 @@ class FluxLoraCoreV02:
         print(f"[ОТК] Размерности базовых слоев:")
         for name, module in target_obj.named_modules():
             if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
-                print(f"  └── {name}: {module.weight.shape}")
+                if hasattr(module, 'weight'):
+                    print(f"  └── {name}: {module.weight.shape}")
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА END ---
         print("[ОБТ] Шаг З: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
