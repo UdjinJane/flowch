@@ -76,6 +76,12 @@ def main_train_loop():
         torch.cuda.manual_seed_all(42 + epoch)
         
         for step, batch in enumerate(dataloader):
+            # --- ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ЗОНД ОМНИССИИ ---
+            print(f"[ПРИБОР] Форма latents из кэша: {batch['latents'].shape}")
+            print(f"[ПРИБОР] Форма prompt_embeds из кэша: {batch['prompt_embeds'].shape}")
+            sys.exit(0) # Аварийный стоп после первого замера!
+            # ------------------------------------------
+
             global_step += 1
             
             latents = batch["latents"].to(device=device, dtype=torch.bfloat16)
@@ -87,14 +93,17 @@ def main_train_loop():
             
             packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
             
-            # --- ИСПРАВЛЕННЫЙ СНАЙПЕРСКИЙ РОПЕ-КОНТУР V02 (СТРОКИ 90-91) ---
-            # img_ids: генерируем чистую 2D сетку кадра [1024, 3] под разрешение 512px
-            img_ids = generate_flux_img_ids(TrainConfig.RESOLUTION, TrainConfig.RESOLUTION, device).to(torch.bfloat16)
+            # --- СНАЙПЕРСКИЙ РОПЕ-КОНТУР V03 (СТРОКИ 88-92) ---
+            # Извлекаем физическую латентную геометрию прямо с приборов [64, 64]
+            latents_h, latents_w = latents.shape[2], latents.shape[3]
             
-            # txt_ids: берём только длину токенов prompt_embeds.shape[1] (256) без батч-оси! Форма [256, 3]
+            # Генерируемimg_ids строго на основе латентных осей (64 и 64 -> выдаст)
+            img_ids = generate_flux_img_ids(latents_h * 2, latents_w * 2, device).to(torch.bfloat16)
+            
+            # txt_ids: строго 2D под длину текстового контекста prompt_embeds [256, 3]
             txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
-            # --------------------------------------------------------------
-
+            # --------------------------------------------------
+            
             
             # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
             pred_tensor = run_lora_model_step(
