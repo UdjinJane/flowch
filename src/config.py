@@ -1,8 +1,12 @@
 import os
 
-# Боевая конфигурация аллокатора PyTorch до инициализации контекста CUDA
-# Запрещаем агрессивное дробление памяти и выставляем порог сбора мусора в 80%
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512,garbage_collection_threshold:0.8"
+# Запрещаем фрагментацию, выставляем агрессивный сбор мусора и отключаем превентивный оффлоад WDDM
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
+    "max_split_size_mb:256,"
+    "garbage_collection_threshold:0.6,"
+    "expandable_segments:True"
+)
+
 
 class TrainConfig:
     """

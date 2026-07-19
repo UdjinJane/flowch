@@ -143,7 +143,10 @@ def main_train_loop():
                 optimizer.step()
                 optimizer.zero_grad()
                 
+            # Принудительно вычищаем системные ссылки Python и сбрасываем кэш CUDA на каждом шаге
+            gc.collect()
             torch.cuda.empty_cache()
+
             
             if global_step % 10 == 0:
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
