@@ -24,39 +24,23 @@ class FluxLoraCoreV02:
             torch.cuda.reset_peak_memory_stats()
 # === КОНЕЦ БЛОКА 1 ===
 
-# === БЛОК 2: ЧЕСТНЫЙ FP8 И ЗАЩИТА СИГНАЛЬНЫХ ЗОН ЭМБЕДДЕРОВ ===
-# [Этот блок считывает конфигурацию, собирает базовый каркас,]
-# [заливает веса в нативном FP8 и защищает bfloat16-зоны x_embedder и time_text_embed]
-        # Безопасное чтение конфигурации с подавлением UTF-8 BOM маркера
-        config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
-        with open(config_json_path, "r", encoding="utf-8-sig") as f:
-            config_dict = json.load(f)
-        
-        # Razворачиваем каркас сразу в типе float8_e4m3fn для жесткой экономии VRAM
-        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
-        
-        # Холодная вычитка монолита весов с диска напрямую в память CPU
-        state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-        
-        # Очистка префиксов ключей ComfyUI с сохранением нативного FP8 типа данных
-        clean_state_dict = {
-            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v
-            for k, v in state_dict.items()
-        }
-        
-        # Накатываем веса на FP8 каркас
-        transformer.load_state_dict(clean_state_dict, strict=False)
-        
-        # ХАРДКОРНЫЙ ФИКС: Принудительно возвращаем критические эмбеддеры в bfloat16 (требование Flux)
-        if hasattr(transformer, "x_embedder"):
-            transformer.x_embedder = transformer.x_embedder.to(dtype=torch.bfloat16)
-            
-        if hasattr(transformer, "time_text_embed"):
-            transformer.time_text_embed = transformer.time_text_embed.to(dtype=torch.bfloat16)
-            
-        print("[УСПЕХ] Базовая модель герметизирована в честном FP8. Сигнальные зоны x_embedder и time_text_embed переведены в bfloat16.")
-# === КОНЕЦ БЛОКА 2 ===
+# === БЛОК 2: ЧЕСТНЫЙ FP8 И ПОЛНАЯ ЗАЩИТА ВХОДНЫХ ЭМБЕДДЕРОВ ===
+# Чтение конфигурации и инициализация модели в FP8
+config_dict = json.load(open(os.path.join(TrainConfig.SRC_DIR, "transformer_config.json"), "r", encoding="utf-8-sig"))
+transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
 
+# Загрузка и очистка весов
+state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
+clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
+transformer.load_state_dict(clean_state_dict, strict=False)
+
+# Фикс эмбеддеров (перевод в bfloat16 для стабильности)
+for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
+    if hasattr(transformer, attr):
+        setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
+
+print("[УСПЕХ] Модель в FP8, входные эмбеддеры переведены в bfloat16.")
+# === КОНЕЦ БЛОКА 2 ===
 
 # === БЛОК 3: ИНЖЕКЦИЯ LORA С ПРИНУДИТЕЛЬНЫМ ВЫКЛЮЧЕНИЕМ TORCHAO ===
 # [Этот блок настраивает PEFT-адаптеры, блокирует конфликты с torchao]
