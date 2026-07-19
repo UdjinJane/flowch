@@ -84,11 +84,11 @@ class FluxLoraCoreV02:
             #print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
             #print(f"  └── Сообщение ошибки: {e}")
 
-        print(f"[ОТК] Размерности базовых слоев:")
-        for name, module in target_obj.named_modules():
-            if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
-                if hasattr(module, 'weight'):
-                    print(f"  └── {name}: {module.weight.shape}")
+        #print(f"[ОТК] Размерности базовых слоев:")
+        #for name, module in target_obj.named_modules():
+            #if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
+                #if hasattr(module, 'weight'):
+                    #print(f"  └── {name}: {module.weight.shape}")
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА END ---
         print("[ОБТ] Шаг З: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")

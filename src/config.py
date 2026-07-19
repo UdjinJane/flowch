@@ -41,7 +41,7 @@ class TrainConfig:
     MAX_SEQUENCE_LENGTH = 256
     RESOLUTION = 512
     BATCH_SIZE = 1
-    GRADIENT_ACCUMULATION_STEPS = 4  # Удержание стабильности лосса из репозитория
+    GRADIENT_ACCUMULATION_STEPS = 2  # Удержание стабильности лосса из репозитория
     LEARNING_RATE = 2e-5
     MAX_TRAIN_STEPS = 1500
     SAVE_STEPS = 100
