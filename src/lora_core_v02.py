@@ -76,19 +76,19 @@ class FluxLoraCoreV02:
                     captured_layers.append(name)
 
             print(f"  └── Количество захваченных слоев: {len(captured_layers)}")
-            #if len(captured_layers) > 0:
-            #    print(f"  └── Список захваченных слоев (первые 10): {captured_layers[:10]}")
-            #else:
-            #    print("  └── [КРИТИЧЕСКАЯ ОШИБКА] ПЕFT НЕ НАШЕЛ НИ ОДНОГО СЛОЯ! LoRA НЕ РАБОТАЕТ!")
-        #except Exception as e:
-            #print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
-            #print(f"  └── Сообщение ошибки: {e}")
+            if len(captured_layers) > 0:
+                print(f"  └── Список захваченных слоев (первые 10): {captured_layers[:10]}")
+            else:
+                print("  └── [КРИТИЧЕСКАЯ ОШИБКА] ПЕFT НЕ НАШЕЛ НИ ОДНОГО СЛОЯ! LoRA НЕ РАБОТАЕТ!")
+        except Exception as e:
+            print(f"  └── [ОШИБКА ДИАГНОСТИКИ]: Не удалось прочитать параметры. Тип объекта: {type(target_obj)}")
+            print(f"  └── Сообщение ошибки: {e}")
 
-        #print(f"[ОТК] Размерности базовых слоев:")
-        #for name, module in target_obj.named_modules():
-            #if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
-                #if hasattr(module, 'weight'):
-                    #print(f"  └── {name}: {module.weight.shape}")
+        print(f"[ОТК] Размерности базовых слоев:")
+        for name, module in target_obj.named_modules():
+            if "to_out" in name or "to_q" in name or "to_k" in name or "to_v" in name:
+                if hasattr(module, 'weight'):
+                    print(f"  └── {name}: {module.weight.shape}")
 
         # --- ДИАГНОСТИЧЕСКИЙ БЛОК ОТ ИНТЕРНА END ---
         print("[ОБТ] Шаг З: Заморозка базовых матриц, активация чекпоинтинга и фиксация LoRA...")
@@ -126,6 +126,6 @@ if __name__ == "__main__":
     print("[ОБТ] Холодный тест отсека инжекции V02...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
     trainable_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
-    # Временно закомментировано. Уж больно засирает консоль ..
-    # print(f"--- [ОТК] ТЕСТ ИНЖЕКЦИИ LORA V02 ПРОЙДЕН (Активные веса: {trainable_params:,}) ---")
+
+    print(f"--- [ОТК] ТЕСТ ИНЖЕКЦИИ LORA V02 ПРОЙДЕН (Активные веса: {trainable_params:,}) ---")
 # === БЛОК ЯДРА LORA V02 ФИНАЛ ===
