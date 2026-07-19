@@ -7,12 +7,15 @@ class TrainConfig:
     DATASET_DIR = os.path.join(ROOT_DIR, "dataset", "mng_oks_bl")
     CACHE_DIR = os.path.join(ROOT_DIR, "cache")
     OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
-    
+    MODELS_CORE_DIR = os.path.join(ROOT_DIR, "models_core") # Объявлено строго здесь!
     METADATA_PATH = os.path.join(DATASET_DIR, "metadata.jsonl")
     
     # Исправленные пути для кэша
     CACHE_TEXT_DIR = os.path.join(CACHE_DIR, "text_embeds")
     CACHE_LATENT_DIR = os.path.join(CACHE_DIR, "latent_embeds")
+    
+    # --- Путь к отсеку логов со скриншота ---
+    LOGS_DIR = os.path.join(OUTPUT_DIR, "logs")
     
     # --- Пути к локальным моделям (согласно скриншотам) ---
     # 1. Трансформер Chroma1
