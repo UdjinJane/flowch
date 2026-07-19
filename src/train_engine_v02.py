@@ -123,7 +123,7 @@ def main_train_loop():
             packed_target_flow = pack_latents_to_patches(target_flow)
             
             if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape, :]
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :]
             
             loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
             

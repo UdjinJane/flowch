@@ -126,5 +126,6 @@ if __name__ == "__main__":
     print("[ОБТ] Холодный тест отсека инжекции V02...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
     trainable_params = sum(p.numel() for p in lora_model.parameters() if p.requires_grad)
-    print(f"--- [ОТК] ТЕСТ ИНЖЕКЦИИ LORA V02 ПРОЙДЕН (Активные веса: {trainable_params:,}) ---")
+    # Временно закомментировано. Уж больно засирает консоль ..
+    # print(f"--- [ОТК] ТЕСТ ИНЖЕКЦИИ LORA V02 ПРОЙДЕН (Активные веса: {trainable_params:,}) ---")
 # === БЛОК ЯДРА LORA V02 ФИНАЛ ===
