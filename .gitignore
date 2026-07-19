@@ -67,3 +67,4 @@ dataset/mng_oks_bl/DSC_0572.txt
 /.continue
 /.inverse
 /learn/ao
+*.py_backup

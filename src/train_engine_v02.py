@@ -1,9 +1,20 @@
+import os
+import sys
+import gc
+import shutil
 import torch
 import torch.nn.functional as F
+# ... (остальные кастомные импорты v02)
+from torch.optim import AdamW
 from config import TrainConfig
-# ... остальные импорты (os, sys, gc, конкретные модули v02)
+from generate_v02 import run_inference_v02
+from dataset_v02 import get_dataloader_v02
+from lora_core_v02 import FluxLoraCoreV02
+from model_runner_v02 import run_lora_model_step
 
 def pack_latents_to_patches(latents):
+# ... (весь остальной код функций без изменений)
+
     """
     Упаковывает 4D-латенты [B, C, H, W] в 3D-тензор Flux [B, L, C*4].
     """
