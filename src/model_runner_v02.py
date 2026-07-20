@@ -77,4 +77,4 @@ if hasattr(base_transformer, "single_transformer_blocks"):
             
     return pred_tensor.to(dtype=meta_dtype)
     
-# === КОНЕЦ БЛОКА 2.2 ===    
+# === КОНЕЦ БЛОКА 2.2 ==    
