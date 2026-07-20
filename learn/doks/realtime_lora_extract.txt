@@ -1,0 +1,4526 @@
+﻿=== FILE: lora_analyzer_v2.py ===
+"""
+LoRA Loader with Analysis V2 for ComfyUI
+
+Features:
+- Improved architecture detection using metadata, scoring, and block counting
+- Combined analyzer + selective loader in one node
+- Strength shaping (scheduling) via ComfyUI hooks
+- Per-block toggles and strength sliders with impact coloring
+
+Strength Schedule Format: "0:.2,.2:.3,.5:.6,1:.9"
+- Each pair is "step_percent:strength"
+- Values interpolate linearly between keyframes
+"""
+
+import os
+import re
+import json
+from collections import defaultdict
+from datetime import datetime
+import threading
+
+import torch
+import folder_paths
+import comfy.sd
+import comfy.model_patcher
+import comfy.hooks
+import comfy.utils
+from safetensors.torch import load_file, save_file
+from safetensors import safe_open
+
+from .quant_utils import is_quantized_model
+
+# Path to store per-node config (last used save paths)
+_NODE_CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+_SAVE_PATHS_CONFIG = os.path.join(_NODE_CONFIG_DIR, ".v2_save_paths.json")
+
+# ============================================================================
+# STRENGTH SCHEDULE PRESETS
+# ============================================================================
+# Format: "step:strength" pairs, comma-separated. Steps are 0-1 (percent of generation).
+# These presets are shown in dropdown, value populates the editable text field.
+
+SCHEDULE_PRESETS = {
+    # === No Schedule ===
+    "Custom": "",
+    "Constant 1.0 (No Change)": "0:1, 1:1",
+
+    # === Basic Fades ===
+    "Linear In (0→1)": "0:0, 1:1",
+    "Linear Out (1→0)": "0:1, 1:0",
+
+    # === Ease Curves ===
+    "Ease In (slow start)": "0:0, 0.3:0.1, 0.7:0.5, 1:1",
+    "Ease Out (slow end)": "0:1, 0.3:0.5, 0.7:0.9, 1:0",
+    "Ease In-Out": "0:0, 0.3:0.1, 0.7:0.9, 1:1",
+
+    # === Bell Curves ===
+    "Bell Curve (peak middle)": "0:0, 0.5:1, 1:0",
+    "Wide Bell": "0:0, 0.3:0.8, 0.7:0.8, 1:0",
+    "Sharp Bell": "0:0, 0.4:0.2, 0.5:1, 0.6:0.2, 1:0",
+
+    # === Structure LoRA Favorites ===
+    "High Start → Cut Low": "0:1, 0.3:1, 0.35:0.2, 1:0.2",
+    "High Start → Cut Off": "0:1, 0.3:1, 0.35:0, 1:0",
+    "High Early → Fade": "0:1, 0.2:0.8, 0.5:0.3, 1:0",
+
+    # === Detail LoRA Favorites ===
+    "Low Start → Ramp Late": "0:0, 0.6:0.1, 0.8:0.7, 1:1",
+    "Off → Kick In Late": "0:0, 0.7:0, 0.75:0.8, 1:1",
+    "Low → Boost End": "0:0.2, 0.5:0.2, 0.7:0.6, 1:1",
+
+    # === Step Functions ===
+    "Step Up Mid": "0:0.2, 0.45:0.2, 0.55:0.8, 1:0.8",
+    "Step Down Mid": "0:0.8, 0.45:0.8, 0.55:0.2, 1:0.2",
+    "Two Steps Up": "0:0, 0.3:0, 0.35:0.5, 0.65:0.5, 0.7:1, 1:1",
+
+    # === Pulses ===
+    "Pulse Early": "0:1, 0.25:1, 0.35:0.2, 1:0.2",
+    "Pulse Mid": "0:0.2, 0.4:0.2, 0.45:1, 0.55:1, 0.6:0.2, 1:0.2",
+    "Pulse Late": "0:0.2, 0.65:0.2, 0.75:1, 1:1",
+
+    # === Constant (for testing) ===
+    "Constant Half": "0:0.5, 1:0.5",
+    "Constant Low": "0:0.3, 1:0.3",
+
+    # =========================================================================
+    # INVERTED VERSIONS (same order as above)
+    # =========================================================================
+
+    # === Basic Fades (Inverted) ===
+    "INV: Linear In (1→0)": "0:1, 1:0",
+    "INV: Linear Out (0→1)": "0:0, 1:1",
+
+    # === Ease Curves (Inverted) ===
+    "INV: Ease In": "0:1, 0.3:0.9, 0.7:0.5, 1:0",
+    "INV: Ease Out": "0:0, 0.3:0.5, 0.7:0.1, 1:1",
+    "INV: Ease In-Out": "0:1, 0.3:0.9, 0.7:0.1, 1:0",
+
+    # === Bell Curves (Inverted) ===
+    "INV: Bell (dip middle)": "0:1, 0.5:0, 1:1",
+    "INV: Wide Bell": "0:1, 0.3:0.2, 0.7:0.2, 1:1",
+    "INV: Sharp Bell": "0:1, 0.4:0.8, 0.5:0, 0.6:0.8, 1:1",
+
+    # === Structure Inverted ===
+    "INV: Low Start → Boost High": "0:0, 0.3:0, 0.35:0.8, 1:0.8",
+    "INV: Low Start → Full On": "0:0, 0.3:0, 0.35:1, 1:1",
+    "INV: Low Early → Build": "0:0, 0.2:0.2, 0.5:0.7, 1:1",
+
+    # === Detail Inverted ===
+    "INV: High Start → Drop Late": "0:1, 0.6:0.9, 0.8:0.3, 1:0",
+    "INV: Full → Cut Off Late": "0:1, 0.7:1, 0.75:0.2, 1:0",
+    "INV: High → Drop End": "0:0.8, 0.5:0.8, 0.7:0.4, 1:0",
+
+    # === Step Functions (Inverted) ===
+    "INV: Step Down Mid": "0:0.8, 0.45:0.8, 0.55:0.2, 1:0.2",
+    "INV: Step Up Mid": "0:0.2, 0.45:0.2, 0.55:0.8, 1:0.8",
+    "INV: Two Steps Down": "0:1, 0.3:1, 0.35:0.5, 0.65:0.5, 0.7:0, 1:0",
+
+    # === Pulses (Inverted) ===
+    "INV: Dip Early": "0:0, 0.25:0, 0.35:0.8, 1:0.8",
+    "INV: Dip Mid": "0:0.8, 0.4:0.8, 0.45:0, 0.55:0, 0.6:0.8, 1:0.8",
+    "INV: Dip Late": "0:0.8, 0.65:0.8, 0.75:0, 1:0",
+}
+
+# List for dropdown (maintains order)
+SCHEDULE_PRESET_LIST = list(SCHEDULE_PRESETS.keys())
+
+
+def _load_save_paths_config() -> dict:
+    """Load saved paths config from JSON file."""
+    if os.path.exists(_SAVE_PATHS_CONFIG):
+        try:
+            with open(_SAVE_PATHS_CONFIG, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_save_paths_config(config: dict):
+    """Save paths config to JSON file."""
+    try:
+        with open(_SAVE_PATHS_CONFIG, 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"[LoRA V2] Warning: Could not save config: {e}")
+
+
+def _save_refined_lora(filtered_lora: dict, save_path: str, save_filename: str,
+                       node_id: str, architecture: str = None, original_metadata: dict = None) -> str:
+    """
+    Save a refined LoRA to disk.
+
+    Args:
+        filtered_lora: The filtered/scaled LoRA state dict
+        save_path: Directory to save to
+        save_filename: Base filename (timestamp will be appended)
+        node_id: Node type ID for default filename
+        architecture: Model architecture (ZIMAGE, SDXL, FLUX, etc.)
+        original_metadata: Metadata from original LoRA to preserve
+
+    Returns:
+        Full path to saved file, or None if not saved
+    """
+    if not save_path or not save_path.strip():
+        return None
+
+    save_path = os.path.expanduser(save_path.strip())  # Support ~/paths on Linux/Mac
+
+    # Ensure directory exists
+    if not os.path.exists(save_path):
+        try:
+            os.makedirs(save_path, exist_ok=True)
+        except Exception as e:
+            print(f"[LoRA V2] Error creating directory {save_path}: {e}")
+            return None
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if save_filename and save_filename.strip():
+        base_name = save_filename.strip()
+        # Remove .safetensors extension if user added it
+        if base_name.lower().endswith('.safetensors'):
+            base_name = base_name[:-12]
+        filename = f"{base_name}_{timestamp}.safetensors"
+    else:
+        # Use node ID as default name
+        filename = f"{node_id}_{timestamp}.safetensors"
+
+    full_path = os.path.join(save_path, filename)
+
+    # Prepare metadata
+    metadata = {}
+    if original_metadata:
+        # Copy relevant metadata from original
+        for key in ['ss_base_model_version', 'ss_network_module', 'ss_network_dim',
+                    'ss_network_alpha', 'modelspec.architecture', 'modelspec.title']:
+            if key in original_metadata:
+                metadata[key] = original_metadata[key]
+
+    # Add our own metadata
+    metadata['refined_by'] = 'comfyui-zimage-realtime-lora V2'
+    metadata['refined_url'] = 'https://github.com/ShootTheSound/comfyUI-Realtime-Lora'
+    metadata['refined_date'] = datetime.now().isoformat()
+    metadata['refined_node'] = node_id
+    if architecture:
+        metadata['refined_architecture'] = architecture
+
+    try:
+        save_file(filtered_lora, full_path, metadata=metadata)
+        print(f"[LoRA V2] Saved refined LoRA: {full_path}")
+        return full_path
+    except Exception as e:
+        print(f"[LoRA V2] Error saving LoRA to {full_path}: {e}")
+        return None
+
+
+# ============================================================================
+# STRENGTH SCHEDULE PARSING
+# ============================================================================
+
+def _parse_strength_schedule(schedule_str: str) -> list:
+    """
+    Parse a strength schedule string into keyframes.
+
+    Format: "0:.2,.2:.3,.5:.6,1:.9"
+    Each pair is "percent:strength" where:
+    - percent is 0.0 to 1.0 (proportion of steps)
+    - strength is the LoRA strength at that point
+
+    Values are interpolated linearly between keyframes.
+
+    Returns list of (percent, strength) tuples, sorted by percent.
+    """
+    if not schedule_str or not schedule_str.strip():
+        return None
+
+    schedule_str = schedule_str.strip()
+
+    # Check if it's just a float (no schedule)
+    try:
+        val = float(schedule_str)
+        return None  # Just a regular float, no schedule
+    except ValueError:
+        pass
+
+    keyframes = []
+    pairs = schedule_str.split(',')
+
+    for pair in pairs:
+        pair = pair.strip()
+        if ':' not in pair:
+            continue
+
+        parts = pair.split(':')
+        if len(parts) != 2:
+            continue
+
+        try:
+            percent = float(parts[0].strip())
+            strength = float(parts[1].strip())
+
+            # Clamp percent to 0-1
+            percent = max(0.0, min(1.0, percent))
+
+            keyframes.append((percent, strength))
+        except ValueError:
+            continue
+
+    if not keyframes:
+        return None
+
+    # Sort by percent
+    keyframes.sort(key=lambda x: x[0])
+
+    return keyframes
+
+
+def _create_hook_keyframes_interpolated(keyframes: list, num_keyframes: int = 20) -> comfy.hooks.HookKeyframeGroup:
+    """
+    Create hook keyframes with linear interpolation between user-defined points.
+
+    keyframes: list of (percent, strength) tuples
+    num_keyframes: number of keyframes to generate for smooth interpolation
+    """
+    if not keyframes:
+        return None
+
+    kf_group = comfy.hooks.HookKeyframeGroup()
+
+    # Generate interpolated keyframes
+    for i in range(num_keyframes + 1):
+        percent = i / num_keyframes
+
+        # Find surrounding keyframes for interpolation
+        strength = _interpolate_strength(keyframes, percent)
+
+        guarantee_steps = 1 if i == 0 else 0
+        kf = comfy.hooks.HookKeyframe(strength=strength, start_percent=percent, guarantee_steps=guarantee_steps)
+        kf_group.add(kf)
+
+    return kf_group
+
+
+def _interpolate_strength(keyframes: list, percent: float) -> float:
+    """Linearly interpolate strength at a given percent."""
+    if not keyframes:
+        return 1.0
+
+    # Before first keyframe
+    if percent <= keyframes[0][0]:
+        return keyframes[0][1]
+
+    # After last keyframe
+    if percent >= keyframes[-1][0]:
+        return keyframes[-1][1]
+
+    # Find surrounding keyframes
+    for i in range(len(keyframes) - 1):
+        p1, s1 = keyframes[i]
+        p2, s2 = keyframes[i + 1]
+
+        if p1 <= percent <= p2:
+            # Linear interpolation
+            if p2 == p1:
+                return s1
+            t = (percent - p1) / (p2 - p1)
+            return s1 + t * (s2 - s1)
+
+    return keyframes[-1][1]
+
+
+def _load_lora_with_schedule(model, clip, lora_path: str, strength_model: float, strength_clip: float, schedule_str: str = None):
+    """
+    Load LoRA with optional strength scheduling.
+
+    If schedule_str is provided and valid, returns (model, clip, hooks, is_scheduled).
+    If no schedule, returns (model_lora, clip_lora, None, False).
+    """
+    # Load LoRA file
+    if lora_path.endswith('.safetensors'):
+        lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+    else:
+        lora = torch.load(lora_path, map_location='cpu')
+
+    # Check for schedule
+    schedule = _parse_strength_schedule(schedule_str) if schedule_str else None
+
+    if schedule:
+        # Use hook system for scheduling
+        print(f"[LoRA V2] Using strength schedule: {schedule}")
+
+        # Create hooks
+        hooks = comfy.hooks.create_hook_lora(lora=lora, strength_model=strength_model, strength_clip=strength_clip)
+
+        # Create keyframes
+        kf_group = _create_hook_keyframes_interpolated(schedule)
+
+        # Apply keyframes to all hooks in group
+        if kf_group and hooks:
+            for hook in hooks.hooks:
+                hook.hook_keyframe = kf_group
+
+        return (model, clip, hooks, True)
+    else:
+        # Standard LoRA loading
+        model_lora, clip_lora = comfy.sd.load_lora_for_models(
+            model, clip, lora, strength_model, strength_clip
+        )
+        return (model_lora, clip_lora, None, False)
+
+
+# ============================================================================
+# V2 IMPROVED ARCHITECTURE DETECTION
+# ============================================================================
+
+def _get_metadata(lora_path: str) -> dict:
+    """Extract metadata from safetensors file."""
+    if not lora_path.endswith('.safetensors'):
+        return {}
+    try:
+        with safe_open(lora_path, framework="pt") as f:
+            metadata = f.metadata()
+            return metadata if metadata else {}
+    except Exception as e:
+        print(f"[LoRA Analyzer V2] Could not read metadata: {e}")
+        return {}
+
+
+def _detect_from_metadata(metadata: dict) -> str:
+    """Try to detect architecture from safetensors metadata."""
+    if not metadata:
+        return None
+
+    # Check modelspec.architecture (newer LoRAs)
+    arch = metadata.get('modelspec.architecture', '').lower()
+
+    # Check for FLUX Klein variants first (before generic FLUX). Match loosely on
+    # "klein" + size so the distilled and base variants both resolve, e.g.
+    # flux-2-klein-9b AND flux-2-klein-base-9b.
+    if 'klein' in arch and '4b' in arch:
+        return 'FLUX_KLEIN_4B'
+    if 'klein' in arch and '9b' in arch:
+        return 'FLUX_KLEIN_9B'
+    if 'flux' in arch:
+        return 'FLUX'
+    if 'sdxl' in arch:
+        return 'SDXL'
+    if 'sd1' in arch or 'sd15' in arch:
+        return 'SD15'
+
+    # Check ss_base_model_version (Kohya format)
+    base_model = metadata.get('ss_base_model_version', '').lower()
+    # Check Klein variants first (loose match catches *-klein-base-9b etc.)
+    if 'klein' in base_model and '4b' in base_model:
+        return 'FLUX_KLEIN_4B'
+    if 'klein' in base_model and '9b' in base_model:
+        return 'FLUX_KLEIN_9B'
+    if 'sdxl' in base_model:
+        return 'SDXL'
+    if 'sd_v1' in base_model or 'sd1' in base_model:
+        return 'SD15'
+    if 'flux' in base_model:
+        return 'FLUX'
+
+    # Check ss_network_module (Kohya format)
+    network_module = metadata.get('ss_network_module', '').lower()
+    if 'flux' in network_module:
+        return 'FLUX'
+    if 'zimage' in network_module or 'z_image' in network_module:
+        return 'ZIMAGE'
+    if 'wan' in network_module:
+        return 'WAN'
+    if 'qwen' in network_module:
+        return 'QWEN_IMAGE'
+
+    # Check ss_sd_model_name for hints
+    model_name = metadata.get('ss_sd_model_name', '').lower()
+    if 'flux' in model_name:
+        return 'FLUX'
+    if 'sdxl' in model_name or 'xl' in model_name:
+        return 'SDXL'
+    if 'z-image' in model_name or 'zimage' in model_name:
+        return 'ZIMAGE'
+
+    return None
+
+
+def _count_unique_blocks(keys: list) -> dict:
+    """Count unique block numbers for each potential architecture."""
+    counts = {
+        'zimage_layers': set(),
+        'flux_double': set(),
+        'flux_single': set(),
+        'wan_blocks': set(),
+        'qwen_blocks': set(),
+        'sdxl_blocks': set(),
+        'sd15_blocks': set(),
+    }
+
+    for key in keys:
+        key_lower = key.lower()
+
+        # Z-Image layers (0-29)
+        match = re.search(r'diffusion_model\.layers\.(\d+)', key)
+        if match:
+            counts['zimage_layers'].add(int(match.group(1)))
+        match = re.search(r'lora_unet_layers_(\d+)_', key)
+        if match:
+            counts['zimage_layers'].add(int(match.group(1)))
+        # LyCORIS/LoKR format: lycoris_layers_N_...
+        match = re.search(r'lycoris_layers_(\d+)_', key)
+        if match:
+            counts['zimage_layers'].add(int(match.group(1)))
+
+        # FLUX double blocks (0-18) and single blocks (0-37)
+        # Standard format
+        match = re.search(r'double_blocks?[._]?(\d+)', key_lower)
+        if match:
+            counts['flux_double'].add(int(match.group(1)))
+        # AI-Toolkit format: transformer.transformer_blocks.N (double blocks)
+        if 'single_transformer_blocks' not in key_lower:
+            match = re.search(r'transformer\.transformer_blocks[._]?(\d+)', key_lower)
+            if match:
+                counts['flux_double'].add(int(match.group(1)))
+        # Kohya format: transformer_double_blocks_N (double blocks)
+        match = re.search(r'transformer_double_blocks[._]?(\d+)', key_lower)
+        if match:
+            counts['flux_double'].add(int(match.group(1)))
+        # Single blocks - handles all formats including transformer_single_transformer_blocks_N
+        match = re.search(r'single_transformer_blocks[._]?(\d+)', key_lower)
+        if match:
+            counts['flux_single'].add(int(match.group(1)))
+        match = re.search(r'(?<!transformer_)single_blocks[._]?(\d+)', key_lower)
+        if match:
+            counts['flux_single'].add(int(match.group(1)))
+
+        # Wan blocks (0-39)
+        if any(x in key_lower for x in ['self_attn', 'cross_attn', 'ffn']):
+            match = re.search(r'blocks[._](\d+)', key_lower)
+            if match:
+                counts['wan_blocks'].add(int(match.group(1)))
+
+        # Qwen blocks (0-59)
+        if any(x in key_lower for x in ['img_mlp', 'txt_mlp', 'img_mod', 'txt_mod']):
+            match = re.search(r'transformer_blocks[._](\d+)', key)
+            if match:
+                counts['qwen_blocks'].add(int(match.group(1)))
+
+        # SDXL/SD15 blocks
+        match = re.search(r'input_blocks?[._]?(\d+)', key_lower)
+        if match:
+            block_num = int(match.group(1))
+            if block_num >= 7:
+                counts['sdxl_blocks'].add(block_num)
+            counts['sd15_blocks'].add(block_num)
+
+    return {k: len(v) for k, v in counts.items()}
+
+
+def _score_architecture(keys: list, num_keys: int, block_counts: dict) -> dict:
+    """Score each architecture based on multiple signals."""
+    scores = {
+        'QWEN_IMAGE': 0,
+        'FLUX': 0,
+        'FLUX_KLEIN_4B': 0,
+        'FLUX_KLEIN_9B': 0,
+        'ZIMAGE': 0,
+        'WAN': 0,
+        'SDXL': 0,
+        'SD15': 0,
+    }
+
+    keys_lower = [k.lower() for k in keys]
+    keys_str = ' '.join(keys_lower)
+
+    # === QWEN_IMAGE scoring ===
+    if any('transformer_blocks' in k and any(x in k for x in ['img_mlp', 'txt_mlp', 'img_mod', 'txt_mod']) for k in keys_lower):
+        scores['QWEN_IMAGE'] += 50
+    if block_counts['qwen_blocks'] >= 50:  # Expect ~60 blocks
+        scores['QWEN_IMAGE'] += 30
+    elif block_counts['qwen_blocks'] >= 30:
+        scores['QWEN_IMAGE'] += 15
+
+    # === FLUX scoring ===
+    # AI-Toolkit format with transformer. prefix
+    if any('transformer.single_transformer_blocks' in k or 'transformer.double_blocks' in k for k in keys_lower):
+        scores['FLUX'] += 50
+    # AI-Toolkit alternate format: transformer.transformer_blocks (double blocks)
+    if any('transformer.transformer_blocks' in k and 'single_transformer_blocks' not in k for k in keys_lower):
+        scores['FLUX'] += 40
+    # Kohya/other format: lora_transformer_single_transformer_blocks / lora_transformer_double_blocks (underscores)
+    if any('transformer_single_transformer_blocks' in k or 'transformer_double_blocks' in k for k in keys_lower):
+        scores['FLUX'] += 45
+    # Standard double_blocks/single_blocks
+    if any('double_blocks' in k for k in keys_lower):
+        scores['FLUX'] += 25
+    if any('single_blocks' in k and 'transformer_blocks' not in k for k in keys_lower):
+        scores['FLUX'] += 20
+    # Block count check (19 double + up to 38 single = 57 total possible)
+    if block_counts['flux_double'] >= 15:
+        scores['FLUX'] += 20
+    if block_counts['flux_single'] >= 30:
+        scores['FLUX'] += 15
+
+    # === FLUX KLEIN 4B scoring ===
+    # Klein 4B has exactly 5 double blocks (0-4) and 20 single blocks (0-19)
+    if block_counts['flux_double'] == 5 and block_counts['flux_single'] == 20:
+        scores['FLUX_KLEIN_4B'] += 80
+    elif 4 <= block_counts['flux_double'] <= 6 and 18 <= block_counts['flux_single'] <= 22:
+        scores['FLUX_KLEIN_4B'] += 40
+    # Klein uses same key patterns as FLUX, so give base score if FLUX patterns present
+    if any('double_blocks' in k or 'single_blocks' in k for k in keys_lower):
+        if block_counts['flux_double'] <= 6:  # Can't be standard FLUX with so few double blocks
+            scores['FLUX_KLEIN_4B'] += 10
+
+    # === FLUX KLEIN 9B scoring ===
+    # Klein 9B has exactly 8 double blocks (0-7) and 24 single blocks (0-23)
+    if block_counts['flux_double'] == 8 and block_counts['flux_single'] == 24:
+        scores['FLUX_KLEIN_9B'] += 80
+    elif 7 <= block_counts['flux_double'] <= 9 and 22 <= block_counts['flux_single'] <= 26:
+        scores['FLUX_KLEIN_9B'] += 40
+    # Klein uses same key patterns as FLUX, so give base score if FLUX patterns present
+    if any('double_blocks' in k or 'single_blocks' in k for k in keys_lower):
+        if 6 < block_counts['flux_double'] <= 10:  # In range for Klein 9B but not standard FLUX
+            scores['FLUX_KLEIN_9B'] += 10
+
+    # === Z-IMAGE scoring ===
+    # ComfyUI/AI-Toolkit format
+    if any('diffusion_model.layers.' in k and ('attention' in k or 'adaln' in k.lower()) for k in keys_lower):
+        scores['ZIMAGE'] += 50
+    # Musubi Tuner format
+    if any('lora_unet_layers_' in k and 'attention' in k for k in keys_lower):
+        scores['ZIMAGE'] += 50
+    # Old format (but NOT with transformer. prefix - that's FLUX)
+    if any('single_transformer_blocks' in k and 'transformer.single_transformer_blocks' not in k for k in keys_lower):
+        scores['ZIMAGE'] += 30
+    # Block count check (exactly 30 layers)
+    if block_counts['zimage_layers'] >= 25:
+        scores['ZIMAGE'] += 25
+    if block_counts['zimage_layers'] == 30:
+        scores['ZIMAGE'] += 15  # Bonus for exact match
+
+    # === WAN scoring ===
+    if any(('blocks.' in k or 'blocks_' in k) and any(x in k for x in ['self_attn', 'cross_attn', 'ffn']) for k in keys_lower):
+        scores['WAN'] += 50
+    if block_counts['wan_blocks'] >= 35:  # Expect ~40 blocks
+        scores['WAN'] += 25
+    elif block_counts['wan_blocks'] >= 20:
+        scores['WAN'] += 10
+
+    # === SDXL scoring ===
+    has_te1 = 'lora_te1_' in keys_str or 'text_encoder_1' in keys_str
+    has_te2 = 'lora_te2_' in keys_str or 'text_encoder_2' in keys_str
+    if has_te1 and has_te2:
+        scores['SDXL'] += 50
+    if any('input_blocks_7' in k or 'input_blocks_8' in k or 'input_blocks.7' in k or 'input_blocks.8' in k for k in keys_lower):
+        scores['SDXL'] += 30
+    # Diffusers SDXL signature: down_blocks.2 / up_blocks.0 attentions exist (SDXL has
+    # attention at down level 2 and up levels 0/1, distinguishing from SD15's level 0/1).
+    if any(re.search(r'down_blocks?[._]2[._]attentions', k) for k in keys_lower):
+        scores['SDXL'] += 30
+    if any(re.search(r'up_blocks?[._]0[._]attentions[._]2', k) for k in keys_lower):
+        scores['SDXL'] += 20  # up_blocks.0 has 3 attention layers — only SDXL has this
+    if num_keys > 1500:
+        scores['SDXL'] += 25
+    elif num_keys > 1000:
+        scores['SDXL'] += 10
+
+    # === SD15 scoring ===
+    if any('lora_unet_' in k for k in keys_lower) and not any('lora_unet_layers_' in k for k in keys_lower):
+        scores['SD15'] += 30
+    if any('lora_te_' in k and 'lora_te1_' not in k and 'lora_te2_' not in k for k in keys_lower):
+        scores['SD15'] += 20
+    if any('input_blocks' in k for k in keys_lower) and num_keys < 1000:
+        scores['SD15'] += 20
+    if 600 <= num_keys <= 900:
+        scores['SD15'] += 15
+
+    # Penalize SD15 if we have strong signals for other architectures
+    if scores['ZIMAGE'] > 40:
+        scores['SD15'] -= 30
+    if scores['FLUX'] > 40:
+        scores['SD15'] -= 30
+
+    return scores
+
+
+def _detect_lora_type(keys: list) -> str:
+    """
+    Detect the LoRA training method (standard LoRA, LoKR, LoHa, etc.)
+    This is SEPARATE from architecture detection - a LoKR can be trained for any architecture.
+
+    Returns: 'LoRA', 'LoKR', 'LoHa', or 'GLoRA'
+    """
+    for key in keys:
+        key_lower = key.lower()
+        # LoKR detection: lokr_w1, lokr_w2, or decomposed forms (lokr_w1_a, lokr_w1_b)
+        if '.lokr_w1' in key_lower or '.lokr_w1_a' in key_lower:
+            return 'LoKR'
+        # LoHa detection: hada_w1_a, hada_w1_b, hada_w2_a, hada_w2_b
+        if '.hada_w1_a' in key_lower or '.hada_w2_a' in key_lower:
+            return 'LoHa'
+        # GLoRA detection: glora_a, glora_b
+        if '.glora_a' in key_lower or '.glora_b' in key_lower:
+            return 'GLoRA'
+    # Default: standard LoRA (uses lora_up/lora_down or lora_A/lora_B)
+    return 'LoRA'
+
+
+def _detect_architecture_v2(keys: list, metadata: dict = None) -> tuple:
+    """
+    V2 architecture detection using metadata, scoring, and block counting.
+    Returns (architecture, confidence, method).
+    """
+    num_keys = len(keys)
+
+    # Method 1: Try metadata first (most reliable)
+    if metadata:
+        arch = _detect_from_metadata(metadata)
+        if arch:
+            return (arch, 'high', 'metadata')
+
+    # Method 2: Count unique blocks
+    block_counts = _count_unique_blocks(keys)
+
+    # Method 3: Score each architecture
+    scores = _score_architecture(keys, num_keys, block_counts)
+
+    # Find highest scoring architecture
+    best_arch = max(scores, key=scores.get)
+    best_score = scores[best_arch]
+
+    # Determine confidence
+    if best_score >= 50:
+        confidence = 'high'
+    elif best_score >= 30:
+        confidence = 'medium'
+    else:
+        confidence = 'low'
+
+    # If confidence is low, fall back to UNKNOWN
+    if best_score < 20:
+        return ('UNKNOWN', 'low', 'fallback')
+
+    return (best_arch, confidence, 'scoring')
+
+
+# ============================================================================
+# BLOCK EXTRACTION (same as V1 but with improvements)
+# ============================================================================
+
+def _extract_block_id_v2(key: str, architecture: str) -> str:
+    """Extract block identifier from a LoRA/model weight key."""
+    key_lower = key.lower()
+
+    if architecture == 'QWEN_IMAGE':
+        match = re.search(r'transformer_blocks[._](\d+)', key)
+        return f"block_{match.group(1)}" if match else 'other'
+
+    elif architecture == 'ZIMAGE':
+        # AI-Toolkit format: diffusion_model.layers.N.attention/adaLN_modulation
+        # SimpleTuner comfyui format: diffusion_model.transformer.layers.N (Lumina2 preserves transformer prefix)
+        match = re.search(r'diffusion_model\.(?:transformer\.)?layers\.(\d+)', key)
+        if match:
+            return f"layer_{match.group(1)}"
+        # Musubi Tuner format: lora_unet_layers_N_attention_...
+        match = re.search(r'lora_unet_layers_(\d+)_', key)
+        if match:
+            return f"layer_{match.group(1)}"
+        # LyCORIS/LoKR format: lycoris_layers_N_...
+        match = re.search(r'lycoris_layers_(\d+)_', key)
+        if match:
+            return f"layer_{match.group(1)}"
+        # Old format: single_transformer_blocks.N
+        match = re.search(r'single_transformer_blocks\.(\d+)', key)
+        if match:
+            return f"block_{match.group(1)}"
+        # Context refiner (modal alignment blocks)
+        if 'context_refiner' in key_lower:
+            return 'context_refiner'
+        # Noise refiner
+        if 'noise_refiner' in key_lower:
+            return 'noise_refiner'
+        # Final layer
+        if 'all_final_layer' in key_lower or 'final_layer' in key_lower:
+            return 'final_layer'
+        # X embedder
+        if 'all_x_embedder' in key_lower or 'x_embedder' in key_lower:
+            return 'x_embedder'
+        return 'other'
+
+    elif architecture == 'WAN':
+        match = re.search(r'blocks[._](\d+)', key)
+        return f"block_{match.group(1)}" if match else 'other'
+
+    elif architecture in ('FLUX', 'FLUX_KLEIN_4B', 'FLUX_KLEIN_9B'):
+        # FLUX and Klein variants use the same key patterns
+        # FLUX has double blocks (19) and single blocks (38)
+        # Klein 4B has double blocks (5) and single blocks (20)
+        # Klein 9B has double blocks (8) and single blocks (24)
+        # Different trainers use different naming:
+        #   - Standard: double_blocks.N, single_blocks.N
+        #   - AI-Toolkit: transformer.transformer_blocks.N (double), transformer.single_transformer_blocks.N (single)
+        #   - Kohya/other: lora_transformer_single_transformer_blocks_N, lora_transformer_double_blocks_N
+
+        # Check single blocks FIRST (because "single_transformer_blocks" contains "transformer_blocks")
+        # Handles: single_transformer_blocks.N, single_transformer_blocks_N, transformer_single_transformer_blocks_N
+        single = re.search(r'single_transformer_blocks[._]?(\d+)', key_lower)
+        if single:
+            return f"single_{single.group(1)}"
+        single = re.search(r'single_blocks[._]?(\d+)', key_lower)
+        if single:
+            return f"single_{single.group(1)}"
+
+        # Double blocks - standard format
+        double = re.search(r'(?:transformer\.)?double_blocks?[._]?(\d+)', key_lower)
+        if double:
+            return f"double_{double.group(1)}"
+        # AI-Toolkit format: transformer.transformer_blocks.N (these are double blocks)
+        double = re.search(r'transformer\.transformer_blocks[._]?(\d+)', key_lower)
+        if double:
+            return f"double_{double.group(1)}"
+        # Kohya/other format: transformer_double_blocks_N (underscores, these are double blocks)
+        double = re.search(r'transformer_double_blocks[._]?(\d+)', key_lower)
+        if double:
+            return f"double_{double.group(1)}"
+
+        # Catch-all bucket. Must be 'other' (not 'other_weights') so it matches the
+        # `if block_id == 'other'` branch in _filter_lora_by_blocks and is gated by the
+        # 'other_weights' toggle/strength — same as every other architecture.
+        return 'other'
+
+    elif architecture in ['SDXL', 'SD15']:
+        # Text encoders. Both kohya-style (`lora_te1_*`/`lora_te2_*`) and
+        # Diffusers-style (`text_encoder.*`/`text_encoder_2.*`) are recognised.
+        te_kohya = re.search(r'lora_te(\d?)_', key_lower)
+        if te_kohya:
+            return f"text_encoder_{te_kohya.group(1) or '1'}"
+        if 'text_encoder_2' in key_lower:
+            return "text_encoder_2"
+        if 'text_encoder' in key_lower:
+            return "text_encoder_1"
+
+        # SDXL: convert Diffusers-style UNet keys (down_blocks / up_blocks /
+        # mid_block) to the equivalent Comfy-style bucket so the existing UI
+        # toggles (input_4/5/7/8, unet_mid, output_0..5) apply uniformly to
+        # both kohya- and Diffusers-trained LoRAs (e.g. OneTrainer output).
+        if architecture == 'SDXL':
+            comfy_bucket = _sdxl_diffusers_to_comfy_bucket(key_lower)
+            if comfy_bucket is not None:
+                return comfy_bucket
+
+        # Standard Comfy-style keys
+        if 'mid_block' in key_lower or 'middle_block' in key_lower:
+            return "unet_mid"
+        inp = re.search(r'input_blocks?[._]?(\d+)', key_lower)
+        if inp:
+            return f"input_{inp.group(1)}"
+        out = re.search(r'output_blocks?[._]?(\d+)', key_lower)
+        if out:
+            return f"output_{out.group(1)}"
+
+        # SD15 falls through to legacy Diffusers bucketing (no UI mapping yet).
+        if architecture == 'SD15':
+            down = re.search(r'down_blocks?[._]?(\d+)', key_lower)
+            if down:
+                return f"unet_down_{down.group(1)}"
+            up = re.search(r'up_blocks?[._]?(\d+)', key_lower)
+            if up:
+                return f"unet_up_{up.group(1)}"
+
+        return 'other'
+
+    return 'other'
+
+
+def _sdxl_diffusers_to_comfy_bucket(key_lower: str):
+    """Map a Diffusers-style SDXL key to its equivalent Comfy bucket name.
+
+    Returns the Comfy bucket (e.g. ``input_4``, ``unet_mid``, ``output_3``)
+    or ``None`` if the key isn't a recognised Diffusers SDXL UNet key.
+
+    SDXL UNet structure (Comfy ↔ Diffusers):
+        input_blocks.0 = conv_in (no Diffusers down_blocks equivalent)
+        input_blocks.1 / .2  = down_blocks.0.resnets.0 / .1   (level 0, no attention)
+        input_blocks.3       = down_blocks.0.downsamplers.0
+        input_blocks.4 / .5  = down_blocks.1.{resnets,attentions}.0 / .1 (level 1)
+        input_blocks.6       = down_blocks.1.downsamplers.0
+        input_blocks.7 / .8  = down_blocks.2.{resnets,attentions}.0 / .1 (level 2)
+        middle_block.0/1/2   = mid_block.{resnets.0, attentions.0, resnets.1}
+        output_blocks.0/1/2  = up_blocks.0.{resnets,attentions}.0/1/2  (+ upsamplers.0 on .2)
+        output_blocks.3/4/5  = up_blocks.1.{resnets,attentions}.0/1/2  (+ upsamplers.0 on .5)
+        output_blocks.6/7/8  = up_blocks.2.resnets.0/1/2 (no attention at level 2)
+
+    Resolves the OneTrainer / Diffusers SDXL LoRA filtering issue (#28, #35):
+    these LoRAs use down_blocks/up_blocks naming, which previously bucketed as
+    ``unet_down_*``/``unet_up_*`` (no UI toggles for those buckets), so the
+    selective loader couldn't filter them.
+    """
+    # Down blocks — resnets and attentions
+    m = re.search(r'down_blocks?[._](\d+)[._]?(?:resnets?|attentions?)[._](\d+)', key_lower)
+    if m:
+        level, idx = int(m.group(1)), int(m.group(2))
+        if level == 0:
+            # Level 0 has no attention and no exposed toggle (would be input_1/2).
+            # Return None so these fall through to the 'other' bucket (kept /
+            # controlled by the other_weights toggle) instead of being DROPPED by
+            # _filter_lora_by_blocks (which only keeps 'other' or enabled toggles).
+            return None
+        if level == 1:
+            return f"input_{4 + idx}" if idx in (0, 1) else None
+        if level == 2:
+            return f"input_{7 + idx}" if idx in (0, 1) else None
+
+    # Down blocks — downsamplers (would be input_3/input_6 — not exposed as
+    # toggles). Return None so they land in 'other' rather than being dropped.
+    m = re.search(r'down_blocks?[._](\d+)[._]?downsamplers', key_lower)
+    if m:
+        return None
+
+    # Mid block — single attention + resnets
+    if 'mid_block' in key_lower:
+        return "unet_mid"
+
+    # Up blocks — resnets and attentions
+    m = re.search(r'up_blocks?[._](\d+)[._]?(?:resnets?|attentions?)[._](\d+)', key_lower)
+    if m:
+        level, idx = int(m.group(1)), int(m.group(2))
+        if level == 0:
+            return f"output_{idx}" if idx in (0, 1, 2) else None
+        if level == 1:
+            return f"output_{3 + idx}" if idx in (0, 1, 2) else None
+        if level == 2:
+            # up level 2 = output_6/7/8 (resnets only, no exposed toggle).
+            # None -> 'other' bucket rather than being dropped by the filter.
+            return None
+
+    # Up blocks — upsamplers (fold into the last block at each level)
+    m = re.search(r'up_blocks?[._](\d+)[._]?upsamplers', key_lower)
+    if m:
+        level = int(m.group(1))
+        return {0: 'output_2', 1: 'output_5'}.get(level)
+
+    return None
+
+
+# ============================================================================
+# ANALYSIS FUNCTIONS
+# ============================================================================
+
+def _analyze_patches_v2(model_patcher, architecture: str) -> dict:
+    """Analyze the patches stored in the ModelPatcher."""
+    block_analysis = defaultdict(lambda: {
+        'patch_count': 0,
+        'total_strength': 0.0,
+        'total_norm': 0.0,
+        'keys': []
+    })
+
+    if not hasattr(model_patcher, 'patches'):
+        return dict(block_analysis)
+
+    for weight_key, patch_list in model_patcher.patches.items():
+        block_id = _extract_block_id_v2(weight_key, architecture)
+
+        for patch_tuple in patch_list:
+            if len(patch_tuple) < 3:
+                continue
+
+            strength = patch_tuple[0]
+            patch_data = patch_tuple[1]
+            strength_model = patch_tuple[2]
+
+            effective_strength = abs(strength * strength_model)
+            block_analysis[block_id]['patch_count'] += 1
+            block_analysis[block_id]['total_strength'] += effective_strength
+            block_analysis[block_id]['keys'].append(weight_key)
+
+            norm_value = 0.0
+
+            try:
+                if hasattr(patch_data, 'weights') and isinstance(patch_data.weights, tuple):
+                    weights = patch_data.weights
+                    if len(weights) >= 2:
+                        lora_up = weights[0]
+                        lora_down = weights[1]
+                        if hasattr(lora_up, 'norm') and hasattr(lora_down, 'norm'):
+                            up_norm = lora_up.float().norm().item()
+                            down_norm = lora_down.float().norm().item()
+                            norm_value = up_norm * down_norm
+
+                elif hasattr(patch_data, 'lora_up') and hasattr(patch_data, 'lora_down'):
+                    lora_up = patch_data.lora_up
+                    lora_down = patch_data.lora_down
+                    if lora_up is not None and lora_down is not None:
+                        up_norm = lora_up.float().norm().item()
+                        down_norm = lora_down.float().norm().item()
+                        norm_value = up_norm * down_norm
+
+                elif isinstance(patch_data, tuple) and len(patch_data) >= 2:
+                    patch_type = patch_data[0]
+                    patch_content = patch_data[1]
+
+                    if patch_type == "lora" and isinstance(patch_content, tuple) and len(patch_content) >= 2:
+                        lora_up = patch_content[0]
+                        lora_down = patch_content[1]
+                        if hasattr(lora_up, 'norm') and hasattr(lora_down, 'norm'):
+                            up_norm = lora_up.float().norm().item()
+                            down_norm = lora_down.float().norm().item()
+                            norm_value = up_norm * down_norm
+
+                elif hasattr(patch_data, 'norm'):
+                    norm_value = patch_data.float().norm().item()
+
+            except Exception:
+                pass
+
+            block_analysis[block_id]['total_norm'] += norm_value * effective_strength
+
+    return dict(block_analysis)
+
+
+def _format_patch_analysis_v2(block_analysis: dict, architecture: str, confidence: str, method: str, lora_type: str = 'LoRA') -> str:
+    """Format patch analysis as readable text."""
+    if not block_analysis:
+        return "No patches found."
+
+    max_norm = max((d['total_norm'] for d in block_analysis.values()), default=1.0)
+    if max_norm == 0:
+        max_norm = 1.0
+
+    # Show LoRA type if not standard LoRA
+    arch_display = f"{architecture} ({lora_type})" if lora_type != 'LoRA' else architecture
+
+    lines = [
+        f"LoRA Patch Analysis V2 ({arch_display})",
+        f"Detection: {confidence} confidence via {method}",
+        "=" * 60,
+        f"{'Block':<25} {'Score':>8} {'Patches':>10} {'Strength':>10}",
+        "-" * 60
+    ]
+
+    sorted_blocks = sorted(
+        block_analysis.items(),
+        key=lambda x: x[1]['total_norm'],
+        reverse=True
+    )
+
+    for block_id, data in sorted_blocks:
+        score = (data['total_norm'] / max_norm) * 100
+        bar_len = int(score / 5)
+        bar = '█' * bar_len + '░' * (20 - bar_len)
+        lines.append(f"{block_id:<25} [{bar}] {score:5.1f}  ({data['patch_count']:>3})  {data['total_strength']:>8.3f}")
+
+    lines.append("-" * 60)
+    lines.append(f"Total patched layers: {sum(d['patch_count'] for d in block_analysis.values())}")
+
+    return '\n'.join(lines)
+
+
+def _create_analysis_json_v2(block_analysis: dict, architecture: str, lora_name: str, confidence: str, method: str, metadata: dict, lora_type: str = 'LoRA') -> str:
+    """Create JSON analysis output for use by selective loaders."""
+    if not block_analysis:
+        return json.dumps({"architecture": architecture, "lora_name": lora_name, "lora_type": lora_type, "blocks": {}})
+
+    max_norm = max((d['total_norm'] for d in block_analysis.values()), default=1.0)
+    if max_norm == 0:
+        max_norm = 1.0
+
+    blocks = {}
+    for block_id, data in block_analysis.items():
+        score = (data['total_norm'] / max_norm) * 100
+        blocks[block_id] = {
+            "score": round(score, 1),
+            "patch_count": data['patch_count'],
+            "strength": round(data['total_strength'], 4)
+        }
+
+    result = {
+        "architecture": architecture,
+        "lora_type": lora_type,
+        "lora_name": lora_name,
+        "detection_confidence": confidence,
+        "detection_method": method,
+        "blocks": blocks
+    }
+
+    # Include useful metadata if present
+    if metadata:
+        meta_info = {}
+        for key in ['ss_base_model_version', 'ss_network_module', 'ss_output_name', 'modelspec.architecture', 'modelspec.title']:
+            if key in metadata:
+                meta_info[key] = metadata[key]
+        if meta_info:
+            result['metadata'] = meta_info
+
+    return json.dumps(result)
+
+
+# ============================================================================
+# NODE CLASS
+# ============================================================================
+
+class LoRALoaderWithAnalysisV2:
+    """
+    V2 LoRA Loader with improved architecture detection.
+
+    Uses multiple detection methods:
+    1. Safetensors metadata (most reliable)
+    2. Block counting (validates expected structure)
+    3. Scoring system (weighs multiple signals)
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "lora_name": (folder_paths.get_filename_list("loras"), {
+                    "tooltip": "LoRA file to load and analyze"
+                }),
+                "strength_model": ("FLOAT", {
+                    "default": 1.0,
+                    "min": -10.0,
+                    "max": 10.0,
+                    "step": 0.01,
+                    "tooltip": "LoRA strength for model (UNet/DiT)"
+                }),
+                "strength_clip": ("FLOAT", {
+                    "default": 1.0,
+                    "min": -10.0,
+                    "max": 10.0,
+                    "step": 0.01,
+                    "tooltip": "LoRA strength for CLIP text encoder"
+                }),
+            },
+            "optional": {
+                "lora_path_opt": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Optional: override the LoRA dropdown with a file path (e.g. from a LoRA-manager / lora-stack node that outputs a path)."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("model", "clip", "analysis", "analysis_json", "lora_path")
+    OUTPUT_TOOLTIPS = (
+        "Model with LoRA applied.",
+        "CLIP with LoRA applied.",
+        "Per-block patch analysis with detection confidence.",
+        "JSON analysis data. Connect to Selective LoRA Loader for impact-colored UI.",
+        "Full path to the loaded LoRA file. Connect to Selective LoRA Loader."
+    )
+    FUNCTION = "load_lora_with_analysis"
+    CATEGORY = "loaders/lora"
+    OUTPUT_NODE = True
+    DESCRIPTION = "V2 analyzer with improved detection using metadata, scoring, and block counting."
+
+    def load_lora_with_analysis(self, model, clip, lora_name, strength_model, strength_clip, lora_path_opt=None):
+        if lora_path_opt and os.path.exists(lora_path_opt):
+            lora_path = lora_path_opt
+        else:
+            lora_path = folder_paths.get_full_path("loras", lora_name)
+        if not lora_path or not os.path.exists(lora_path):
+            return (model, clip, "Error: LoRA file not found", "{}", "")
+
+        print(f"[LoRA Analyzer V2] Loading: {lora_name}")
+
+        # Get metadata first
+        metadata = _get_metadata(lora_path)
+        if metadata:
+            print(f"[LoRA Analyzer V2] Metadata found: {list(metadata.keys())}")
+
+        # Load LoRA state dict
+        if lora_path.endswith('.safetensors'):
+            lora_state_dict = load_file(lora_path)
+        else:
+            lora_state_dict = torch.load(lora_path, map_location='cpu')
+
+        lora_keys = list(lora_state_dict.keys())
+
+        # V2 detection
+        architecture, confidence, method = _detect_architecture_v2(lora_keys, metadata)
+        lora_type = _detect_lora_type(lora_keys)
+        arch_display = f"{architecture} ({lora_type})" if lora_type != 'LoRA' else architecture
+        print(f"[LoRA Analyzer V2] Architecture: {arch_display} ({confidence} confidence via {method})")
+        print(f"[LoRA Analyzer V2] Tensors: {len(lora_state_dict)}")
+        print(f"[LoRA Analyzer V2] Sample keys: {lora_keys[:5]}")
+
+        # Load the LoRA using ComfyUI's standard method
+        model_lora, clip_lora = comfy.sd.load_lora_for_models(
+            model,
+            clip,
+            lora_state_dict,
+            strength_model,
+            strength_clip
+        )
+
+        # Analyze the patches
+        patch_analysis = _analyze_patches_v2(model_lora, architecture)
+        analysis_text = _format_patch_analysis_v2(patch_analysis, architecture, confidence, method, lora_type)
+        analysis_json = _create_analysis_json_v2(patch_analysis, architecture, lora_name, confidence, method, metadata, lora_type)
+
+        print(f"[LoRA Analyzer V2] Found {len(patch_analysis)} blocks with patches")
+        print(analysis_text)
+
+        return (model_lora, clip_lora, analysis_text, analysis_json, lora_path)
+
+
+# ============================================================================
+# ARCHITECTURE CONFIGS FOR COMBINED ANALYZER + SELECTIVE LOADER
+# ============================================================================
+# Each config defines the blocks, presets, and filtering logic for an architecture.
+# Adding a new architecture just requires adding a new config dict here.
+
+ARCH_CONFIGS = {
+    "ZIMAGE": {
+        "node_id": "ZImageAnalyzerSelectiveLoaderV2",
+        "display_name": "Z-Image Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for Z-Image LoRAs.
+Analyzes block impact and allows per-layer control with strength shaping.
+
+Layer Guide:
+- Layers 0-9: Early processing (usually low impact, ~7-25%)
+- Layers 10-19: Mid processing (moderate impact, ~25-70%)
+- Layers 20-29: Late processing (usually highest impact, ~70-100%)
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "ZIMAGE",
+        "blocks": [f"layer_{i}" for i in range(30)] + ["context_refiner", "noise_refiner", "final_layer", "x_embedder", "other_weights"],
+        "block_labels": {f"layer_{i}": f"Layer {i}" for i in range(30)} | {"context_refiner": "Context Refiner", "noise_refiner": "Noise Refiner", "final_layer": "Final Layer", "x_embedder": "X Embedder", "other_weights": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (20-29)": {"enabled": [f"layer_{i}" for i in range(20, 30)] + ["other_weights"], "strength": 1.0},
+            "Mid-Late (15-29)": {"enabled": [f"layer_{i}" for i in range(15, 30)] + ["other_weights"], "strength": 1.0},
+            "Skip Early (10-29)": {"enabled": [f"layer_{i}" for i in range(10, 30)] + ["other_weights"], "strength": 1.0},
+            "Mid Only (10-19)": {"enabled": [f"layer_{i}" for i in range(10, 20)], "strength": 1.0},
+            "Early Only (0-9)": {"enabled": [f"layer_{i}" for i in range(10)], "strength": 1.0},
+            "Peak Impact (18-25)": {"enabled": [f"layer_{i}" for i in range(18, 26)], "strength": 1.0},
+            "Face Priority (16-24)": {"enabled": [f"layer_{i}" for i in range(16, 25)], "strength": 1.0},
+            "Face Priority Aggressive (14-25)": {"enabled": [f"layer_{i}" for i in range(14, 26)], "strength": 1.0},
+            "Evens Only": {"enabled": [f"layer_{i}" for i in range(0, 30, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"layer_{i}" for i in range(1, 30, 2)], "strength": 1.0},
+            "Custom": None,  # Use individual toggles (JS always sends this)
+        },
+        "filter_key_pattern": r'diffusion_model\.layers\.(\d+)|lora_unet_layers_(\d+)',
+        "filter_key_to_block": lambda match: f"layer_{match.group(1) or match.group(2)}",
+    },
+    "SDXL": {
+        "node_id": "SDXLAnalyzerSelectiveLoaderV2",
+        "display_name": "SDXL Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for SDXL LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (13 blocks with attention layers):
+- text_encoder_1/2: CLIP text encoders (CLIP-L and CLIP-G)
+- input_4, input_5: Mid encoder blocks with attention
+- input_7, input_8: Deep encoder blocks (high impact, composition)
+- unet_mid: Bottleneck (moderate-high impact)
+- output_0: Primary decoder (composition, high impact)
+- output_1: Style block (strongest for style/color)
+- output_2-5: Decoder blocks (decreasing impact)
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "SDXL",
+        "blocks": ["text_encoder_1", "text_encoder_2", "input_4", "input_5", "input_7", "input_8",
+                   "unet_mid", "output_0", "output_1", "output_2", "output_3", "output_4", "output_5", "other_weights"],
+        "block_labels": {
+            "text_encoder_1": "TE1 (CLIP-L)", "text_encoder_2": "TE2 (CLIP-G)",
+            "input_4": "Input 4", "input_5": "Input 5", "input_7": "Input 7", "input_8": "Input 8",
+            "unet_mid": "Mid Block",
+            "output_0": "Output 0", "output_1": "Output 1", "output_2": "Output 2",
+            "output_3": "Output 3", "output_4": "Output 4", "output_5": "Output 5",
+            "other_weights": "Other Weights"
+        },
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "UNet Only": {"enabled": ["input_4", "input_5", "input_7", "input_8", "unet_mid",
+                                      "output_0", "output_1", "output_2", "output_3", "output_4", "output_5", "other_weights"], "strength": 1.0},
+            "High Impact": {"enabled": ["input_7", "input_8", "unet_mid", "output_0", "output_1", "output_2"], "strength": 1.0},
+            "Text Encoders Only": {"enabled": ["text_encoder_1", "text_encoder_2"], "strength": 1.0},
+            "Decoders Only": {"enabled": ["output_0", "output_1", "output_2", "output_3", "output_4", "output_5"], "strength": 1.0},
+            "Encoders Only": {"enabled": ["input_4", "input_5", "input_7", "input_8"], "strength": 1.0},
+            "Style Focus": {"enabled": ["output_1", "output_2"], "strength": 1.0},
+            "Composition Focus": {"enabled": ["input_8", "unet_mid", "output_0"], "strength": 1.0},
+            "Face Focus": {"enabled": ["input_7", "input_8", "unet_mid", "output_0", "output_1", "output_2", "output_3"], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+    "FLUX": {
+        "node_id": "FLUXAnalyzerSelectiveLoaderV2",
+        "display_name": "FLUX Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for FLUX LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (57 total):
+- double_0-18: Double transformer blocks (19 blocks, higher impact)
+- single_0-37: Single transformer blocks (38 blocks, lower impact)
+
+Double blocks typically have higher impact than single blocks.
+Peak impact is usually in double_8-17 range.
+
+Face blocks (from lora-the-explorer): double 7,12,16 | single 7,12,16,20
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "FLUX",
+        "blocks": [f"double_{i}" for i in range(19)] + [f"single_{i}" for i in range(38)] + ["other_weights"],
+        "block_labels": ({f"double_{i}": f"Double {i}" for i in range(19)} |
+                        {f"single_{i}": f"Single {i}" for i in range(38)} |
+                        {"other_weights": "Other Weights"}),
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Double Blocks Only": {"enabled": [f"double_{i}" for i in range(19)] + ["other_weights"], "strength": 1.0},
+            "Single Blocks Only": {"enabled": [f"single_{i}" for i in range(38)] + ["other_weights"], "strength": 1.0},
+            "High Impact Double": {"enabled": [f"double_{i}" for i in range(6, 19)], "strength": 1.0},
+            "Core Double": {"enabled": [f"double_{i}" for i in range(8, 18)], "strength": 1.0},
+            "Face Focus": {"enabled": ["double_7", "double_12", "double_16", "single_7", "single_12", "single_16", "single_20"], "strength": 1.0},
+            "Face Aggressive": {"enabled": ["double_4", "double_7", "double_8", "double_12", "double_15", "double_16",
+                                            "single_4", "single_7", "single_8", "single_12", "single_15", "single_16", "single_19", "single_20"], "strength": 1.0},
+            "Style Only (No Face)": {"enabled": [b for b in [f"double_{i}" for i in range(19)] + [f"single_{i}" for i in range(38)]
+                                                 if b not in ["double_7", "double_12", "double_16", "single_7", "single_12", "single_16", "single_20"]], "strength": 1.0},
+            "Evens Only": {"enabled": [f"double_{i}" for i in range(0, 19, 2)] + [f"single_{i}" for i in range(0, 38, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"double_{i}" for i in range(1, 19, 2)] + [f"single_{i}" for i in range(1, 38, 2)], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+    "FLUX_KLEIN_4B": {
+        "node_id": "FluxKlein4BAnalyzerSelectiveLoaderV2",
+        "display_name": "FLUX Klein 4B Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for FLUX Klein 4B LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (25 total):
+- double_0-4: Double transformer blocks (5 blocks, higher impact)
+- single_0-19: Single transformer blocks (20 blocks, lower impact)
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "FLUX_KLEIN_4B",
+        "blocks": [f"double_{i}" for i in range(5)] + [f"single_{i}" for i in range(20)] + ["other_weights"],
+        "block_labels": ({f"double_{i}": f"Double {i}" for i in range(5)} |
+                        {f"single_{i}": f"Single {i}" for i in range(20)} |
+                        {"other_weights": "Other Weights"}),
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Double Only": {"enabled": [f"double_{i}" for i in range(5)] + ["other_weights"], "strength": 1.0},
+            "Single Only": {"enabled": [f"single_{i}" for i in range(20)] + ["other_weights"], "strength": 1.0},
+            "High Impact (Double 2-4)": {"enabled": [f"double_{i}" for i in range(2, 5)], "strength": 1.0},
+            "Late Singles (10-19)": {"enabled": [f"single_{i}" for i in range(10, 20)], "strength": 1.0},
+            "Evens Only": {"enabled": [f"double_{i}" for i in range(0, 5, 2)] + [f"single_{i}" for i in range(0, 20, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"double_{i}" for i in range(1, 5, 2)] + [f"single_{i}" for i in range(1, 20, 2)], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+    "FLUX_KLEIN_9B": {
+        "node_id": "FluxKlein9BAnalyzerSelectiveLoaderV2",
+        "display_name": "FLUX Klein 9B Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for FLUX Klein 9B LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (32 total):
+- double_0-7: Double transformer blocks (8 blocks, higher impact)
+- single_0-23: Single transformer blocks (24 blocks, lower impact)
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "FLUX_KLEIN_9B",
+        "blocks": [f"double_{i}" for i in range(8)] + [f"single_{i}" for i in range(24)] + ["other_weights"],
+        "block_labels": ({f"double_{i}": f"Double {i}" for i in range(8)} |
+                        {f"single_{i}": f"Single {i}" for i in range(24)} |
+                        {"other_weights": "Other Weights"}),
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Double Only": {"enabled": [f"double_{i}" for i in range(8)] + ["other_weights"], "strength": 1.0},
+            "Single Only": {"enabled": [f"single_{i}" for i in range(24)] + ["other_weights"], "strength": 1.0},
+            "High Impact (Double 4-7)": {"enabled": [f"double_{i}" for i in range(4, 8)], "strength": 1.0},
+            "Late Singles (12-23)": {"enabled": [f"single_{i}" for i in range(12, 24)], "strength": 1.0},
+            "Evens Only": {"enabled": [f"double_{i}" for i in range(0, 8, 2)] + [f"single_{i}" for i in range(0, 24, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"double_{i}" for i in range(1, 8, 2)] + [f"single_{i}" for i in range(1, 24, 2)], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+    "WAN": {
+        "node_id": "WanAnalyzerSelectiveLoaderV2",
+        "display_name": "Wan Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for Wan 2.2 LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (40 total):
+- block_0-9: Early transformer blocks
+- block_10-19: Early-mid blocks
+- block_20-29: Mid-late blocks
+- block_30-39: Late blocks
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "WAN",
+        "blocks": [f"block_{i}" for i in range(40)] + ["other_weights"],
+        "block_labels": {f"block_{i}": f"Block {i}" for i in range(40)} | {"other_weights": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (30-39)": {"enabled": [f"block_{i}" for i in range(30, 40)] + ["other_weights"], "strength": 1.0},
+            "Mid-Late (20-39)": {"enabled": [f"block_{i}" for i in range(20, 40)] + ["other_weights"], "strength": 1.0},
+            "Skip Early (10-39)": {"enabled": [f"block_{i}" for i in range(10, 40)] + ["other_weights"], "strength": 1.0},
+            "Mid Only (15-25)": {"enabled": [f"block_{i}" for i in range(15, 26)], "strength": 1.0},
+            "Early Only (0-19)": {"enabled": [f"block_{i}" for i in range(20)], "strength": 1.0},
+            "Evens Only": {"enabled": [f"block_{i}" for i in range(0, 40, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"block_{i}" for i in range(1, 40, 2)], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+    "QWEN_IMAGE": {
+        "node_id": "QwenAnalyzerSelectiveLoaderV2",
+        "display_name": "Qwen Analyzer + Selective Loader V2",
+        "description": """Combined analyzer and selective loader for Qwen-Image LoRAs.
+Analyzes block impact and allows per-block control with strength shaping.
+
+Block Guide (60 total):
+- block_0-14: Early transformer blocks
+- block_15-29: Early-mid blocks
+- block_30-44: Mid-late blocks
+- block_45-59: Late blocks
+
+Supports strength scheduling format: 0:.2,.5:.8,1:1.0""",
+        "architecture": "QWEN_IMAGE",
+        "blocks": [f"block_{i}" for i in range(60)] + ["other_weights"],
+        "block_labels": {f"block_{i}": f"Block {i}" for i in range(60)} | {"other_weights": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (45-59)": {"enabled": [f"block_{i}" for i in range(45, 60)] + ["other_weights"], "strength": 1.0},
+            "Mid-Late (30-59)": {"enabled": [f"block_{i}" for i in range(30, 60)] + ["other_weights"], "strength": 1.0},
+            "Skip Early (15-59)": {"enabled": [f"block_{i}" for i in range(15, 60)] + ["other_weights"], "strength": 1.0},
+            "Mid Only (20-40)": {"enabled": [f"block_{i}" for i in range(20, 41)], "strength": 1.0},
+            "Early Only (0-29)": {"enabled": [f"block_{i}" for i in range(30)], "strength": 1.0},
+            "Evens Only": {"enabled": [f"block_{i}" for i in range(0, 60, 2)], "strength": 1.0},
+            "Odds Only": {"enabled": [f"block_{i}" for i in range(1, 60, 2)], "strength": 1.0},
+            "Custom": None,
+        },
+    },
+}
+
+
+def _filter_lora_by_blocks(lora_state_dict: dict, enabled_blocks: set, block_strengths: dict,
+                           architecture: str, other_enabled: bool = True, other_strength: float = 1.0) -> dict:
+    """
+    Filter LoRA state dict to only include enabled blocks with their strengths applied.
+    Returns a new dict with filtered and scaled weights.
+
+    For LoKR/LoHa, only scales the first weight matrix (lokr_w1/hada_w1) to avoid
+    squaring the strength effect (since these use product decomposition).
+    """
+    filtered_dict = {}
+
+    # Detect LoRA type once for the whole dict
+    keys = list(lora_state_dict.keys())
+    lora_type = _detect_lora_type(keys)
+
+    for key, value in lora_state_dict.items():
+        block_id = _extract_block_id_v2(key, architecture)
+        key_lower = key.lower()
+
+        # Determine if this key should be scaled
+        # For LoKR: only scale lokr_w1 (not lokr_w2) to avoid squaring the strength
+        # For LoHa: only scale hada_w1 (not hada_w2) for the same reason
+        should_scale = True
+        if lora_type == 'LoKR':
+            # Don't scale lokr_w2 variants - only lokr_w1
+            if '.lokr_w2' in key_lower:
+                should_scale = False
+        elif lora_type == 'LoHa':
+            # Don't scale hada_w2 variants - only hada_w1
+            if '.hada_w2' in key_lower:
+                should_scale = False
+
+        if block_id == 'other':
+            if other_enabled:
+                if other_strength != 1.0 and should_scale:
+                    filtered_dict[key] = value * other_strength
+                else:
+                    filtered_dict[key] = value
+        elif block_id in enabled_blocks:
+            strength = block_strengths.get(block_id, 1.0)
+            if strength != 1.0 and should_scale:
+                filtered_dict[key] = value * strength
+            else:
+                filtered_dict[key] = value
+
+    return filtered_dict
+
+
+def _create_combined_node_class(config: dict):
+    """
+    Factory function to create a combined Analyzer + Selective Loader node class
+    from an architecture config.
+    """
+
+    class CombinedAnalyzerSelectiveLoader:
+        """Combined Analyzer + Selective Loader node (generated from config)."""
+
+        _config = config
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            cfg = cls._config
+            blocks = cfg["blocks"]
+            presets = cfg["presets"]
+
+            inputs = {
+                "required": {
+                    "model": ("MODEL",),
+                    "positive": ("CONDITIONING", {"tooltip": "Positive conditioning from CLIP encode"}),
+                    "negative": ("CONDITIONING", {"tooltip": "Negative conditioning from CLIP encode"}),
+                    "lora_name": (folder_paths.get_filename_list("loras"), {
+                        "tooltip": "LoRA file to load and analyze"
+                    }),
+                    "strength": ("FLOAT", {
+                        "default": 1.0,
+                        "min": -10.0,
+                        "max": 10.0,
+                        "step": 0.05,
+                        "tooltip": "Overall LoRA strength (ignored when using schedule)"
+                    }),
+                    "preset": (list(presets.keys()), {
+                        "default": "Default",
+                        "tooltip": "Quick preset selection. Individual toggles below override when changed."
+                    }),
+                },
+            }
+
+            # Add per-block toggle and strength inputs in required section
+            # This ensures they always show and the JS extension can combine them
+            for block in blocks:
+                inputs["required"][block] = ("BOOLEAN", {"default": True})
+                inputs["required"][f"{block}_str"] = ("FLOAT", {
+                    "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05
+                })
+
+            # Load last used save path for this node type
+            save_paths_config = _load_save_paths_config()
+            last_save_path = save_paths_config.get(cfg["node_id"], "")
+
+            # Optional inputs for path override, scheduling, and saving
+            inputs["optional"] = {
+                "lora_path_opt": ("STRING", {"forceInput": True, "tooltip": "Optional: Override LoRA selection with a path"}),
+                "schedule_preset": (SCHEDULE_PRESET_LIST, {
+                    "default": "Custom",
+                    "tooltip": "Select a preset schedule (populates the text field below for editing)"
+                }),
+                "strength_schedule": ("STRING", {
+                    "default": "",
+                    "tooltip": "Strength schedule: 0:.2,.5:.8,1:1.0 (step:strength pairs). Edit freely after selecting preset."
+                }),
+                "save_refined_lora": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Enable to save the refined LoRA to disk"
+                }),
+                "save_path": ("STRING", {
+                    "default": last_save_path,
+                    "tooltip": "Directory to save refined LoRA"
+                }),
+                "save_filename": ("STRING", {
+                    "default": "",
+                    "tooltip": "Filename for saved LoRA (timestamp auto-appended). Leave empty for auto-name."
+                }),
+            }
+
+            return inputs
+
+        RETURN_TYPES = ("MODEL", "CONDITIONING", "CONDITIONING", "STRING", "STRING")
+        RETURN_NAMES = ("model", "positive", "negative", "analysis", "analysis_json")
+        OUTPUT_TOOLTIPS = (
+            "Model with LoRA applied (filtered by enabled blocks).",
+            "Positive conditioning (with hooks if using schedule).",
+            "Negative conditioning (with hooks if using schedule).",
+            "Per-block analysis showing impact scores.",
+            "JSON analysis data for UI coloring.",
+        )
+        FUNCTION = "load_analyze_and_filter"
+        CATEGORY = "loaders/lora"
+        OUTPUT_NODE = True
+        DESCRIPTION = config["description"]
+
+        def load_analyze_and_filter(self, model, positive, negative, lora_name, strength, preset,
+                                    schedule_preset="Custom", strength_schedule="", lora_path_opt=None, save_refined_lora=False, save_path="", save_filename="", **kwargs):
+            cfg = self._config
+            architecture = cfg["architecture"]
+            blocks = cfg["blocks"]
+            presets = cfg["presets"]
+
+            # Get LoRA path - use optional override if provided
+            if lora_path_opt and os.path.exists(lora_path_opt):
+                lora_path = lora_path_opt
+            else:
+                lora_path = folder_paths.get_full_path("loras", lora_name)
+            if not lora_path or not os.path.exists(lora_path):
+                return {"ui": {"analysis_json": ["{}"]}, "result": (model, positive, negative, "Error: LoRA file not found", "{}")}
+
+            print(f"[{cfg['display_name']}] Loading: {lora_name}")
+
+            # Get metadata and load LoRA
+            metadata = _get_metadata(lora_path)
+            if lora_path.endswith('.safetensors'):
+                lora_state_dict = load_file(lora_path)
+            else:
+                lora_state_dict = torch.load(lora_path, map_location='cpu')
+
+            lora_keys = list(lora_state_dict.keys())
+
+            # Detect architecture and LoRA type (for analysis display)
+            detected_arch, confidence, method = _detect_architecture_v2(lora_keys, metadata)
+            lora_type = _detect_lora_type(lora_keys)
+            arch_display = f"{detected_arch} ({lora_type})" if lora_type != 'LoRA' else detected_arch
+            print(f"[{cfg['display_name']}] Detected: {arch_display} ({confidence} via {method})")
+
+            # Determine enabled blocks and strengths
+            # Note: JS always sends "Custom" so we read individual widget values
+            preset_cfg = presets.get(preset)
+            if preset_cfg is not None:
+                # Using a preset (only when JS is not present)
+                if preset_cfg["enabled"] == "ALL":
+                    enabled_blocks = set(blocks)
+                else:
+                    enabled_blocks = set(preset_cfg["enabled"])
+                block_strengths = {b: preset_cfg["strength"] for b in enabled_blocks}
+                other_enabled = "other_weights" in enabled_blocks or preset != "All Off"
+                other_strength = preset_cfg["strength"]
+            else:
+                # Custom mode - read from kwargs
+                enabled_blocks = set()
+                block_strengths = {}
+                for block in blocks:
+                    if block == "other_weights":
+                        continue
+                    if kwargs.get(block, True):
+                        enabled_blocks.add(block)
+                        block_strengths[block] = kwargs.get(f"{block}_str", 1.0)
+                other_enabled = kwargs.get("other_weights", True)
+                other_strength = kwargs.get("other_weights_str", 1.0)
+
+            # Filter LoRA by enabled blocks
+            original_count = len(lora_state_dict)
+            filtered_lora = _filter_lora_by_blocks(
+                lora_state_dict, enabled_blocks, block_strengths,
+                architecture, other_enabled, other_strength
+            )
+            filtered_count = len(filtered_lora)
+
+            print(f"[{cfg['display_name']}] Filtered: {filtered_count}/{original_count} tensors")
+
+            # Save refined LoRA if enabled and path provided
+            saved_path = None
+            if save_refined_lora and save_path and save_path.strip():
+                saved_path = _save_refined_lora(
+                    filtered_lora, save_path, save_filename,
+                    cfg["node_id"], architecture, metadata
+                )
+                # Remember this save path for next time
+                if saved_path:
+                    save_paths_config = _load_save_paths_config()
+                    save_paths_config[cfg["node_id"]] = save_path.strip()
+                    _save_save_paths_config(save_paths_config)
+
+            # Check for strength schedule
+            # Priority: 1) strength_schedule text field, 2) schedule_preset lookup
+            effective_schedule = strength_schedule.strip() if strength_schedule else ""
+            if not effective_schedule and schedule_preset and schedule_preset != "Custom":
+                # Fallback to preset value (for API usage without JS)
+                effective_schedule = SCHEDULE_PRESETS.get(schedule_preset, "")
+            schedule = _parse_strength_schedule(effective_schedule)
+            using_schedule = False  # Track if we actually use scheduling
+
+            # Initialize conditioning outputs
+            positive_out = positive
+            negative_out = negative
+
+            # Strength scheduling uses ComfyUI's hook system, which is incompatible
+            # with GGUF / fp8 quantized models (the hook path trips over quantized
+            # Linear layers at sample time and crashes). Detect those up front and
+            # fall back to a flat-strength apply so the node still works. See
+            # issues #26, #41, #51, #33.
+            schedule_skipped_reason = ""
+            if schedule:
+                quantized, quant_label = is_quantized_model(model)
+                if quantized:
+                    schedule_skipped_reason = quant_label
+                    print(f"[{cfg['display_name']}] WARNING: strength scheduling is not supported "
+                          f"on {quant_label} models (hooks crash on quantized layers) - applying "
+                          f"the LoRA at flat strength 1.0 instead.")
+
+            if schedule and not schedule_skipped_reason:
+                # Use hook system for scheduling
+                # Base strength is 1.0 so keyframe values ARE the actual strengths
+                # Schedule format: "0:.2,.8:.6,1:.4" means:
+                #   - At 0% of steps: strength 0.2
+                #   - At 80% of steps: strength 0.6
+                #   - At 100% of steps: strength 0.4
+                # Values interpolate linearly between keyframes
+                using_schedule = True
+                print(f"[{cfg['display_name']}] Using strength schedule: {schedule}")
+                hooks = comfy.hooks.create_hook_lora(lora=filtered_lora, strength_model=1.0, strength_clip=0.0)
+                kf_group = _create_hook_keyframes_interpolated(schedule)
+                if kf_group and hooks:
+                    hooks.set_keyframes_on_hooks(kf_group)
+
+                # Clone model and register hook patches (needed for hook system)
+                model_out = model.clone()
+                target_dict = comfy.hooks.create_target_dict(comfy.hooks.EnumWeightTarget.Model)
+                model_out.register_all_hook_patches(hooks, target_dict)
+
+                # Attach hooks to conditioning - this is what makes scheduling work!
+                positive_out = comfy.hooks.set_hooks_for_conditioning(positive, hooks)
+                negative_out = comfy.hooks.set_hooks_for_conditioning(negative, hooks)
+                print(f"[{cfg['display_name']}] Hooks attached to conditioning")
+            elif schedule_skipped_reason:
+                # Schedule requested but skipped on a quantized model: apply at a
+                # flat strength of 1.0 (the schedule's base strength, matching the
+                # hook path's strength_model=1.0) rather than the (ignored) widget.
+                model_out, _ = comfy.sd.load_lora_for_models(
+                    model, None, filtered_lora, 1.0, 0.0
+                )
+            else:
+                # Standard loading (no schedule) - honor the strength widget.
+                model_out, _ = comfy.sd.load_lora_for_models(
+                    model, None, filtered_lora, strength, 0.0
+                )
+
+            # Analyze patches for display
+            if not using_schedule:
+                patch_analysis = _analyze_patches_v2(model_out, architecture)
+            else:
+                # For scheduled LoRAs, analyze the filtered dict directly
+                # Create a temporary load to get patch info
+                temp_model, _ = comfy.sd.load_lora_for_models(model, None, filtered_lora, 1.0, 0.0)
+                patch_analysis = _analyze_patches_v2(temp_model, architecture)
+
+            analysis_text = _format_patch_analysis_v2(patch_analysis, architecture, confidence, method, lora_type)
+            analysis_json = _create_analysis_json_v2(patch_analysis, architecture, lora_name, confidence, method, metadata, lora_type)
+
+            print(f"[{cfg['display_name']}] {len(patch_analysis)} blocks analyzed")
+
+            # Build info string - count only layer blocks (not other_weights)
+            layer_blocks = [b for b in blocks if b != "other_weights"]
+            layer_blocks_enabled = len([b for b in enabled_blocks if b != "other_weights"])
+            other_status = "on" if other_enabled else "off"
+            info_lines = [analysis_text, "", f"Enabled: {layer_blocks_enabled}/{len(layer_blocks)} layers (other: {other_status})"]
+            if using_schedule:
+                info_lines.append(f"Schedule: {len(schedule)} keyframes (attached to conditioning)")
+            elif schedule_skipped_reason:
+                info_lines.append(f"WARNING: strength schedule skipped - not supported on "
+                                  f"{schedule_skipped_reason} models; applied at flat strength 1.0")
+            if saved_path:
+                info_lines.append(f"Saved: {os.path.basename(saved_path)}")
+
+            # Return with UI format for analysis_json passthrough to JS
+            return {"ui": {"analysis_json": [analysis_json]}, "result": (model_out, positive_out, negative_out, "\n".join(info_lines), analysis_json)}
+
+    # Set class attributes from config
+    CombinedAnalyzerSelectiveLoader.__name__ = config["node_id"]
+    CombinedAnalyzerSelectiveLoader.__doc__ = config["description"]
+
+    return CombinedAnalyzerSelectiveLoader
+
+
+# ============================================================================
+# NODE REGISTRATION
+# ============================================================================
+
+NODE_CLASS_MAPPINGS = {
+    # Keep the basic V2 analyzer
+    "LoRALoaderWithAnalysisV2": LoRALoaderWithAnalysisV2,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "LoRALoaderWithAnalysisV2": "LoRA Loader + Analyzer V2",
+}
+
+# Generate and register combined nodes from configs
+for arch_name, config in ARCH_CONFIGS.items():
+    node_class = _create_combined_node_class(config)
+    NODE_CLASS_MAPPINGS[config["node_id"]] = node_class
+    NODE_DISPLAY_NAME_MAPPINGS[config["node_id"]] = config["display_name"]
+
+
+=== FILE: model_layer_analyzer.py ===
+"""
+Model Layer Analyzer + Editor for ComfyUI
+
+Analyzes and allows per-block control of diffusion model layers.
+Similar to LoRA V2 analyzer but for base models.
+
+Supports: SDXL, SD 1.5, FLUX, Z-Image, Wan, Qwen architectures.
+"""
+
+import os
+import re
+import json
+from datetime import datetime
+from collections import defaultdict
+
+import torch
+import folder_paths
+import comfy.sd
+import comfy.model_patcher
+from safetensors.torch import save_file
+from safetensors import safe_open
+
+
+# ============================================================================
+# ORIGINAL WEIGHTS CACHE
+# ============================================================================
+# Cache original weights on first access to prevent reading patched values
+# Key: id(model), Value: state_dict with cloned tensors
+
+_original_weights_cache = {}
+
+
+def _get_original_weights(model_patcher):
+    """
+    Get the original, unmodified weights for a model.
+
+    Caches on first access because:
+    1. The underlying model is shared between all model_patcher clones
+    2. state_dict() returns current values which may be patched
+    3. weight_backup is only available AFTER patch_model() during inference
+
+    Returns (state_dict, key_prefix) where state_dict contains original weights.
+    """
+    global _original_weights_cache
+
+    model = model_patcher.model
+    if hasattr(model, 'diffusion_model'):
+        diff_model = model.diffusion_model
+        key_prefix = "diffusion_model."
+    else:
+        diff_model = model
+        key_prefix = ""
+
+    model_id = id(model)
+
+    if model_id not in _original_weights_cache:
+        # First access - cache the current state (should be clean on first load)
+        # Store on CPU to avoid GPU memory bloat
+        _original_weights_cache[model_id] = {
+            k: v.detach().clone().cpu() for k, v in diff_model.state_dict().items()
+        }
+
+    return _original_weights_cache[model_id], key_prefix
+
+
+def clear_model_cache(model_id=None):
+    """Clear cached weights. Call when model is reloaded."""
+    global _original_weights_cache
+    if model_id is None:
+        _original_weights_cache.clear()
+        print("[Model Layer Editor] Cleared all weight caches")
+    elif model_id in _original_weights_cache:
+        del _original_weights_cache[model_id]
+        print(f"[Model Layer Editor] Cleared cache for model {model_id}")
+
+
+# ============================================================================
+# USER PRESETS
+# ============================================================================
+# Save/load user-defined presets per node type
+# Preset system: localStorage for instant UI updates, Python config file for persistence across sessions
+
+def _get_user_presets_path(node_id: str) -> str:
+    """Get path to user presets file for a node type."""
+    return os.path.join(os.path.dirname(__file__), f".model_layer_presets_{node_id}.json")
+
+
+def _load_user_presets(node_id: str) -> dict:
+    """Load user presets for a node type from config file."""
+    path = _get_user_presets_path(node_id)
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            print(f"[Model Layer Editor] Error loading presets: {e}")
+    return {}
+
+
+def _save_user_presets(node_id: str, presets: dict):
+    """Save user presets for a node type to config file."""
+    path = _get_user_presets_path(node_id)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(presets, f, indent=2)
+        print(f"[Model Layer Editor] Saved presets to {path}")
+    except (IOError, OSError) as e:
+        print(f"[Model Layer Editor] Error saving presets: {e}")
+
+
+def _save_current_as_preset(node_id: str, preset_name: str, blocks: list,
+                             enabled_blocks: set, block_strengths: dict):
+    """Save current block settings as a named preset."""
+    if not preset_name or not preset_name.strip():
+        return False
+
+    preset_name = preset_name.strip()
+
+    # Build preset data
+    preset_data = {
+        "enabled": list(enabled_blocks),
+        "strength": 1.0,  # Base strength (individual values in overrides)
+        "overrides": {}
+    }
+
+    # Check if all blocks are enabled
+    if set(blocks) == enabled_blocks:
+        preset_data["enabled"] = "ALL"
+
+    # Add strength overrides for non-1.0 values
+    for block in blocks:
+        strength = block_strengths.get(block, 1.0)
+        if strength != 1.0:
+            preset_data["overrides"][block] = strength
+
+    # Load existing presets, add/update, save
+    presets = _load_user_presets(node_id)
+    presets[preset_name] = preset_data
+    _save_user_presets(node_id, presets)
+
+    print(f"[Model Layer Editor] Saved preset '{preset_name}' for {node_id}")
+    return True
+
+
+def _delete_user_preset(node_id: str, preset_name: str) -> bool:
+    """Delete a user preset by name."""
+    if not preset_name or not preset_name.strip():
+        return False
+
+    preset_name = preset_name.strip()
+    presets = _load_user_presets(node_id)
+
+    if preset_name in presets:
+        del presets[preset_name]
+        _save_user_presets(node_id, presets)
+        print(f"[Model Layer Editor] Deleted preset '{preset_name}' from {node_id}")
+        return True
+    else:
+        print(f"[Model Layer Editor] Preset '{preset_name}' not found in {node_id}")
+        return False
+
+
+# Cache for loaded user presets (reloaded when saving)
+_user_presets_cache = {}
+
+
+def _get_all_presets(node_id: str, builtin_presets: dict) -> dict:
+    """Get combined builtin + user presets for a node."""
+    global _user_presets_cache
+
+    # Load user presets (refresh from disk)
+    user_presets = _load_user_presets(node_id)
+    _user_presets_cache[node_id] = user_presets
+
+    # Combine: builtin first, then user presets
+    # User presets with same name as builtin will override
+    combined = dict(builtin_presets)
+
+    # Add user presets (they appear after builtins, can override)
+    for name, data in user_presets.items():
+        combined[name] = data
+
+    return combined
+
+
+# ============================================================================
+# ARCHITECTURE DETECTION
+# ============================================================================
+
+def _detect_model_architecture(model_patcher) -> tuple:
+    """
+    Detect model architecture from the model structure.
+    Returns (architecture, confidence, block_info).
+    """
+    try:
+        # Get the underlying model
+        model = model_patcher.model
+
+        # Try to get state dict keys
+        if hasattr(model, 'state_dict'):
+            state_dict = model.state_dict()
+            keys = list(state_dict.keys())
+        elif hasattr(model, 'diffusion_model') and hasattr(model.diffusion_model, 'state_dict'):
+            state_dict = model.diffusion_model.state_dict()
+            keys = list(state_dict.keys())
+        else:
+            return ('UNKNOWN', 'low', {})
+
+        num_keys = len(keys)
+        keys_str = ' '.join(keys[:100]).lower()  # Sample for detection
+
+        # Z-Image detection (30 layers)
+        if any('layers.' in k and 'attention' in k.lower() for k in keys[:50]):
+            layer_nums = set()
+            for k in keys:
+                match = re.search(r'layers\.(\d+)', k)
+                if match:
+                    layer_nums.add(int(match.group(1)))
+            if len(layer_nums) >= 25:
+                return ('ZIMAGE', 'high', {'layers': sorted(layer_nums)})
+
+        # FLUX detection (double + single blocks)
+        double_blocks = set()
+        single_blocks = set()
+        for k in keys:
+            match = re.search(r'double_blocks?\.(\d+)', k)
+            if match:
+                double_blocks.add(int(match.group(1)))
+            match = re.search(r'single_blocks?\.(\d+)', k)
+            if match:
+                single_blocks.add(int(match.group(1)))
+        if len(double_blocks) >= 15 or len(single_blocks) >= 30:
+            return ('FLUX', 'high', {'double_blocks': sorted(double_blocks), 'single_blocks': sorted(single_blocks)})
+
+        # Wan detection (blocks with self_attn, ffn)
+        if any('self_attn' in k and 'blocks.' in k for k in keys):
+            wan_blocks = set()
+            for k in keys:
+                match = re.search(r'blocks\.(\d+)', k)
+                if match:
+                    wan_blocks.add(int(match.group(1)))
+            if len(wan_blocks) >= 30:
+                return ('WAN', 'high', {'blocks': sorted(wan_blocks)})
+
+        # Qwen detection (transformer_blocks with img_mlp)
+        if any('transformer_blocks' in k and 'img_mlp' in k for k in keys):
+            qwen_blocks = set()
+            for k in keys:
+                match = re.search(r'transformer_blocks\.(\d+)', k)
+                if match:
+                    qwen_blocks.add(int(match.group(1)))
+            if len(qwen_blocks) >= 50:
+                return ('QWEN', 'high', {'blocks': sorted(qwen_blocks)})
+
+        # SDXL/SD15 detection (input_blocks, output_blocks)
+        input_blocks = set()
+        output_blocks = set()
+        has_mid = False
+        for k in keys:
+            if 'input_blocks.' in k or 'input_blocks_' in k:
+                match = re.search(r'input_blocks[._](\d+)', k)
+                if match:
+                    input_blocks.add(int(match.group(1)))
+            if 'output_blocks.' in k or 'output_blocks_' in k:
+                match = re.search(r'output_blocks[._](\d+)', k)
+                if match:
+                    output_blocks.add(int(match.group(1)))
+            if 'middle_block' in k or 'mid_block' in k:
+                has_mid = True
+
+        if len(input_blocks) >= 10 and len(output_blocks) >= 10:
+            # Distinguish SDXL from SD15 by parameter count
+            if num_keys > 1500:
+                return ('SDXL', 'high', {'input_blocks': sorted(input_blocks), 'output_blocks': sorted(output_blocks), 'has_mid': has_mid})
+            else:
+                return ('SD15', 'high', {'input_blocks': sorted(input_blocks), 'output_blocks': sorted(output_blocks), 'has_mid': has_mid})
+
+        return ('UNKNOWN', 'low', {})
+
+    except Exception as e:
+        print(f"[Model Analyzer] Detection error: {e}")
+        return ('UNKNOWN', 'low', {})
+
+
+# ============================================================================
+# BLOCK ANALYSIS
+# ============================================================================
+
+def _analyze_model_blocks(model_patcher, architecture: str) -> dict:
+    """
+    Analyze model blocks and return stats per block.
+    Returns dict: {block_id: {param_count, memory_mb, dtype, keys}}
+    """
+    try:
+        model = model_patcher.model
+
+        # Get state dict from the right place
+        if hasattr(model, 'diffusion_model'):
+            state_dict = model.diffusion_model.state_dict()
+            prefix = 'diffusion_model.'
+        else:
+            state_dict = model.state_dict()
+            prefix = ''
+
+        blocks = defaultdict(lambda: {
+            'param_count': 0,
+            'memory_bytes': 0,
+            'keys': [],
+            'dtype': None
+        })
+
+        for key, tensor in state_dict.items():
+            block_id = _extract_block_id(key, architecture)
+
+            blocks[block_id]['param_count'] += tensor.numel()
+            blocks[block_id]['memory_bytes'] += tensor.numel() * tensor.element_size()
+            blocks[block_id]['keys'].append(prefix + key)
+            if blocks[block_id]['dtype'] is None:
+                blocks[block_id]['dtype'] = str(tensor.dtype)
+
+        # Convert memory to MB
+        for block_id in blocks:
+            blocks[block_id]['memory_mb'] = blocks[block_id]['memory_bytes'] / (1024 * 1024)
+
+        return dict(blocks)
+
+    except Exception as e:
+        print(f"[Model Analyzer] Analysis error: {e}")
+        return {}
+
+
+def _extract_block_id(key: str, architecture: str) -> str:
+    """Extract block identifier from a model weight key."""
+    key_lower = key.lower()
+
+    if architecture == 'ZIMAGE':
+        match = re.search(r'layers\.(\d+)', key)
+        if match:
+            return f"layer_{match.group(1)}"
+        if 'final_layer' in key_lower:
+            return 'final_layer'
+        if 'x_embedder' in key_lower:
+            return 'x_embedder'
+        return 'other'
+
+    elif architecture == 'FLUX':
+        match = re.search(r'double_blocks?\.(\d+)', key)
+        if match:
+            return f"double_{match.group(1)}"
+        match = re.search(r'single_blocks?\.(\d+)', key)
+        if match:
+            return f"single_{match.group(1)}"
+        return 'other'
+
+    elif architecture == 'WAN':
+        match = re.search(r'blocks\.(\d+)', key)
+        if match:
+            return f"block_{match.group(1)}"
+        return 'other'
+
+    elif architecture == 'QWEN':
+        match = re.search(r'transformer_blocks\.(\d+)', key)
+        if match:
+            return f"block_{match.group(1)}"
+        return 'other'
+
+    elif architecture in ['SDXL', 'SD15']:
+        match = re.search(r'input_blocks?[._](\d+)', key)
+        if match:
+            return f"input_{match.group(1)}"
+        match = re.search(r'output_blocks?[._](\d+)', key)
+        if match:
+            return f"output_{match.group(1)}"
+        if 'middle_block' in key_lower or 'mid_block' in key_lower:
+            return 'mid'
+        if 'time_embed' in key_lower:
+            return 'time_embed'
+        if 'label_emb' in key_lower:
+            return 'label_emb'
+        return 'other'
+
+    return 'other'
+
+
+# ============================================================================
+# BLOCK SCALING (using ComfyUI's patching system)
+# ============================================================================
+
+def _apply_block_modifications(model_patcher, block_analysis: dict, enabled_blocks: set,
+                               block_strengths: dict, architecture: str):
+    """
+    Apply block modifications using ComfyUI's patching system.
+
+    CRITICAL: We clone the model_patcher and add patches to scale weights.
+    This is non-destructive - original model weights are never modified.
+
+    For scaling weight W by factor s:
+    - new_weight = W * s = W + W * (s - 1)
+    - We add a patch of W * (s - 1) with strength 1.0
+
+    Returns (cloned_model_patcher, modified_count).
+    """
+    try:
+        # Get the ORIGINAL weights from cache (not current state_dict which may be patched)
+        base_state_dict, key_prefix = _get_original_weights(model_patcher)
+
+        # Clone the model patcher so we don't affect the original
+        cloned = model_patcher.clone()
+
+        # CRITICAL: Clear any inherited patches to prevent accumulation
+        if hasattr(cloned, 'patches'):
+            cloned.patches = {}
+        if hasattr(cloned, 'object_patches'):
+            cloned.object_patches = {}
+
+        # Build patches dict for add_patches
+        # Format: {key: (diff_tensor,)} where the diff is added to original
+        patches = {}
+        modified_count = 0
+
+        for block_id, block_info in block_analysis.items():
+            # Only modify blocks that are in our control list (block_strengths)
+            # Skip blocks we don't have controls for (like extra blocks found in model)
+            if block_id not in block_strengths:
+                continue
+
+            strength = block_strengths[block_id]
+
+            # Skip if no modification needed
+            if strength == 1.0:
+                continue
+
+            # Create patches for this block's weights
+            for full_key in block_info['keys']:
+                # Get the key without prefix for state_dict lookup
+                key = full_key.replace('diffusion_model.', '')
+
+                # Use base_state_dict for original unpatched weights
+                if key not in base_state_dict:
+                    continue
+
+                weight = base_state_dict[key]
+
+                # Calculate the diff: to get W*s, we add W*(s-1) to W
+                # diff = W * (s - 1)
+                # IMPORTANT: Do this on CPU to avoid GPU OOM errors
+                # ComfyUI's patching system will handle device placement
+                weight_cpu = weight.to("cpu") if weight.device.type != "cpu" else weight
+                diff = weight_cpu * (strength - 1.0)
+
+                # Patch key needs the prefix
+                patch_key = key_prefix + key
+
+                # Format for add_patches: tuple of (diff_tensor,)
+                # This gets added to the original weight
+                patches[patch_key] = (diff,)
+                modified_count += 1
+
+        # Apply patches if any
+        if patches:
+            # add_patches(patches, strength_patch, strength_model=None)
+            # strength_patch=1.0 means apply the full diff
+            cloned.add_patches(patches, strength_patch=1.0)
+
+        return cloned, modified_count
+
+    except Exception as e:
+        import traceback
+        print(f"[Model Analyzer] Patching error: {e}")
+        traceback.print_exc()
+        return model_patcher.clone(), 0
+
+
+# ============================================================================
+# MODEL SAVING
+# ============================================================================
+
+def _save_modified_model(model_patcher, save_path: str, save_filename: str,
+                         architecture: str, block_info: dict, source_model_path: str = "") -> str:
+    """
+    Save modified model to safetensors.
+
+    Since we use patching, we need to temporarily apply patches to get
+    the full modified state_dict, then unpatch after saving.
+
+    Returns full path to saved file, or None if not saved.
+    """
+    if not save_path or not save_path.strip():
+        return None
+
+    save_path = os.path.expanduser(save_path.strip())
+
+    # Ensure directory exists
+    if not os.path.exists(save_path):
+        try:
+            os.makedirs(save_path, exist_ok=True)
+        except Exception as e:
+            print(f"[Model Analyzer] Error creating directory: {e}")
+            return None
+
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if save_filename and save_filename.strip():
+        base_name = save_filename.strip()
+        if base_name.lower().endswith('.safetensors'):
+            base_name = base_name[:-12]
+        filename = f"{base_name}_{timestamp}.safetensors"
+    else:
+        filename = f"modified_model_{timestamp}.safetensors"
+
+    full_path = os.path.join(save_path, filename)
+
+    try:
+        # Try to get original model's metadata
+        original_metadata = {}
+        source_path = None
+
+        # Use provided source path first
+        if source_model_path and source_model_path.strip():
+            source_path = os.path.expanduser(source_model_path.strip())
+
+        # Fallback: Check if model_patcher has path info
+        if not source_path:
+            if hasattr(model_patcher, 'model_options'):
+                opts = model_patcher.model_options
+                if isinstance(opts, dict):
+                    source_path = opts.get('model_path') or opts.get('path')
+
+        # Fallback: Check for model.model_path attribute
+        if not source_path and hasattr(model_patcher, 'model'):
+            if hasattr(model_patcher.model, 'model_path'):
+                source_path = model_patcher.model.model_path
+
+        # Try to read metadata from source file
+        if source_path and os.path.exists(source_path) and source_path.endswith('.safetensors'):
+            try:
+                with safe_open(source_path, framework="pt") as f:
+                    original_metadata = dict(f.metadata()) if f.metadata() else {}
+                print(f"[Model Analyzer] Copied metadata from source: {os.path.basename(source_path)}")
+            except Exception as e:
+                print(f"[Model Analyzer] Could not read source metadata: {e}")
+        else:
+            print(f"[Model Analyzer] Warning: No source model specified - saved model may not load correctly")
+
+        # Load original file and apply modifications directly to preserve key format
+        if source_path and os.path.exists(source_path) and source_path.endswith('.safetensors'):
+            print(f"[Model Analyzer] Loading weights from source file...")
+            from safetensors.torch import load_file
+            state_dict = load_file(source_path)
+
+            # Get the patches from model_patcher
+            patches = model_patcher.patches.copy() if hasattr(model_patcher, 'patches') else {}
+
+            if len(patches) > 0:
+                import comfy.lora
+
+                # Build prefix mapping: patches use diffusion_model. prefix but file doesn't
+                # Try to detect the prefix used by patches
+                patch_keys = list(patches.keys())
+                file_keys = list(state_dict.keys())
+
+                # Common prefixes in patched models
+                possible_prefixes = ['diffusion_model.', 'model.diffusion_model.', 'model.', '']
+                detected_prefix = ''
+
+                for prefix in possible_prefixes:
+                    # Check if removing this prefix from patch keys matches file keys
+                    test_key = patch_keys[0]
+                    if test_key.startswith(prefix):
+                        stripped_key = test_key[len(prefix):]
+                        if stripped_key in file_keys:
+                            detected_prefix = prefix
+                            print(f"[Model Analyzer] Detected patch key prefix: '{prefix}'")
+                            break
+
+                # Apply patches using ComfyUI's calculate_weight function
+                modified_keys = 0
+                for patch_key, patch_list in patches.items():
+                    # Strip the prefix to get the original file key
+                    file_key = patch_key[len(detected_prefix):] if patch_key.startswith(detected_prefix) else patch_key
+
+                    if file_key in state_dict:
+                        original_weight = state_dict[file_key]
+                        # Use ComfyUI's proper patch calculation
+                        # calculate_weight expects weight to be on the same device as patches
+                        modified_weight = comfy.lora.calculate_weight(
+                            patch_list,
+                            original_weight.clone(),
+                            file_key,
+                            intermediate_dtype=torch.float32
+                        )
+                        state_dict[file_key] = modified_weight.to(original_weight.dtype)
+                        modified_keys += 1
+
+                print(f"[Model Analyzer] Applied patches to {modified_keys} keys")
+            else:
+                print(f"[Model Analyzer] No patches to apply")
+        else:
+            # Fallback: use model's state dict (may have different key format)
+            print("[Model Analyzer] Warning: No source file - using internal model keys (may not load correctly)")
+            model_patcher.patch_model()
+            model = model_patcher.model
+
+            if hasattr(model, 'state_dict'):
+                state_dict = {k: v.clone() for k, v in model.state_dict().items()}
+            else:
+                print("[Model Analyzer] Could not get model state_dict")
+                model_patcher.unpatch_model()
+                return None
+
+            model_patcher.unpatch_model()
+
+        # Start with original metadata, then add our modification info
+        metadata = original_metadata.copy()
+        metadata.update({
+            'modified_by': 'comfyui-zimage-realtime-lora ModelLayerEditor',
+            'modified_url': 'https://github.com/ShootTheSound/comfyUI-Realtime-Lora',
+            'modified_date': datetime.now().isoformat(),
+            'modified_architecture': architecture,
+            'block_modifications': json.dumps(block_info)
+        })
+
+        # Estimate file size
+        total_bytes = sum(t.numel() * t.element_size() for t in state_dict.values())
+        size_gb = total_bytes / (1024**3)
+        print(f"[Model Analyzer] Saving model ({size_gb:.2f} GB) to: {full_path}")
+
+        # Save
+        save_file(state_dict, full_path, metadata=metadata)
+        print(f"[Model Analyzer] Saved successfully: {full_path}")
+
+        return full_path
+
+    except Exception as e:
+        import traceback
+        print(f"[Model Analyzer] Error saving model: {e}")
+        traceback.print_exc()
+        # Make sure to unpatch if there was an error
+        try:
+            model_patcher.unpatch_model()
+        except:
+            pass
+        return None
+
+
+# ============================================================================
+# FORMATTING
+# ============================================================================
+
+def _format_analysis(block_analysis: dict, architecture: str,
+                     enabled_blocks: set, block_strengths: dict) -> str:
+    """Format block analysis as readable text."""
+    if not block_analysis:
+        return "No blocks found."
+
+    total_params = sum(b['param_count'] for b in block_analysis.values())
+    total_memory = sum(b['memory_mb'] for b in block_analysis.values())
+
+    lines = [
+        f"Model Layer Analysis ({architecture})",
+        "=" * 60,
+        f"Total Parameters: {total_params:,}",
+        f"Total Memory: {total_memory:.2f} MB ({total_memory/1024:.2f} GB)",
+        "",
+        f"{'Block':<20} {'Params':>12} {'Memory':>10} {'Strength':>10}",
+        "-" * 60
+    ]
+
+    # Sort blocks logically
+    def block_sort_key(item):
+        block_id = item[0]
+        # Extract number from block_id
+        match = re.search(r'(\d+)', block_id)
+        num = int(match.group(1)) if match else 999
+        # Prefix for ordering
+        if block_id.startswith('input'):
+            return (0, num)
+        elif block_id.startswith('layer'):
+            return (1, num)
+        elif block_id.startswith('double'):
+            return (1, num)
+        elif block_id == 'mid':
+            return (2, 0)
+        elif block_id.startswith('output'):
+            return (3, num)
+        elif block_id.startswith('single'):
+            return (4, num)
+        elif block_id.startswith('block'):
+            return (5, num)
+        else:
+            return (9, num)
+
+    sorted_blocks = sorted(block_analysis.items(), key=block_sort_key)
+
+    for block_id, data in sorted_blocks:
+        if block_id == 'other':
+            continue  # Skip 'other' in main display
+
+        params_str = f"{data['param_count']/1e6:.1f}M" if data['param_count'] >= 1e6 else f"{data['param_count']/1e3:.0f}K"
+        memory_str = f"{data['memory_mb']:.1f} MB"
+
+        if block_id in enabled_blocks:
+            strength = block_strengths.get(block_id, 1.0)
+            strength_str = f"{strength*100:.0f}%"
+        else:
+            strength_str = "OFF"
+
+        lines.append(f"{block_id:<20} {params_str:>12} {memory_str:>10} {strength_str:>10}")
+
+    # Show 'other' at end
+    if 'other' in block_analysis:
+        data = block_analysis['other']
+        params_str = f"{data['param_count']/1e6:.1f}M" if data['param_count'] >= 1e6 else f"{data['param_count']/1e3:.0f}K"
+        memory_str = f"{data['memory_mb']:.1f} MB"
+        lines.append(f"{'other':<20} {params_str:>12} {memory_str:>10} {'100%':>10}")
+
+    lines.append("-" * 60)
+    lines.append(f"Enabled: {len(enabled_blocks)}/{len(block_analysis)} blocks")
+
+    scaled = [f"{b}={block_strengths[b]:.0%}" for b in enabled_blocks
+              if block_strengths.get(b, 1.0) != 1.0]
+    if scaled:
+        lines.append(f"Scaled: {', '.join(scaled)}")
+
+    return '\n'.join(lines)
+
+
+def _create_analysis_json(block_analysis: dict, architecture: str,
+                          enabled_blocks: set, block_strengths: dict) -> str:
+    """Create JSON analysis output."""
+    result = {
+        'architecture': architecture,
+        'total_params': sum(b['param_count'] for b in block_analysis.values()),
+        'total_memory_mb': sum(b['memory_mb'] for b in block_analysis.values()),
+        'blocks': {}
+    }
+
+    for block_id, data in block_analysis.items():
+        result['blocks'][block_id] = {
+            'param_count': data['param_count'],
+            'memory_mb': round(data['memory_mb'], 2),
+            'enabled': block_id in enabled_blocks,
+            'strength': block_strengths.get(block_id, 1.0) if block_id in enabled_blocks else 0.0
+        }
+
+    return json.dumps(result)
+
+
+# ============================================================================
+# ARCHITECTURE CONFIGS
+# ============================================================================
+
+ARCH_CONFIGS = {
+    "SDXL": {
+        "node_id": "SDXLModelLayerEditor",
+        "display_name": "SDXL Model Layer Editor",
+        "description": """Per-block control of SDXL model layers.
+
+Block Guide:
+- Input 0-11: Encoder blocks (structure, composition)
+- Mid: Bottleneck (high-level features)
+- Output 0-5: Main decoder (style in 1-2)
+- Output 6-11: Late decoder (details, textures)""",
+        "architecture": "SDXL",
+        "blocks": [f"input_{i}" for i in range(12)] + ["mid"] + [f"output_{i}" for i in range(12)] + ["other"],
+        "block_labels": {f"input_{i}": f"Input {i}" for i in range(12)} |
+                        {"mid": "Middle"} |
+                        {f"output_{i}": f"Output {i}" for i in range(12)} |
+                        {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Outputs Only": {"enabled": [f"output_{i}" for i in range(12)] + ["mid", "other"], "strength": 1.0},
+            "Inputs Only": {"enabled": [f"input_{i}" for i in range(12)] + ["mid", "other"], "strength": 1.0},
+            "Custom": None,
+        }
+    },
+    "SD15": {
+        "node_id": "SD15ModelLayerEditor",
+        "display_name": "SD 1.5 Model Layer Editor",
+        "description": """Per-block control of SD 1.5 model layers.""",
+        "architecture": "SD15",
+        "blocks": [f"input_{i}" for i in range(12)] + ["mid"] + [f"output_{i}" for i in range(12)] + ["other"],
+        "block_labels": {f"input_{i}": f"Input {i}" for i in range(12)} |
+                        {"mid": "Middle"} |
+                        {f"output_{i}": f"Output {i}" for i in range(12)} |
+                        {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Custom": None,
+        }
+    },
+    "FLUX": {
+        "node_id": "FLUXModelLayerEditor",
+        "display_name": "FLUX Model Layer Editor",
+        "description": """Per-block control of FLUX model layers.
+
+Block Guide:
+- Double 0-18: Main transformer blocks (19 total)
+- Single 0-37: Secondary blocks (38 total)""",
+        "architecture": "FLUX",
+        "blocks": [f"double_{i}" for i in range(19)] + [f"single_{i}" for i in range(38)] + ["other"],
+        "block_labels": {f"double_{i}": f"Double {i}" for i in range(19)} |
+                        {f"single_{i}": f"Single {i}" for i in range(38)} |
+                        {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Double Only": {"enabled": [f"double_{i}" for i in range(19)] + ["other"], "strength": 1.0},
+            "Single Only": {"enabled": [f"single_{i}" for i in range(38)] + ["other"], "strength": 1.0},
+            "Custom": None,
+        }
+    },
+    "ZIMAGE": {
+        "node_id": "ZImageModelLayerEditor",
+        "display_name": "Z-Image Model Layer Editor",
+        "description": """Per-block control of Z-Image model layers.
+
+Layer Guide:
+- Layers 0-9: Early processing (structure)
+- Layers 10-19: Mid processing (features)
+- Layers 20-29: Late processing (details)""",
+        "architecture": "ZIMAGE",
+        "blocks": [f"layer_{i}" for i in range(30)] + ["other"],
+        "block_labels": {f"layer_{i}": f"Layer {i}" for i in range(30)} | {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (20-29)": {"enabled": [f"layer_{i}" for i in range(20, 30)] + ["other"], "strength": 1.0},
+            "Mid-Late (15-29)": {"enabled": [f"layer_{i}" for i in range(15, 30)] + ["other"], "strength": 1.0},
+            "Custom": None,
+        }
+    },
+    "WAN": {
+        "node_id": "WanModelLayerEditor",
+        "display_name": "Wan Model Layer Editor",
+        "description": """Per-block control of Wan 2.2 model layers (40 blocks).""",
+        "architecture": "WAN",
+        "blocks": [f"block_{i}" for i in range(40)] + ["other"],
+        "block_labels": {f"block_{i}": f"Block {i}" for i in range(40)} | {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (30-39)": {"enabled": [f"block_{i}" for i in range(30, 40)] + ["other"], "strength": 1.0},
+            "Custom": None,
+        }
+    },
+    "QWEN": {
+        "node_id": "QwenModelLayerEditor",
+        "display_name": "Qwen Model Layer Editor",
+        "description": """Per-block control of Qwen-Image model layers (60 blocks).""",
+        "architecture": "QWEN",
+        "blocks": [f"block_{i}" for i in range(60)] + ["other"],
+        "block_labels": {f"block_{i}": f"Block {i}" for i in range(60)} | {"other": "Other Weights"},
+        "presets": {
+            "Default": {"enabled": "ALL", "strength": 1.0},
+            "All Off": {"enabled": [], "strength": 0.0},
+            "Half Strength": {"enabled": "ALL", "strength": 0.5},
+            "Late Only (45-59)": {"enabled": [f"block_{i}" for i in range(45, 60)] + ["other"], "strength": 1.0},
+            "Custom": None,
+        }
+    },
+}
+
+
+# ============================================================================
+# PER-ARCHITECTURE NODE FACTORY
+# ============================================================================
+
+def _create_model_layer_editor_class(config: dict):
+    """
+    Factory function to create a per-architecture Model Layer Editor node.
+    Similar to LoRA V2 combined nodes but for base models.
+    """
+
+    class ModelLayerEditor:
+        """Per-architecture Model Layer Editor (generated from config)."""
+
+        _config = config
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            cfg = cls._config
+            blocks = cfg["blocks"]
+            node_id = cfg["node_id"]
+            builtin_presets = cfg["presets"]
+
+            # Get combined builtin + user presets
+            all_presets = _get_all_presets(node_id, builtin_presets)
+
+            inputs = {
+                "required": {
+                    "model": ("MODEL", {
+                        "tooltip": "Model from LoadCheckpoint or LoadDiffusionModel"
+                    }),
+                    "preset": (list(all_presets.keys()), {
+                        "default": "Default",
+                        "tooltip": "Quick preset selection. Individual controls below override when changed."
+                    }),
+                },
+                "optional": {
+                    "save_preset_name": ("STRING", {
+                        "default": "",
+                        "tooltip": "Enter preset name, then click Save Preset button (or leave for file sync on execute)"
+                    }),
+                    "delete_preset_name": ("STRING", {
+                        "default": "",
+                        "tooltip": "Preset to delete (filled automatically by Delete button)"
+                    }),
+                    "browser_presets_json": ("STRING", {
+                        "default": "{}",
+                        "tooltip": "JSON of all browser presets (auto-filled by JS for sync)"
+                    }),
+                    "save_model": ("BOOLEAN", {
+                        "default": False,
+                        "tooltip": "Save modified model to disk (large files!)"
+                    }),
+                    "save_path": ("STRING", {
+                        "default": "",
+                        "tooltip": "Directory to save modified model"
+                    }),
+                    "save_filename": ("STRING", {
+                        "default": "",
+                        "tooltip": "Filename for saved model (timestamp added)"
+                    }),
+                    "source_model_path": ("STRING", {
+                        "default": "",
+                        "tooltip": "Path to original model file (for copying metadata). Required for saved model to load correctly."
+                    }),
+                }
+            }
+
+            # Add per-block toggle and strength inputs
+            for block in blocks:
+                inputs["required"][block] = ("BOOLEAN", {"default": True})
+                inputs["required"][f"{block}_str"] = ("FLOAT", {
+                    "default": 1.0,
+                    "min": -2.0,  # Must match JS hardcoded value
+                    "max": 2.0,
+                    "step": 0.05
+                })
+
+            return inputs
+
+        RETURN_TYPES = ("MODEL", "STRING", "STRING")
+        RETURN_NAMES = ("model", "analysis", "analysis_json")
+        OUTPUT_TOOLTIPS = (
+            "Model with block modifications applied",
+            "Text analysis of model structure",
+            "JSON analysis data"
+        )
+        FUNCTION = "edit_model"
+        CATEGORY = "model"
+        OUTPUT_NODE = True
+
+        def edit_model(self, model, preset, save_preset_name="", delete_preset_name="", browser_presets_json="{}",
+                       save_model=False, save_path="", save_filename="", source_model_path="",
+                       **kwargs):
+            cfg = self._config
+            blocks = cfg["blocks"]
+            node_id = cfg["node_id"]
+            architecture = cfg["architecture"]
+
+            print(f"[{cfg['display_name']}] Starting...")
+
+            # Analyze the model
+            block_analysis = _analyze_model_blocks(model, architecture)
+            print(f"[{cfg['display_name']}] Found {len(block_analysis)} blocks")
+
+            # Determine enabled blocks and strengths from kwargs
+            # NOTE: Always read from kwargs (actual widget values), not preset config
+            # The preset dropdown only tells JavaScript which values to set on the widgets.
+            # Python should always use the actual widget values so manual adjustments work.
+            enabled_blocks = set()
+            block_strengths = {}
+
+            for block in blocks:
+                if kwargs.get(block, True):
+                    enabled_blocks.add(block)
+                    block_strengths[block] = kwargs.get(f"{block}_str", 1.0)
+                else:
+                    # Block is disabled - add with strength 0.0 so we know it's in our config
+                    block_strengths[block] = 0.0
+
+            print(f"[{cfg['display_name']}] Enabled: {len(enabled_blocks)}/{len(blocks)} blocks")
+
+            # Full sync between browser presets and file presets
+            # This handles: adding new presets, deleting removed presets
+            print(f"[Model Layer Editor] Browser presets JSON: {browser_presets_json[:100] if browser_presets_json else 'None'}...")
+
+            if browser_presets_json and isinstance(browser_presets_json, str) and browser_presets_json.strip():
+                try:
+                    browser_presets = json.loads(browser_presets_json)
+                    if isinstance(browser_presets, dict):
+                        file_presets = _load_user_presets(node_id)
+                        changed = False
+
+                        print(f"[Model Layer Editor] Syncing: {len(browser_presets)} browser presets, {len(file_presets)} file presets")
+
+                        # Add presets that are in browser but not in file
+                        for name, data in browser_presets.items():
+                            if not name or name.lower() in ('true', 'false', 'none', ''):
+                                continue
+                            if name not in file_presets:
+                                file_presets[name] = data
+                                changed = True
+                                print(f"[Model Layer Editor] Added preset '{name}' to file")
+
+                        # Remove presets that are in file but not in browser (user deleted them)
+                        file_preset_names = list(file_presets.keys())
+                        for name in file_preset_names:
+                            if name not in browser_presets:
+                                del file_presets[name]
+                                changed = True
+                                print(f"[Model Layer Editor] Removed preset '{name}' from file")
+
+                        if changed:
+                            _save_user_presets(node_id, file_presets)
+                        else:
+                            print(f"[Model Layer Editor] Presets already in sync")
+
+                except (json.JSONDecodeError, TypeError) as e:
+                    print(f"[Model Layer Editor] Error parsing browser presets: {e}")
+            else:
+                print(f"[Model Layer Editor] No browser presets to sync (empty or invalid)")
+
+            # Save as preset if requested (syncs JS localStorage save to file)
+            # Skip if it's a boolean or boolean-like string (widget corruption)
+            saved_preset_data = None
+            if save_preset_name and isinstance(save_preset_name, str) and save_preset_name.strip():
+                save_name = save_preset_name.strip()
+                if save_name.lower() not in ('true', 'false', 'none', ''):
+                    _save_current_as_preset(node_id, save_name, blocks, enabled_blocks, block_strengths)
+                    # Prepare preset data for JS sync (only if we actually saved)
+                    saved_preset_data = {
+                        "node_id": node_id,
+                        "preset_name": save_name,
+                        "preset": {
+                            "enabled": "ALL" if set(blocks) == enabled_blocks else list(enabled_blocks),
+                            "strength": 1.0,
+                            "overrides": {b: s for b, s in block_strengths.items() if s != 1.0}
+                        }
+                    }
+
+            # Check if any modifications needed
+            needs_modification = False
+            for block in blocks:
+                if block not in enabled_blocks:
+                    needs_modification = True
+                    break
+                if block_strengths.get(block, 1.0) != 1.0:
+                    needs_modification = True
+                    break
+
+            # Apply modifications
+            modified_count = 0
+            if needs_modification:
+                model, modified_count = _apply_block_modifications(
+                    model, block_analysis, enabled_blocks, block_strengths, architecture
+                )
+                print(f"[{cfg['display_name']}] Modified {modified_count} tensors")
+
+            # Format output
+            analysis_text = _format_analysis(block_analysis, architecture, enabled_blocks, block_strengths)
+            analysis_json = _create_analysis_json(block_analysis, architecture, enabled_blocks, block_strengths)
+
+            # Include ALL user presets in JSON for JS sync (handles new computer/cleared storage)
+            analysis_dict = json.loads(analysis_json)
+            all_user_presets = _load_user_presets(node_id)
+            if all_user_presets:
+                analysis_dict["user_presets"] = {
+                    "node_id": node_id,
+                    "presets": all_user_presets
+                }
+
+            # Include just-saved preset info for confirmation
+            if saved_preset_data:
+                analysis_dict["saved_preset"] = saved_preset_data
+                analysis_text += f"\n\n✓ Saved preset '{save_preset_name.strip()}' (restart ComfyUI to see in dropdown)"
+
+            analysis_json = json.dumps(analysis_dict)
+
+            # Save model if requested
+            if save_model and needs_modification:
+                block_info = {
+                    'enabled': list(enabled_blocks),
+                    'strengths': block_strengths,
+                    'modified_count': modified_count
+                }
+                saved_path = _save_modified_model(
+                    model, save_path, save_filename, architecture, block_info, source_model_path
+                )
+                if saved_path:
+                    analysis_text += f"\n\nSaved model: {saved_path}"
+
+            return (model, analysis_text, analysis_json)
+
+    # Set class attributes from config
+    ModelLayerEditor.__name__ = config["node_id"]
+    ModelLayerEditor.__doc__ = config.get("description", "Model Layer Editor")
+    ModelLayerEditor.DESCRIPTION = config.get("description", "Model Layer Editor")
+
+    return ModelLayerEditor
+
+
+# ============================================================================
+# NODE REGISTRATION
+# ============================================================================
+
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+
+# Generate per-architecture editor nodes
+for arch_name, config in ARCH_CONFIGS.items():
+    if "node_id" in config:  # Only configs with node_id
+        node_class = _create_model_layer_editor_class(config)
+        NODE_CLASS_MAPPINGS[config["node_id"]] = node_class
+        NODE_DISPLAY_NAME_MAPPINGS[config["node_id"]] = config["display_name"]
+
+
+=== FILE: musubi_flux_klein_lora_trainer.py ===
+"""
+Musubi Tuner FLUX Klein LoRA Trainer Node for ComfyUI
+
+Trains FLUX Klein LoRAs using kohya-ss/musubi-tuner.
+Supports both Klein Base 4B and Klein Base 9B variants via dropdown selector.
+
+Key differences from Z-Image:
+- Uses flux_2_*.py training scripts (NOT zimage_*.py)
+- Uses --timestep_sampling=flux2_shift (NOT "shift")
+- Uses --fp8_text_encoder (NOT --fp8_llm)
+- Requires --model_version flag (klein-base-4b or klein-base-9b)
+- NO discrete_flow_shift parameter (automatic for FLUX Klein)
+- NO LoRA conversion needed (outputs directly usable)
+- Uses ae.safetensors VAE from FLUX.2-dev (NOT diffusers VAE)
+"""
+
+import os
+import sys
+import json
+import hashlib
+import tempfile
+import shutil
+import subprocess
+from datetime import datetime
+import numpy as np
+from PIL import Image
+
+import folder_paths
+
+from .musubi_flux_klein_config_template import (
+    generate_dataset_config,
+    save_config,
+    FLUX_KLEIN_VARIANTS,
+    MUSUBI_FLUX_KLEIN_VRAM_PRESETS,
+)
+
+
+# Global config for Musubi FLUX Klein trainer
+_musubi_flux_klein_config = {}
+_musubi_flux_klein_config_file = os.path.join(os.path.dirname(__file__), ".musubi_flux_klein_config.json")
+
+# Global cache for trained LoRAs
+_musubi_flux_klein_lora_cache = {}
+_musubi_flux_klein_cache_file = os.path.join(os.path.dirname(__file__), ".musubi_flux_klein_lora_cache.json")
+
+
+def _load_musubi_config():
+    """Load Musubi config from disk."""
+    global _musubi_flux_klein_config
+    if os.path.exists(_musubi_flux_klein_config_file):
+        try:
+            with open(_musubi_flux_klein_config_file, 'r', encoding='utf-8') as f:
+                _musubi_flux_klein_config = json.load(f)
+        except:
+            _musubi_flux_klein_config = {}
+
+
+def _save_musubi_config():
+    """Save Musubi config to disk."""
+    try:
+        with open(_musubi_flux_klein_config_file, 'w', encoding='utf-8') as f:
+            json.dump(_musubi_flux_klein_config, f, indent=2)
+    except:
+        pass
+
+
+def _load_musubi_cache():
+    """Load Musubi LoRA cache from disk."""
+    global _musubi_flux_klein_lora_cache
+    if os.path.exists(_musubi_flux_klein_cache_file):
+        try:
+            with open(_musubi_flux_klein_cache_file, 'r', encoding='utf-8') as f:
+                _musubi_flux_klein_lora_cache = json.load(f)
+        except:
+            _musubi_flux_klein_lora_cache = {}
+
+
+def _save_musubi_cache():
+    """Save Musubi LoRA cache to disk."""
+    try:
+        with open(_musubi_flux_klein_cache_file, 'w', encoding='utf-8') as f:
+            json.dump(_musubi_flux_klein_lora_cache, f)
+    except:
+        pass
+
+
+def _compute_image_hash(images, captions, training_steps, learning_rate, lora_rank, vram_mode, output_name, model_variant, dit_model, vae_model, text_encoder, blocks_to_swap, use_folder_path=False):
+    """Compute a hash of all images, captions, and training parameters."""
+    hasher = hashlib.sha256()
+
+    if use_folder_path:
+        # For folder paths, hash the file paths and modification times
+        for img_path in images:
+            hasher.update(img_path.encode('utf-8'))
+            if os.path.exists(img_path):
+                hasher.update(str(os.path.getmtime(img_path)).encode('utf-8'))
+    else:
+        # For tensor inputs, hash the image data
+        for img_tensor in images:
+            img_np = (img_tensor[0].cpu().numpy() * 255).astype(np.uint8)
+            img_bytes = img_np.tobytes()
+            hasher.update(img_bytes)
+
+    # Include all captions and model paths in hash
+    captions_str = "|".join(captions)
+    params_str = f"musubi_flux_klein|{model_variant}|{captions_str}|{training_steps}|{learning_rate}|{lora_rank}|{vram_mode}|{output_name}|{len(images)}|{dit_model}|{vae_model}|{text_encoder}|{blocks_to_swap}"
+    hasher.update(params_str.encode('utf-8'))
+
+    return hasher.hexdigest()[:16]
+
+
+def _get_venv_python_path(musubi_path):
+    """Get the Python path for musubi-tuner venv based on platform.
+    Checks both .venv (uv default) and venv (traditional) folders."""
+    venv_folders = [".venv", "venv"]
+
+    for venv_folder in venv_folders:
+        if sys.platform == 'win32':
+            python_path = os.path.join(musubi_path, venv_folder, "Scripts", "python.exe")
+        else:
+            python_path = os.path.join(musubi_path, venv_folder, "bin", "python")
+
+        if os.path.exists(python_path):
+            return python_path
+
+    # Return traditional path for error messaging
+    if sys.platform == 'win32':
+        return os.path.join(musubi_path, "venv", "Scripts", "python.exe")
+    else:
+        return os.path.join(musubi_path, "venv", "bin", "python")
+
+
+def _get_accelerate_path(musubi_path):
+    """Get the accelerate path for musubi-tuner venv based on platform.
+    Checks both .venv (uv default) and venv (traditional) folders."""
+    venv_folders = [".venv", "venv"]
+
+    for venv_folder in venv_folders:
+        if sys.platform == 'win32':
+            accel_path = os.path.join(musubi_path, venv_folder, "Scripts", "accelerate.exe")
+        else:
+            accel_path = os.path.join(musubi_path, venv_folder, "bin", "accelerate")
+
+        if os.path.exists(accel_path):
+            return accel_path
+
+    # Return traditional path for error messaging
+    if sys.platform == 'win32':
+        return os.path.join(musubi_path, "venv", "Scripts", "accelerate.exe")
+    else:
+        return os.path.join(musubi_path, "venv", "bin", "accelerate")
+
+
+def _get_model_path(name, folder_type):
+    """Get full path to a model file from ComfyUI folders.
+    Returns the name as-is if it's already an absolute path that exists."""
+    if not name:
+        return ""
+    # If it's already an absolute path that exists, use it
+    if os.path.isabs(name) and os.path.exists(name):
+        return name
+    # Try to get from ComfyUI folder
+    try:
+        return folder_paths.get_full_path(folder_type, name)
+    except:
+        return name
+
+
+# Load config and cache on module import
+_load_musubi_config()
+_load_musubi_cache()
+
+
+class MusubiFluxKleinLoraTrainer:
+    """
+    Trains a FLUX Klein LoRA from one or more images using Musubi Tuner.
+    Supports both Klein Base 4B and Klein Base 9B variants.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(s):
+        # Get saved settings or use defaults
+        if sys.platform == 'win32':
+            musubi_fallback = 'C:\\musubi-tuner'
+        else:
+            musubi_fallback = '~/musubi-tuner'
+
+        saved = _musubi_flux_klein_config.get('trainer_settings', {})
+
+        # Get available models from ComfyUI folders
+        diffusion_models = folder_paths.get_filename_list("diffusion_models")
+        vae_models = folder_paths.get_filename_list("vae")
+        # Text encoders can be in clip or text_encoders folder
+        try:
+            text_encoders = folder_paths.get_filename_list("text_encoders")
+        except:
+            text_encoders = []
+        try:
+            clip_models = folder_paths.get_filename_list("clip")
+        except:
+            clip_models = []
+        text_encoder_list = sorted(set(text_encoders + clip_models)) if (text_encoders or clip_models) else ["(no text encoders found)"]
+
+        # Get saved model selections (for default)
+        saved_dit = saved.get('dit_model', '')
+        saved_vae = saved.get('vae_model', '')
+        saved_te = saved.get('text_encoder', '')
+        saved_variant = saved.get('model_variant', 'Klein Base 4B')
+
+        # Build dropdown configs with saved defaults if available
+        dit_config = {"tooltip": "FLUX Klein DiT model (flux-2-klein-base-4b.safetensors or flux-2-klein-base-9b.safetensors) from diffusion_models folder."}
+        if saved_dit and saved_dit in diffusion_models:
+            dit_config["default"] = saved_dit
+
+        vae_config = {"tooltip": "FLUX 2 VAE model (ae.safetensors from black-forest-labs/FLUX.2-dev) from vae folder. NOT the diffusers format VAE."}
+        if saved_vae and saved_vae in vae_models:
+            vae_config["default"] = saved_vae
+
+        te_config = {"tooltip": "Qwen3 text encoder (qwen_3_4b.safetensors for 4B, qwen_3_8b.safetensors for 9B) from text_encoders or clip folder."}
+        if saved_te and saved_te in text_encoder_list:
+            te_config["default"] = saved_te
+
+        return {
+            "required": {
+                "model_variant": (["Klein Base 4B", "Klein Base 9B"], {
+                    "default": saved_variant,
+                    "tooltip": "FLUX Klein model variant. 4B uses Qwen3-4B text encoder, 9B uses Qwen3-8B."
+                }),
+                "inputcount": ("INT", {"default": 4, "min": 1, "max": 100, "step": 1,
+                    "tooltip": "Number of image inputs. Click 'Update inputs' button after changing."}),
+                "images_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional: Path to folder containing training images. If provided, images from this folder are used instead of image inputs. Caption .txt files with matching names are used if present."
+                }),
+                "musubi_path": ("STRING", {
+                    "default": _musubi_flux_klein_config.get('musubi_path', musubi_fallback),
+                    "tooltip": "Path to musubi-tuner installation."
+                }),
+                "dit_model": (diffusion_models, dit_config),
+                "vae_model": (vae_models, vae_config),
+                "text_encoder": (text_encoder_list, te_config),
+                "caption": ("STRING", {
+                    "default": saved.get('caption', "photo of subject"),
+                    "multiline": True,
+                    "tooltip": "Default caption for all images. Per-image caption inputs override this."
+                }),
+                "training_steps": ("INT", {
+                    "default": saved.get('training_steps', 400),
+                    "min": 10,
+                    "max": 5000,
+                    "step": 10,
+                    "tooltip": "Number of training steps. 400 is a good starting point."
+                }),
+                "learning_rate": ("FLOAT", {
+                    "default": saved.get('learning_rate', 0.0001),
+                    "min": 0.00001,
+                    "max": 0.1,
+                    "step": 0.00001,
+                    "tooltip": "Learning rate. 0.0001 is recommended for FLUX Klein training."
+                }),
+                "lora_rank": ("INT", {
+                    "default": saved.get('lora_rank', 32),
+                    "min": 4,
+                    "max": 128,
+                    "step": 4,
+                    "tooltip": "LoRA rank/dimension. 32 is recommended for FLUX Klein."
+                }),
+                "blocks_to_swap": ("INT", {
+                    "default": saved.get('blocks_to_swap', 0),
+                    "min": 0,
+                    "max": 16,
+                    "step": 1,
+                    "tooltip": "Number of transformer blocks to swap to CPU for VRAM savings. Max 13 for 4B, 16 for 9B. 0 = no swapping."
+                }),
+                "vram_mode": (["Max (1256px)", "Max (1256px) fp8", "Max (1256px) fp8 offload", "Medium (1024px)", "Medium (1024px) fp8", "Medium (1024px) fp8 offload", "Low (768px)", "Min (512px)"], {
+                    "default": saved.get('vram_mode', "Low (768px)"),
+                    "tooltip": "VRAM optimization preset. Controls resolution, gradient checkpointing, and fp8 settings."
+                }),
+                "keep_lora": ("BOOLEAN", {
+                    "default": saved.get('keep_lora', True),
+                    "tooltip": "If True, keeps the trained LoRA file."
+                }),
+                "output_name": ("STRING", {
+                    "default": saved.get('output_name', "MyLora"),
+                    "tooltip": "Custom name for the output LoRA. Timestamp will be appended."
+                }),
+                "custom_python_exe": ("STRING", {
+                    "default": saved.get('custom_python_exe', ""),
+                    "tooltip": "Advanced: Optionally enter the full path to a custom python.exe (e.g. C:\\my-venv\\Scripts\\python.exe). If empty, uses the venv inside musubi_path. The musubi_path field is still required for locating training scripts."
+                }),
+            },
+            "optional": {
+                "image_1": ("IMAGE", {"tooltip": "Training image (not needed if images_path is set)."}),
+                "caption_1": ("STRING", {"forceInput": True, "tooltip": "Caption for image_1. Overrides default caption."}),
+                "image_2": ("IMAGE", {"tooltip": "Training image."}),
+                "caption_2": ("STRING", {"forceInput": True, "tooltip": "Caption for image_2. Overrides default caption."}),
+                "image_3": ("IMAGE", {"tooltip": "Training image."}),
+                "caption_3": ("STRING", {"forceInput": True, "tooltip": "Caption for image_3. Overrides default caption."}),
+                "image_4": ("IMAGE", {"tooltip": "Training image."}),
+                "caption_4": ("STRING", {"forceInput": True, "tooltip": "Caption for image_4. Overrides default caption."}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("lora_path",)
+    OUTPUT_TOOLTIPS = ("Path to the trained FLUX Klein LoRA file.",)
+    FUNCTION = "train_flux_klein_lora"
+    CATEGORY = "loaders"
+    DESCRIPTION = "Trains a FLUX Klein LoRA from images using Musubi Tuner. Supports both 4B and 9B variants."
+
+    def train_flux_klein_lora(
+        self,
+        model_variant,
+        inputcount,
+        images_path,
+        musubi_path,
+        dit_model,
+        vae_model,
+        text_encoder,
+        caption,
+        training_steps,
+        learning_rate,
+        lora_rank,
+        blocks_to_swap,
+        vram_mode,
+        keep_lora=True,
+        output_name="MyLora",
+        custom_python_exe="",
+        image_1=None,
+        **kwargs
+    ):
+        global _musubi_flux_klein_lora_cache
+
+        # Get variant configuration
+        variant_config = FLUX_KLEIN_VARIANTS.get(model_variant, FLUX_KLEIN_VARIANTS["Klein Base 4B"])
+        model_version = variant_config["model_version"]
+        max_blocks = variant_config["max_blocks_to_swap"]
+
+        # Validate and cap blocks_to_swap based on variant
+        if blocks_to_swap > max_blocks:
+            print(f"[Musubi FLUX Klein] Warning: blocks_to_swap ({blocks_to_swap}) exceeds maximum ({max_blocks}) for {model_variant}. Capping to {max_blocks}.")
+            blocks_to_swap = max_blocks
+
+        # Expand paths
+        musubi_path = os.path.expanduser(musubi_path.strip())
+
+        # Get full paths from ComfyUI folders
+        dit_path = _get_model_path(dit_model, "diffusion_models")
+        vae_path = _get_model_path(vae_model, "vae")
+        # Try text_encoders first, then clip
+        text_encoder_path = _get_model_path(text_encoder, "text_encoders")
+        if not text_encoder_path or not os.path.exists(text_encoder_path):
+            text_encoder_path = _get_model_path(text_encoder, "clip")
+
+        # Check if using folder path for images
+        use_folder_path = False
+        folder_images = []
+        folder_captions = []
+
+        if images_path and images_path.strip():
+            images_path = os.path.expanduser(images_path.strip())
+            if os.path.isdir(images_path):
+                # Find all image files in the folder
+                image_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+                for filename in sorted(os.listdir(images_path)):
+                    if filename.lower().endswith(image_extensions):
+                        img_path = os.path.join(images_path, filename)
+                        folder_images.append(img_path)
+
+                        # Look for matching caption file
+                        base_name = os.path.splitext(filename)[0]
+                        caption_file = os.path.join(images_path, f"{base_name}.txt")
+                        if os.path.exists(caption_file):
+                            with open(caption_file, 'r', encoding='utf-8') as f:
+                                folder_captions.append(f.read().strip())
+                        else:
+                            folder_captions.append(caption)  # Use default caption
+
+                if folder_images:
+                    use_folder_path = True
+                    print(f"[Musubi FLUX Klein] Using {len(folder_images)} images from folder: {images_path}")
+                else:
+                    print(f"[Musubi FLUX Klein] No images found in folder: {images_path}, falling back to inputs")
+            else:
+                print(f"[Musubi FLUX Klein] Invalid folder path: {images_path}, falling back to inputs")
+
+        if not use_folder_path:
+            # Collect all images and captions from inputs
+            all_images = []
+            all_captions = []
+
+            if image_1 is not None:
+                all_images.append(image_1)
+                cap_1 = kwargs.get("caption_1", "")
+                all_captions.append(cap_1 if cap_1 else caption)
+
+            for i in range(2, inputcount + 1):
+                img = kwargs.get(f"image_{i}")
+                if img is not None:
+                    all_images.append(img)
+                    cap = kwargs.get(f"caption_{i}", "")
+                    all_captions.append(cap if cap else caption)
+
+            if not all_images:
+                raise ValueError("No images provided. Either set images_path to a folder containing images, or connect at least one image input.")
+
+        num_images = len(folder_images) if use_folder_path else len(all_images)
+        print(f"[Musubi FLUX Klein] Training {model_variant} with {num_images} image(s)")
+        print(f"[Musubi FLUX Klein] DiT: {dit_model}")
+        print(f"[Musubi FLUX Klein] VAE: {vae_model}")
+        print(f"[Musubi FLUX Klein] Text Encoder: {text_encoder}")
+        print(f"[Musubi FLUX Klein] Model version: {model_version}")
+
+        # Get VRAM preset settings
+        preset = MUSUBI_FLUX_KLEIN_VRAM_PRESETS.get(vram_mode, MUSUBI_FLUX_KLEIN_VRAM_PRESETS["Low (768px)"])
+        print(f"[Musubi FLUX Klein] Using VRAM mode: {vram_mode}")
+
+        # Validate paths
+        accelerate_path = _get_accelerate_path(musubi_path)
+        train_script = os.path.join(musubi_path, "src", "musubi_tuner", "flux_2_train_network.py")
+
+        if not os.path.exists(accelerate_path):
+            raise FileNotFoundError(f"Musubi Tuner accelerate not found at: {accelerate_path}")
+        if not os.path.exists(train_script):
+            raise FileNotFoundError(f"flux_2_train_network.py not found at: {train_script}")
+        if not dit_path or not os.path.exists(dit_path):
+            raise FileNotFoundError(f"DiT model not found at: {dit_path}")
+        if not vae_path or not os.path.exists(vae_path):
+            raise FileNotFoundError(f"VAE model not found at: {vae_path}")
+        if not text_encoder_path or not os.path.exists(text_encoder_path):
+            raise FileNotFoundError(f"Text encoder not found at: {text_encoder_path}")
+
+        # Save settings
+        global _musubi_flux_klein_config
+        _musubi_flux_klein_config['musubi_path'] = musubi_path
+        _musubi_flux_klein_config['trainer_settings'] = {
+            'model_variant': model_variant,
+            'dit_model': dit_model,
+            'vae_model': vae_model,
+            'text_encoder': text_encoder,
+            'caption': caption,
+            'training_steps': training_steps,
+            'learning_rate': learning_rate,
+            'lora_rank': lora_rank,
+            'blocks_to_swap': blocks_to_swap,
+            'vram_mode': vram_mode,
+            'keep_lora': keep_lora,
+            'output_name': output_name,
+            'custom_python_exe': custom_python_exe,
+        }
+        _save_musubi_config()
+
+        # Compute hash for caching
+        if use_folder_path:
+            image_hash = _compute_image_hash(folder_images, folder_captions, training_steps, learning_rate, lora_rank, vram_mode, output_name, model_variant, dit_model, vae_model, text_encoder, blocks_to_swap, use_folder_path=True)
+        else:
+            image_hash = _compute_image_hash(all_images, all_captions, training_steps, learning_rate, lora_rank, vram_mode, output_name, model_variant, dit_model, vae_model, text_encoder, blocks_to_swap, use_folder_path=False)
+
+        # Check cache
+        if keep_lora and image_hash in _musubi_flux_klein_lora_cache:
+            cached_path = _musubi_flux_klein_lora_cache[image_hash]
+            if os.path.exists(cached_path):
+                print(f"[Musubi FLUX Klein] Cache hit! Reusing: {cached_path}")
+                return (cached_path,)
+            else:
+                del _musubi_flux_klein_lora_cache[image_hash]
+                _save_musubi_cache()
+
+        # Generate run name with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        variant_suffix = "4b" if model_variant == "Klein Base 4B" else "9b"
+        run_name = f"{output_name}_{variant_suffix}_{timestamp}" if output_name else f"flux_klein_{variant_suffix}_lora_{image_hash}"
+
+        # Output folder
+        output_folder = os.path.join(musubi_path, "output")
+        os.makedirs(output_folder, exist_ok=True)
+        lora_output_path = os.path.join(output_folder, f"{run_name}.safetensors")
+
+        # Auto-increment if file somehow still exists (same second)
+        if os.path.exists(lora_output_path):
+            counter = 1
+            while os.path.exists(os.path.join(output_folder, f"{run_name}_{counter}.safetensors")):
+                counter += 1
+            run_name = f"{run_name}_{counter}"
+            lora_output_path = os.path.join(output_folder, f"{run_name}.safetensors")
+            print(f"[Musubi FLUX Klein] Name exists, using: {run_name}")
+
+        # Create temp directory for images
+        temp_dir = tempfile.mkdtemp(prefix="comfy_musubi_flux_klein_")
+        image_folder = temp_dir  # Musubi uses image_directory directly
+
+        try:
+            # Save images with captions
+            if use_folder_path:
+                # Copy images from folder and create caption files
+                for idx, (src_path, cap) in enumerate(zip(folder_images, folder_captions)):
+                    ext = os.path.splitext(src_path)[1]
+                    dest_path = os.path.join(image_folder, f"image_{idx+1:03d}{ext}")
+                    shutil.copy2(src_path, dest_path)
+
+                    caption_path = os.path.join(image_folder, f"image_{idx+1:03d}.txt")
+                    with open(caption_path, 'w', encoding='utf-8') as f:
+                        f.write(cap)
+            else:
+                # Save tensor images
+                for idx, img_tensor in enumerate(all_images):
+                    img_data = img_tensor[0]
+                    img_np = (img_data.cpu().numpy() * 255).astype(np.uint8)
+                    img_pil = Image.fromarray(img_np)
+
+                    image_path = os.path.join(image_folder, f"image_{idx+1:03d}.png")
+                    img_pil.save(image_path, "PNG")
+
+                    caption_path = os.path.join(image_folder, f"image_{idx+1:03d}.txt")
+                    with open(caption_path, 'w', encoding='utf-8') as f:
+                        f.write(all_captions[idx])
+
+            print(f"[Musubi FLUX Klein] Saved {num_images} images to {image_folder}")
+
+            # Generate dataset config
+            config_content = generate_dataset_config(
+                image_folder=image_folder,
+                resolution=preset['resolution'],
+                batch_size=preset['batch_size'],
+                enable_bucket=True,
+            )
+
+            config_path = os.path.join(temp_dir, "dataset_config.toml")
+            save_config(config_content, config_path)
+            print(f"[Musubi FLUX Klein] Dataset config saved to {config_path}")
+
+            # Set up subprocess environment
+            startupinfo = None
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+
+            # Use custom python exe if provided, otherwise detect from musubi_path
+            if custom_python_exe and custom_python_exe.strip():
+                python_path = custom_python_exe.strip()
+                if not os.path.exists(python_path):
+                    raise FileNotFoundError(f"Custom python.exe not found at: {python_path}")
+            else:
+                python_path = _get_venv_python_path(musubi_path)
+
+            # Pre-cache latents and text encoder outputs (REQUIRED for Musubi training)
+            print(f"[Musubi FLUX Klein] Pre-caching latents and text encoder outputs...")
+
+            # Cache latents
+            cache_latents_script = os.path.join(musubi_path, "src", "musubi_tuner", "flux_2_cache_latents.py")
+            if not os.path.exists(cache_latents_script):
+                raise FileNotFoundError(f"flux_2_cache_latents.py not found at: {cache_latents_script}")
+
+            print(f"[Musubi FLUX Klein] Caching VAE latents...")
+            cache_latents_cmd = [
+                python_path,
+                cache_latents_script,
+                f"--dataset_config={config_path}",
+                f"--vae={vae_path}",
+                f"--model_version={model_version}",  # Required for Klein-specific cache suffix
+            ]
+
+            cache_latents_process = subprocess.Popen(
+                cache_latents_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                cwd=musubi_path,
+                startupinfo=startupinfo,
+                env=env,
+            )
+
+            for line in cache_latents_process.stdout:
+                line = line.rstrip()
+                if line:
+                    print(f"[musubi-tuner] {line}")
+
+            cache_latents_process.wait()
+            if cache_latents_process.returncode != 0:
+                raise RuntimeError(f"Latent caching failed with code {cache_latents_process.returncode}")
+
+            print(f"[Musubi FLUX Klein] VAE latents cached.")
+
+            # Cache text encoder outputs
+            cache_te_script = os.path.join(musubi_path, "src", "musubi_tuner", "flux_2_cache_text_encoder_outputs.py")
+            if not os.path.exists(cache_te_script):
+                raise FileNotFoundError(f"flux_2_cache_text_encoder_outputs.py not found at: {cache_te_script}")
+
+            print(f"[Musubi FLUX Klein] Caching text encoder outputs...")
+            cache_te_cmd = [
+                python_path,
+                cache_te_script,
+                f"--dataset_config={config_path}",
+                f"--text_encoder={text_encoder_path}",
+                f"--model_version={model_version}",
+                "--batch_size=1",
+            ]
+
+            # Use fp8 for text encoder caching if enabled (note: fp8_text_encoder for FLUX Klein)
+            if preset.get('fp8_text_encoder', False):
+                cache_te_cmd.append("--fp8_text_encoder")
+
+            cache_te_process = subprocess.Popen(
+                cache_te_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                cwd=musubi_path,
+                startupinfo=startupinfo,
+                env=env,
+            )
+
+            for line in cache_te_process.stdout:
+                line = line.rstrip()
+                if line:
+                    print(f"[musubi-tuner] {line}")
+
+            cache_te_process.wait()
+            if cache_te_process.returncode != 0:
+                raise RuntimeError(f"Text encoder caching failed with code {cache_te_process.returncode}")
+
+            print(f"[Musubi FLUX Klein] Text encoder outputs cached.")
+
+            # Build training command
+            # Note: FLUX Klein uses flux2_shift timestep sampling and NO discrete_flow_shift
+            cmd = [
+                accelerate_path,
+                "launch",
+                "--num_cpu_threads_per_process=1",
+                f"--mixed_precision={preset['mixed_precision']}",
+                train_script,
+                f"--dit={dit_path}",
+                f"--vae={vae_path}",
+                f"--text_encoder={text_encoder_path}",
+                f"--dataset_config={config_path}",
+                f"--model_version={model_version}",
+                "--sdpa",
+                f"--mixed_precision={preset['mixed_precision']}",
+                "--timestep_sampling=flux2_shift",
+                "--weighting_scheme=none",
+                # NO --discrete_flow_shift for FLUX Klein (automatic)
+                f"--optimizer_type={preset['optimizer']}",
+                f"--learning_rate={learning_rate}",
+                f"--network_module=networks.lora_flux_2",
+                f"--network_dim={lora_rank}",
+                f"--network_alpha={lora_rank}",
+                f"--max_train_steps={training_steps}",
+                "--max_data_loader_n_workers=2",
+                "--persistent_data_loader_workers",
+                f"--output_dir={output_folder}",
+                f"--output_name={run_name}",
+                "--seed=42",
+            ]
+
+            # Add memory optimization flags
+            if preset['gradient_checkpointing']:
+                cmd.append("--gradient_checkpointing")
+
+            if preset['fp8_scaled']:
+                cmd.append("--fp8_base")
+                cmd.append("--fp8_scaled")
+
+            # Note: FLUX Klein uses --fp8_text_encoder (NOT --fp8_llm)
+            if preset.get('fp8_text_encoder', False):
+                cmd.append("--fp8_text_encoder")
+
+            # Use user-specified blocks_to_swap if > 0, otherwise use preset
+            effective_blocks = blocks_to_swap if blocks_to_swap > 0 else preset.get('blocks_to_swap', 0)
+            # Cap to variant max
+            if effective_blocks > max_blocks:
+                effective_blocks = max_blocks
+            if effective_blocks > 0:
+                cmd.append(f"--blocks_to_swap={effective_blocks}")
+
+            print(f"[Musubi FLUX Klein] Starting training: {run_name}")
+            print(f"[Musubi FLUX Klein] Images: {num_images}, Steps: {training_steps}, LR: {learning_rate}, Rank: {lora_rank}")
+            if effective_blocks > 0:
+                print(f"[Musubi FLUX Klein] Blocks to swap: {effective_blocks}")
+
+            # Run training
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                cwd=musubi_path,
+                startupinfo=startupinfo,
+                env=env,
+            )
+
+            # Stream output
+            for line in process.stdout:
+                line = line.rstrip()
+                if line:
+                    print(f"[musubi-tuner] {line}")
+
+            process.wait()
+
+            if process.returncode != 0:
+                raise RuntimeError(f"Musubi Tuner training failed with code {process.returncode}")
+
+            print(f"[Musubi FLUX Klein] Training completed!")
+
+            # Find the trained LoRA (NO conversion needed for FLUX Klein)
+            if not os.path.exists(lora_output_path):
+                # Check for alternative naming
+                possible_files = [f for f in os.listdir(output_folder) if f.startswith(run_name) and f.endswith('.safetensors')]
+                if possible_files:
+                    lora_output_path = os.path.join(output_folder, possible_files[-1])
+                else:
+                    raise FileNotFoundError(f"No LoRA file found in {output_folder}")
+
+            print(f"[Musubi FLUX Klein] Trained LoRA: {lora_output_path}")
+
+            # Handle caching
+            if keep_lora:
+                _musubi_flux_klein_lora_cache[image_hash] = lora_output_path
+                _save_musubi_cache()
+                print(f"[Musubi FLUX Klein] LoRA saved and cached at: {lora_output_path}")
+            else:
+                print(f"[Musubi FLUX Klein] LoRA available at: {lora_output_path}")
+
+            return (lora_output_path,)
+
+        finally:
+            # Cleanup temp directory
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"[Musubi FLUX Klein] Warning: Could not clean up temp dir: {e}")
+
+
+=== FILE: flux_klein_debiaser_node.py ===
+"""
+DIT Deep Debiaser — FLUX.2 Klein (Architecture-Verified)
+=========================================================
+Built from empirical forward-pass hook tracing of the actual model.
+
+VERIFIED ARCHITECTURE (from hook tracing, NOT from tensor name guesses):
+┌─────────────────────────────────────────────────────────────────┐
+│  Reference Latent [1,128,H,W] → patchify → [1, 4070, 128]     │
+│  Noisy Latent [1,128,H,W]    → patchify → [1, 4070, 128]      │
+│                                      │                          │
+│                                 CONCATENATE                     │
+│                                      ↓                          │
+│                               [1, 8140, 128]                    │
+│                                      │                          │
+│                                   img_in  [4096, 128]           │
+│                                      ↓                          │
+│                               [1, 8140, 4096]                   │
+│                                                                 │
+│  Text [1,512,12288]  →  txt_in [4096, 12288]  → [1, 512, 4096] │
+│                                                                 │
+│  Timestep  →  time_in  → [4096]  (conditions via adaLN)        │
+├─────────────────────────────────────────────────────────────────┤
+│  DOUBLE BLOCKS (×8): SEPARATE STREAMS                           │
+│    img_stream: [1, 8140, 4096]  (ref+noisy ONLY)               │
+│    txt_stream: [1, 512, 4096]   (text ONLY)                    │
+│    Each: img_attn, img_mlp, txt_attn, txt_mlp                  │
+│    Modulated by: double_stream_modulation_img/txt               │
+│    → NO cross-modal interaction in these blocks                 │
+├─────────────────────────────────────────────────────────────────┤
+│  SINGLE BLOCKS (×24): CONCATENATED JOINT PROCESSING             │
+│    combined: [1, 8652, 4096]  (8140 img + 512 txt)              │
+│    Each: linear1 [36864,4096], linear2 [4096,16384], norm       │
+│    Modulated by: single_stream_modulation                       │
+│    → THIS IS WHERE TEXT INFLUENCES IMAGE GENERATION             │
+│    → Cross-attention over full joint sequence happens HERE       │
+├─────────────────────────────────────────────────────────────────┤
+│  final_layer → unpatchify → output                              │
+└─────────────────────────────────────────────────────────────────┘
+
+KEY INSIGHTS:
+  - Double blocks CANNOT cause text-driven image corruption (streams isolated)
+  - Single blocks ARE where text overrides your reference image
+  - Reference latent = HALF of img_stream (4070 of 8140 tokens)
+  - Weakening img_* in double blocks hits ref AND noisy equally
+  - linear1 in single blocks packs QKV+MLP gate — can't split at weight level
+
+201 tensors mapped to 63 sub-component controls:
+  7 global + 32 double block (8×4) + 24 single blocks
+
+LoRA-safe via ComfyUI's add_patches system.
+"""
+
+import re
+import json
+import os
+import time
+import torch
+from pathlib import Path
+from collections import defaultdict
+
+
+# ============================================================================
+# SAVE PATH CONFIG (matches .v2_save_paths.json pattern)
+# ============================================================================
+
+_SAVE_CONFIG_NAME = ".v2_save_paths.json"
+
+
+def _find_comfyui_root():
+    """Walk up from this file to find ComfyUI root."""
+    p = Path(__file__).resolve()
+    for parent in p.parents:
+        if (parent / "main.py").exists() or (parent / "comfy").is_dir():
+            return parent
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _get_save_config_path():
+    return (Path(__file__).resolve().parent / _SAVE_CONFIG_NAME)
+
+
+def _load_save_config():
+    cfg_path = _get_save_config_path()
+    if cfg_path.exists():
+        try:
+            with open(cfg_path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_save_config(config):
+    cfg_path = _get_save_config_path()
+    try:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"[FLUX Klein Debiaser] WARNING: Could not save config: {e}")
+
+
+def _get_default_save_dir():
+    root = _find_comfyui_root()
+    cfg = _load_save_config()
+    if "FluxKleinDeepDebiaser" in cfg:
+        p = Path(cfg["FluxKleinDeepDebiaser"])
+        if p.is_absolute():
+            return p
+        return root / p
+    return root / "models" / "diffusion_models" / "debiased"
+
+
+def _resolve_save_path(filename, save_dir_override=""):
+    if save_dir_override.strip():
+        base = Path(save_dir_override.strip())
+        if not base.is_absolute():
+            base = _find_comfyui_root() / base
+    else:
+        base = _get_default_save_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    if not filename.endswith(".safetensors"):
+        filename = filename + ".safetensors"
+    return base / filename
+
+
+# ============================================================================
+# SAVE IMPLEMENTATION
+# ============================================================================
+
+def _build_modified_state_dict(state_dict, key_map, block_strengths):
+    """Build a new state dict with strengths applied directly to weights.
+    Returns (modified_sd, n_modified, n_total).
+    """
+    modified_sd = {}
+    n_modified = 0
+
+    # Build key→strength lookup
+    key_strength = {}
+    for bid, strength in block_strengths.items():
+        for key in key_map.get(bid, []):
+            key_strength[key] = strength
+
+    for key, tensor in state_dict.items():
+        s = key_strength.get(key, 1.0)
+        if s != 1.0:
+            modified_sd[key] = (tensor.float() * s).to(tensor.dtype)
+            n_modified += 1
+        else:
+            modified_sd[key] = tensor
+
+    return modified_sd, n_modified, len(state_dict)
+
+
+def _build_diff_state_dict(state_dict, key_map, block_strengths):
+    """Build a diff-only state dict: only tensors that changed, storing (w*s - w).
+    Much smaller than full model. Can be applied later as patches.
+    Returns (diff_sd, n_modified).
+    """
+    diff_sd = {}
+
+    key_strength = {}
+    for bid, strength in block_strengths.items():
+        for key in key_map.get(bid, []):
+            key_strength[key] = strength
+
+    for key, tensor in state_dict.items():
+        s = key_strength.get(key, 1.0)
+        if s != 1.0:
+            diff = (tensor.float() * (s - 1.0)).to(tensor.dtype)
+            diff_sd[key] = diff
+
+    return diff_sd, len(diff_sd)
+
+
+def _generate_filename(block_strengths, preset_name="Custom"):
+    """Auto-generate descriptive filename from settings."""
+    modified = {k: v for k, v in block_strengths.items() if v != 1.0}
+    if not modified:
+        return "flux_klein_debiased_default"
+
+    # Summarize what was changed
+    parts = ["flux_klein"]
+
+    # Check for common patterns
+    sb_vals = [block_strengths.get(f"sb{i}", 1.0) for i in range(24)]
+    sb_modified = [v for v in sb_vals if v != 1.0]
+
+    if sb_modified and len(set(sb_modified)) == 1:
+        parts.append(f"sb_all_{int(sb_modified[0]*100)}")
+    elif sb_modified:
+        parts.append(f"sb_{len(sb_modified)}mod")
+
+    db_modified = sum(1 for b, v in block_strengths.items()
+                      if b.startswith("db") and v != 1.0)
+    if db_modified:
+        parts.append(f"db_{db_modified}mod")
+
+    global_modified = [b for b in GLOBAL_BLOCKS
+                       if block_strengths.get(b, 1.0) != 1.0]
+    if global_modified:
+        parts.append("g_" + "_".join(global_modified[:3]))
+
+    ts = time.strftime("%m%d_%H%M")
+    parts.append(ts)
+
+    return "_".join(parts)
+
+
+# ============================================================================
+# ARCHITECTURE CONSTANTS (verified by forward-pass hook tracing)
+# ============================================================================
+
+N_DOUBLE = 8    # double_blocks: separate img/txt streams
+N_SINGLE = 24   # single_blocks: concatenated cross-modal
+DB_SUBS = ["img_attn", "img_mlp", "txt_attn", "txt_mlp"]
+
+
+# ============================================================================
+# COMPLETE TENSOR INVENTORY (201 tensors, verified)
+#
+# Per double block (12 tensors × 8 = 96):
+#   img_attn: qkv.weight[12288,4096], proj.weight[4096,4096],
+#             norm.key_norm.scale[128], norm.query_norm.scale[128]
+#   img_mlp:  0.weight[24576,4096], 2.weight[4096,12288]
+#   txt_attn: (same as img_attn)
+#   txt_mlp:  (same as img_mlp)
+#
+# Per single block (4 tensors × 24 = 96):
+#   linear1.weight[36864,4096]  (packed QKV + MLP gate)
+#   linear2.weight[4096,16384]  (output projection)
+#   norm.key_norm.scale[128]
+#   norm.query_norm.scale[128]
+#
+# Global (9 tensors):
+#   img_in.weight[4096,128]
+#   txt_in.weight[4096,12288]
+#   time_in.in_layer.weight[4096,256]
+#   time_in.out_layer.weight[4096,4096]
+#   double_stream_modulation_img.lin.weight[24576,4096]
+#   double_stream_modulation_txt.lin.weight[24576,4096]
+#   single_stream_modulation.lin.weight[12288,4096]
+#   final_layer.adaLN_modulation.1.weight[8192,4096]
+#   final_layer.linear.weight[128,4096]
+# ============================================================================
+
+
+# ============================================================================
+# SUB-COMPONENT DEFINITIONS (63 controls)
+# ============================================================================
+
+# --- 7 Global controls ---
+GLOBAL_BLOCKS = [
+    "img_in", "txt_in", "time_in",
+    "db_mod_img", "db_mod_txt", "sb_mod",
+    "final_layer",
+]
+
+GLOBAL_INFO = {
+    "img_in": {
+        "label": "img_in (Patch→4096d)",
+        "tip": "Projects patchified image tokens (ref+noisy combined) from 128 to 4096 dims. "
+               "Affects ALL image processing. Reference latent enters through here.",
+    },
+    "txt_in": {
+        "label": "txt_in (Qwen3→4096d)",
+        "tip": "Projects Qwen3 8B text embeddings from 12288 to 4096 dims. "
+               "Affects ALL text influence. Weakening this globally reduces prompt strength.",
+    },
+    "time_in": {
+        "label": "time_in (Timestep)",
+        "tip": "Timestep embedding [256]→[4096]. Controls how model responds to denoising stage. "
+               "Modifying this changes the entire denoising dynamics.",
+    },
+    "db_mod_img": {
+        "label": "DB Modulation IMG",
+        "tip": "adaLN modulation for image stream in double blocks [24576,4096]. "
+               "Controls how timestep signal scales/shifts img processing.",
+    },
+    "db_mod_txt": {
+        "label": "DB Modulation TXT",
+        "tip": "adaLN modulation for text stream in double blocks [24576,4096]. "
+               "Controls how timestep signal scales/shifts txt processing.",
+    },
+    "sb_mod": {
+        "label": "SB Modulation (Joint)",
+        "tip": "adaLN modulation for ALL single blocks [12288,4096]. This modulates "
+               "the JOINT cross-modal processing. Very powerful — affects all 24 single blocks.",
+    },
+    "final_layer": {
+        "label": "Final Layer (Output)",
+        "tip": "Final output projection [128,4096] + adaLN modulation [8192,4096]. "
+               "Last thing before unpatchify. Weakening this dampens ALL output.",
+    },
+}
+
+# --- 32 Double block controls (8 blocks × 4 subs) ---
+DB_BLOCKS = []
+DB_INFO = {}
+
+for i in range(N_DOUBLE):
+    for sub in DB_SUBS:
+        bid = f"db{i}_{sub}"
+        DB_BLOCKS.append(bid)
+        stream = "IMG" if sub.startswith("img") else "TXT"
+        comp = "Attention" if "attn" in sub else "MLP"
+        if stream == "IMG":
+            tip = (
+                f"Double block {i}, image {comp.lower()}. SEPARATE stream — processes "
+                f"ref+noisy tokens [8140] independently from text. "
+            )
+            if "attn" in sub:
+                tip += "QKV [12288,4096] computes self-attention over image tokens only."
+            else:
+                tip += "Up [24576,4096] + down [4096,12288] feed-forward on image features."
+        else:
+            tip = (
+                f"Double block {i}, text {comp.lower()}. SEPARATE stream — processes "
+                f"text tokens [512] independently from image. "
+            )
+            if "attn" in sub:
+                tip += "QKV [12288,4096] computes self-attention over text tokens only."
+            else:
+                tip += "Up [24576,4096] + down [4096,12288] feed-forward on text features."
+        DB_INFO[bid] = {"label": f"DB{i} {stream} {comp}", "tip": tip}
+
+# --- 24 Single block controls ---
+SB_BLOCKS = []
+SB_INFO = {}
+
+for i in range(N_SINGLE):
+    bid = f"sb{i}"
+    SB_BLOCKS.append(bid)
+    phase = "early" if i < 8 else ("mid" if i < 16 else "late")
+    tip = (
+        f"Single block {i} ({phase}): Processes the CONCATENATED sequence "
+        f"[8140 img + 512 txt = 8652 tokens]. THIS is where text tokens attend to "
+        f"image tokens and vice versa. linear1 [36864,4096] packs QKV+MLP gate "
+        f"(cannot split attention from MLP at weight level). "
+        f"linear2 [4096,16384] is the output projection."
+    )
+    SB_INFO[bid] = {"label": f"SB{i} Joint ({phase})", "tip": tip}
+
+# Complete ordered list
+ALL_BLOCKS = GLOBAL_BLOCKS + DB_BLOCKS + SB_BLOCKS
+ALL_INFO = {**GLOBAL_INFO, **DB_INFO, **SB_INFO}
+
+
+# ============================================================================
+# STATE_DICT KEY → BLOCK MAPPING (exhaustive, verified against 201 tensors)
+# ============================================================================
+
+def _key_to_block(key):
+    """Map a single state_dict key to its sub-component block ID.
+
+    Returns block_id string or None if unrecognized.
+    Every key in FLUX.2 Klein should map to exactly one block.
+    """
+    # --- Global embedders ---
+    if key.startswith("img_in."):
+        return "img_in"
+    if key.startswith("txt_in."):
+        return "txt_in"
+    if key.startswith("time_in."):
+        return "time_in"
+
+    # --- Modulations ---
+    if key.startswith("double_stream_modulation_img."):
+        return "db_mod_img"
+    if key.startswith("double_stream_modulation_txt."):
+        return "db_mod_txt"
+    if key.startswith("single_stream_modulation."):
+        return "sb_mod"
+
+    # --- Final layer ---
+    if key.startswith("final_layer."):
+        return "final_layer"
+
+    # --- Double blocks ---
+    m = re.match(r"double_blocks\.(\d+)\.(img_attn|img_mlp|txt_attn|txt_mlp)\.", key)
+    if m:
+        return f"db{m.group(1)}_{m.group(2)}"
+
+    # --- Single blocks ---
+    m = re.match(r"single_blocks\.(\d+)\.", key)
+    if m:
+        return f"sb{m.group(1)}"
+
+    return None
+
+
+def _build_key_map(state_dict):
+    """Build block_id → [keys] and find any unmapped keys."""
+    mapping = defaultdict(list)
+    unmapped = []
+    for key in state_dict.keys():
+        bid = _key_to_block(key)
+        if bid is not None:
+            mapping[bid].append(key)
+        else:
+            unmapped.append(key)
+    return dict(mapping), unmapped
+
+
+# ============================================================================
+# PATCHING (LoRA-safe via add_patches)
+# ============================================================================
+
+def _apply_patches(model_patcher, key_map, block_strengths):
+    """Apply strength modifications as additive patches. LoRA-safe."""
+
+    inner = model_patcher.model
+    diff = inner.diffusion_model if hasattr(inner, "diffusion_model") else inner
+    pfx = "diffusion_model." if hasattr(inner, "diffusion_model") else ""
+    sd = diff.state_dict()
+
+    cloned = model_patcher.clone()
+    patches = {}
+    count = 0
+
+    for bid, strength in block_strengths.items():
+        if strength == 1.0:
+            continue
+        for key in key_map.get(bid, []):
+            if key not in sd:
+                continue
+            w = sd[key]
+            w_cpu = w.detach().cpu() if w.device.type != "cpu" else w.detach()
+            patches[pfx + key] = (w_cpu * (strength - 1.0),)
+            count += 1
+
+    if patches:
+        cloned.add_patches(patches, strength_patch=1.0)
+
+    return cloned, count
+
+
+# ============================================================================
+# INFO / ANALYSIS
+# ============================================================================
+
+def _compute_stats(sd, key_map, block_strengths):
+    """Compute per-block statistics from state dict."""
+    stats = {}
+    max_norm = 0.0
+
+    for bid in ALL_BLOCKS:
+        keys = key_map.get(bid, [])
+        params = 0
+        norm = 0.0
+        for k in keys:
+            if k in sd:
+                t = sd[k]
+                params += t.numel()
+                norm += t.float().norm().item()
+        s = block_strengths.get(bid, 1.0)
+        stats[bid] = {
+            "params": params, "norm": norm,
+            "tensors": len(keys), "strength": s,
+        }
+        max_norm = max(max_norm, norm)
+
+    for bid in stats:
+        stats[bid]["score"] = stats[bid]["norm"] / max(max_norm, 1e-8) * 100.0
+
+    return stats
+
+
+def _format_info(stats, block_strengths, n_patched):
+    """Human-readable summary."""
+    total_p = sum(s["params"] for s in stats.values())
+    lines = [
+        "DIT Deep Debiaser — FLUX.2 Klein (Verified Architecture)",
+        "=" * 60,
+        f"Model: {total_p / 1e9:.2f}B params | "
+        f"8 double blocks (SEPARATE) + 24 single blocks (JOINT)",
+        "",
+    ]
+
+    sections = [
+        ("GLOBAL", GLOBAL_BLOCKS),
+        ("DOUBLE BLOCKS (separate img/txt streams)", DB_BLOCKS),
+        ("SINGLE BLOCKS (joint cross-modal — where text→image happens)", SB_BLOCKS),
+    ]
+
+    modified = []
+    untouched = 0
+
+    for label, blocks in sections:
+        sec_mods = []
+        for bid in blocks:
+            s = stats.get(bid)
+            if not s:
+                continue
+            st = s["strength"]
+            if st == 1.0:
+                untouched += 1
+                continue
+            tag = "OFF" if st == 0.0 else f"{st:.2f}"
+            info = ALL_INFO.get(bid, {})
+            sec_mods.append(f"  {info.get('label', bid):<38} → {tag}")
+        if sec_mods:
+            modified.append(f"\n{label}:")
+            modified.extend(sec_mods)
+
+    if modified:
+        lines.append("MODIFIED:")
+        lines.extend(modified)
+    else:
+        lines.append("(All at 1.0 — no modifications)")
+
+    lines.append(f"\n{untouched} sub-components unchanged at 1.00")
+    lines.append(f"Patched {n_patched} tensors (LoRA-safe)")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
+def _make_json(stats):
+    return json.dumps({
+        "architecture": "FLUX2_KLEIN_VERIFIED",
+        "blocks": {
+            bid: {
+                "params": s["params"],
+                "score": round(s["score"], 1),
+                "strength": s["strength"],
+                "tensors": s["tensors"],
+            }
+            for bid, s in stats.items()
+        }
+    })
+
+
+# ============================================================================
+# PRESETS
+# ============================================================================
+
+def _preset_strengths(name):
+    """Return block_id → strength dict for a preset, or None for Custom."""
+
+    if name == "Custom":
+        return None
+
+    base = {bid: 1.0 for bid in ALL_BLOCKS}
+
+    if name == "Default":
+        return base
+
+    # --- Single-block (cross-modal) presets ---
+    if name == "Weaken All Singles 95%":
+        for bid in SB_BLOCKS:
+            base[bid] = 0.95
+    elif name == "Weaken All Singles 90%":
+        for bid in SB_BLOCKS:
+            base[bid] = 0.90
+    elif name == "Weaken All Singles 85%":
+        for bid in SB_BLOCKS:
+            base[bid] = 0.85
+    elif name == "Weaken Late Singles 90% (SB12-23)":
+        for i in range(12, 24):
+            base[f"sb{i}"] = 0.90
+    elif name == "Weaken Late Singles 85% (SB12-23)":
+        for i in range(12, 24):
+            base[f"sb{i}"] = 0.85
+    elif name == "Weaken Early Singles 90% (SB0-7)":
+        for i in range(8):
+            base[f"sb{i}"] = 0.90
+
+    # --- Double-block stream presets ---
+    elif name == "Weaken DB img_mlp 90%":
+        for i in range(N_DOUBLE):
+            base[f"db{i}_img_mlp"] = 0.90
+    elif name == "Weaken DB txt_mlp 90%":
+        for i in range(N_DOUBLE):
+            base[f"db{i}_txt_mlp"] = 0.90
+    elif name == "Weaken DB img_attn 90%":
+        for i in range(N_DOUBLE):
+            base[f"db{i}_img_attn"] = 0.90
+    elif name == "Weaken DB txt_attn 90%":
+        for i in range(N_DOUBLE):
+            base[f"db{i}_txt_attn"] = 0.90
+    elif name == "Weaken ALL img stream 90%":
+        base["img_in"] = 0.90
+        base["db_mod_img"] = 0.90
+        for i in range(N_DOUBLE):
+            base[f"db{i}_img_attn"] = 0.90
+            base[f"db{i}_img_mlp"] = 0.90
+    elif name == "Weaken ALL txt stream 90%":
+        base["txt_in"] = 0.90
+        base["db_mod_txt"] = 0.90
+        for i in range(N_DOUBLE):
+            base[f"db{i}_txt_attn"] = 0.90
+            base[f"db{i}_txt_mlp"] = 0.90
+
+    # --- Global presets ---
+    elif name == "Boost img_in 115%":
+        base["img_in"] = 1.15
+    elif name == "Boost txt_in 115%":
+        base["txt_in"] = 1.15
+    elif name == "Weaken sb_mod 90%":
+        base["sb_mod"] = 0.90
+    elif name == "Global 95%":
+        base = {bid: 0.95 for bid in ALL_BLOCKS}
+    elif name == "Global 90%":
+        base = {bid: 0.90 for bid in ALL_BLOCKS}
+
+    # --- Combo presets ---
+    elif name == "Protect Reference (edit mode)":
+        # Weaken late singles where text overrides reference structure
+        for i in range(12, 24):
+            base[f"sb{i}"] = 0.88
+        # Slightly boost img_in to strengthen reference signal
+        base["img_in"] = 1.10
+    elif name == "Stronger Prompt (edit mode)":
+        # Boost text stream processing
+        base["txt_in"] = 1.15
+        base["db_mod_txt"] = 1.10
+        for i in range(N_DOUBLE):
+            base[f"db{i}_txt_attn"] = 1.10
+            base[f"db{i}_txt_mlp"] = 1.10
+
+    return base
+
+
+PRESET_NAMES = [
+    "Custom", "Default",
+    # Cross-modal (single blocks) — the main lever
+    "Weaken All Singles 95%",
+    "Weaken All Singles 90%",
+    "Weaken All Singles 85%",
+    "Weaken Late Singles 90% (SB12-23)",
+    "Weaken Late Singles 85% (SB12-23)",
+    "Weaken Early Singles 90% (SB0-7)",
+    # Stream-specific (double blocks)
+    "Weaken DB img_mlp 90%",
+    "Weaken DB txt_mlp 90%",
+    "Weaken DB img_attn 90%",
+    "Weaken DB txt_attn 90%",
+    "Weaken ALL img stream 90%",
+    "Weaken ALL txt stream 90%",
+    # Global / embedders
+    "Boost img_in 115%",
+    "Boost txt_in 115%",
+    "Weaken sb_mod 90%",
+    "Global 95%", "Global 90%",
+    # Combo
+    "Protect Reference (edit mode)",
+    "Stronger Prompt (edit mode)",
+]
+
+
+# ============================================================================
+# NODE
+# ============================================================================
+
+class FluxKleinDeepDebiaser:
+    """
+    Architecture-verified debiaser for FLUX.2 Klein 9B.
+
+    63 controls mapped to empirically verified forward-pass behavior.
+    LoRA-safe via ComfyUI's add_patches system.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        inputs = {"required": {
+            "model": ("MODEL", {"tooltip": "FLUX.2 Klein model to debias"}),
+            "preset": (PRESET_NAMES, {"default": "Default"}),
+            "save_model": ("BOOLEAN", {
+                "default": False,
+                "tooltip": "Save the modified model to disk as .safetensors",
+            }),
+            "save_mode": (["full_model", "diff_only"], {
+                "default": "full_model",
+                "tooltip": "full_model: complete ~18GB safetensors (load directly). "
+                           "diff_only: small file with only changed tensors (apply as patch later).",
+            }),
+            "save_filename": ("STRING", {
+                "default": "auto",
+                "multiline": False,
+                "tooltip": "'auto' generates a descriptive name. Otherwise enter a custom name "
+                           "(extension added automatically).",
+            }),
+            "save_directory": ("STRING", {
+                "default": "",
+                "multiline": False,
+                "tooltip": "Override save directory. Empty = use default from config "
+                           "(models/diffusion_models/debiased). Can be absolute or relative to ComfyUI root.",
+            }),
+        }}
+
+        for bid in GLOBAL_BLOCKS:
+            info = GLOBAL_INFO[bid]
+            inputs["required"][bid] = ("BOOLEAN", {
+                "default": True, "tooltip": info["tip"],
+            })
+            inputs["required"][f"{bid}_str"] = ("FLOAT", {
+                "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05,
+                "tooltip": f"Strength: {info['label']}",
+            })
+
+        for bid in DB_BLOCKS:
+            info = DB_INFO[bid]
+            inputs["required"][bid] = ("BOOLEAN", {
+                "default": True, "tooltip": info["tip"],
+            })
+            inputs["required"][f"{bid}_str"] = ("FLOAT", {
+                "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05,
+                "tooltip": f"Strength: {info['label']}",
+            })
+
+        for bid in SB_BLOCKS:
+            info = SB_INFO[bid]
+            inputs["required"][bid] = ("BOOLEAN", {
+                "default": True, "tooltip": info["tip"],
+            })
+            inputs["required"][f"{bid}_str"] = ("FLOAT", {
+                "default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05,
+                "tooltip": f"Strength: {info['label']}",
+            })
+
+        return inputs
+
+    RETURN_TYPES = ("MODEL", "STRING", "STRING")
+    RETURN_NAMES = ("model", "info", "save_path")
+    OUTPUT_TOOLTIPS = (
+        "Model with architecture-verified modifications (LoRA patches preserved)",
+        "Summary of all modifications applied",
+        "Path where model was saved (empty if save_model=False)",
+    )
+    FUNCTION = "debias"
+    CATEGORY = "model_patches"
+    OUTPUT_NODE = True
+    DESCRIPTION = (
+        "FLUX.2 Klein debiaser built from verified forward-pass hook analysis.\n\n"
+        "VERIFIED ARCHITECTURE:\n"
+        "  Double blocks (0-7): SEPARATE img/txt streams — no cross-modal interaction\n"
+        "    img_attn/img_mlp: processes ref+noisy image tokens [8140] ONLY\n"
+        "    txt_attn/txt_mlp: processes text tokens [512] ONLY\n\n"
+        "  Single blocks (0-23): CONCATENATED cross-modal [8652 tokens]\n"
+        "    Text and image tokens interact HERE\n"
+        "    This is where 'model overwrites your image' happens\n"
+        "    linear1 packs QKV+MLP gate (can't split at weight level)\n\n"
+        "  Global: img_in, txt_in, time_in, modulations, final_layer\n\n"
+        "63 controls. Strength 1.0 = unchanged. LoRA-safe.\n\n"
+        "SAVE: Export modified model as .safetensors:\n"
+        "  full_model: Complete model (~18GB), load directly as replacement\n"
+        "  diff_only: Just the changes (small), apply as additive patch"
+    )
+
+    def debias(self, model, preset, save_model, save_mode, save_filename,
+               save_directory, **kwargs):
+        print("[FLUX Klein Debiaser v2] Starting (verified architecture)...")
+
+        # Build strength map from widgets
+        block_strengths = {}
+        for bid in ALL_BLOCKS:
+            enabled = kwargs.get(bid, True)
+            if enabled:
+                block_strengths[bid] = kwargs.get(f"{bid}_str", 1.0)
+            else:
+                block_strengths[bid] = 0.0
+
+        # Access model
+        inner = model.model
+        diff = inner.diffusion_model if hasattr(inner, "diffusion_model") else inner
+        sd = diff.state_dict()
+
+        # Build key mapping
+        key_map, unmapped = _build_key_map(sd)
+        n_mapped = sum(len(v) for v in key_map.values())
+        print(f"[FLUX Klein Debiaser v2] Mapped {n_mapped}/201 tensors to "
+              f"{len(key_map)} sub-components")
+        if unmapped:
+            print(f"[FLUX Klein Debiaser v2] WARNING: {len(unmapped)} unmapped: "
+                  f"{unmapped[:5]}...")
+
+        # Check if anything needs modification
+        needs_mod = any(s != 1.0 for s in block_strengths.values())
+
+        if needs_mod:
+            model_out, n_patched = _apply_patches(model, key_map, block_strengths)
+            print(f"[FLUX Klein Debiaser v2] Patched {n_patched} tensors (LoRA-safe)")
+        else:
+            model_out = model.clone()
+            n_patched = 0
+            print("[FLUX Klein Debiaser v2] No modifications (all at 1.0)")
+
+        # Stats and info
+        stats = _compute_stats(sd, key_map, block_strengths)
+        info = _format_info(stats, block_strengths, n_patched)
+        analysis_json = _make_json(stats)
+
+        # ---- SAVE ----
+        saved_path = ""
+        if save_model and needs_mod:
+            try:
+                import safetensors.torch as sf_torch
+
+                # Resolve filename
+                if save_filename.strip().lower() in ("auto", ""):
+                    fname = _generate_filename(block_strengths, preset)
+                else:
+                    fname = save_filename.strip()
+
+                # Add mode suffix for diff
+                if save_mode == "diff_only" and not fname.endswith("_diff"):
+                    fname = fname.replace(".safetensors", "") + "_diff"
+
+                full_path = _resolve_save_path(fname, save_directory)
+
+                print(f"[FLUX Klein Debiaser v2] Saving ({save_mode}) to: {full_path}")
+                t0 = time.time()
+
+                if save_mode == "full_model":
+                    modified_sd, n_mod, n_total = _build_modified_state_dict(
+                        sd, key_map, block_strengths
+                    )
+                    # Add metadata
+                    metadata = {
+                        "debiaser": "FluxKleinDeepDebiaser_v2",
+                        "architecture": "FLUX2_KLEIN_VERIFIED",
+                        "save_mode": "full_model",
+                        "modified_tensors": str(n_mod),
+                        "total_tensors": str(n_total),
+                        "preset": preset,
+                        "strengths": json.dumps(
+                            {k: v for k, v in block_strengths.items() if v != 1.0}
+                        ),
+                    }
+                    sf_torch.save_file(modified_sd, str(full_path), metadata=metadata)
+                    size_gb = full_path.stat().st_size / (1024**3)
+                    elapsed = time.time() - t0
+                    print(f"[FLUX Klein Debiaser v2] Saved full model: "
+                          f"{size_gb:.2f} GB, {n_mod}/{n_total} modified, "
+                          f"{elapsed:.1f}s")
+
+                elif save_mode == "diff_only":
+                    diff_sd, n_diff = _build_diff_state_dict(
+                        sd, key_map, block_strengths
+                    )
+                    metadata = {
+                        "debiaser": "FluxKleinDeepDebiaser_v2",
+                        "architecture": "FLUX2_KLEIN_VERIFIED",
+                        "save_mode": "diff_only",
+                        "diff_tensors": str(n_diff),
+                        "preset": preset,
+                        "strengths": json.dumps(
+                            {k: v for k, v in block_strengths.items() if v != 1.0}
+                        ),
+                        "usage": "Apply as additive patch: weight = base_weight + diff_weight",
+                    }
+                    sf_torch.save_file(diff_sd, str(full_path), metadata=metadata)
+                    size_mb = full_path.stat().st_size / (1024**2)
+                    elapsed = time.time() - t0
+                    print(f"[FLUX Klein Debiaser v2] Saved diff: "
+                          f"{size_mb:.1f} MB, {n_diff} tensors, {elapsed:.1f}s")
+
+                saved_path = str(full_path)
+                info += f"\n\nSaved to: {saved_path}"
+
+                # Update save config with directory for next time
+                if save_directory.strip():
+                    cfg = _load_save_config()
+                    cfg["FluxKleinDeepDebiaser"] = save_directory.strip()
+                    _save_save_config(cfg)
+
+            except ImportError:
+                print("[FLUX Klein Debiaser v2] ERROR: safetensors not installed. "
+                      "Run: pip install safetensors")
+                info += "\n\nSAVE FAILED: safetensors package not installed"
+            except Exception as e:
+                print(f"[FLUX Klein Debiaser v2] SAVE ERROR: {e}")
+                info += f"\n\nSAVE FAILED: {e}"
+
+        elif save_model and not needs_mod:
+            info += "\n\nSkipped save — no modifications to save (all at 1.0)"
+            print("[FLUX Klein Debiaser v2] Skipped save — nothing modified")
+
+        print("[FLUX Klein Debiaser v2] Done.")
+        return {
+            "ui": {"analysis_json": [analysis_json]},
+            "result": (model_out, info, saved_path),
+        }
+
+
+# ============================================================================
+# REGISTRATION
+# ============================================================================
+
+NODE_CLASS_MAPPINGS = {
+    "FluxKleinDeepDebiaser": FluxKleinDeepDebiaser,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "FluxKleinDeepDebiaser": "DIT Deep Debiaser (FLUX.2 Klein — Verified)",
+}
