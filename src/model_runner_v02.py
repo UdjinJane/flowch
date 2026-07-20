@@ -35,19 +35,32 @@ class FluxLoRAMarshStep(torch.nn.Module):
         saved_hooks = self.patch_blocks()
         try:
             if t_attr is not None:
-                # Вытягиваем в 1D и берем ровно столько элементов, сколько картинок в батче
                 t_vector = t_attr.reshape(-1)[:noisy_latents.shape[0]]
             else:
                 t_vector = t_attr
 
-            # Чистый позиционный маршевый проход через PEFT-обертку
+            # --- ОДНОКРАТНАЯ ТЕЛЕМЕТРИЯ ДЛЯ ПЕРВОГО ТАКТА РЕАКТОРА ---
+            if not hasattr(self, "_telemetry_fired"):
+                print("\n" + "="*50)
+                print("[ТЕЛЕМЕТРИЯ МОСТИКА] Замер геометрии входных магистралей:")
+                print(f" -> hidden_states:         {list(noisy_latents.shape)}")
+                print(f" -> timestep (исходный):   {list(t_attr.shape) if t_attr is not None else 'None'}")
+                print(f" -> timestep (выровнен):   {list(t_vector.shape) if t_vector is not None else 'None'}")
+                print(f" -> encoder_hidden_states: {list(embeds.shape)}")
+                print(f" -> pooled_projections:    {list(p_proj.shape)}")
+                print(f" -> txt_ids:               {list(t_ids.shape)}")
+                print(f" -> img_ids:               {list(i_ids.shape)}")
+                print("="*50 + "\n")
+                self._telemetry_fired = True
+
+            # Маршевый проход строго по именам ключей для PEFT
             out = lora_model(
-                noisy_latents.to(device=device, dtype=self.m_dtype),
-                t_vector.to(device=device, dtype=self.m_dtype),
-                embeds.to(device=device, dtype=self.m_dtype),
-                p_proj.to(device=device, dtype=self.m_dtype),
-                t_ids.to(device=device, dtype=self.m_dtype),
-                i_ids.to(device=device, dtype=self.m_dtype),
+                hidden_states=noisy_latents.to(device=device, dtype=self.m_dtype),
+                timestep=t_vector.to(device=device, dtype=self.m_dtype) if t_vector is not None else None,
+                encoder_hidden_states=embeds.to(device=device, dtype=self.m_dtype),
+                pooled_projections=p_proj.to(device=device, dtype=self.m_dtype),
+                txt_ids=t_ids.to(device=device, dtype=self.m_dtype),
+                img_ids=i_ids.to(device=device, dtype=self.m_dtype),
                 return_dict=False
             )
             pred = out[0] if isinstance(out, tuple) else out
