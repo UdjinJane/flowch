@@ -8,18 +8,18 @@ class FluxLoRAMarshStep(torch.nn.Module):
         self.m_dtype = torch.bfloat16
         
         def patch_blocks(self):
-        saved = []
-        # Динамический захват двойных блоков
-        if hasattr(self.base, "transformer_blocks"):
-            for b in self.base.transformer_blocks:
-                old_fwd = b.forward
-                saved.append((b, old_fwd))
-                # Имена аргументов строго совпадают с вызовом из diffusers
-                b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
+            saved = []
+            # Динамический захват двойных блоков
+            if hasattr(self.base, "transformer_blocks"):
+                for b in self.base.transformer_blocks:
+                    old_fwd = b.forward
+                    saved.append((b, old_fwd))
+                    # Имена аргументов строго совпадают с вызовом из diffusers
+                    b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
                     hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
                     encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
                     *args, **kwargs
-                )
+                    )
         # Динамический захват одиночных блоков
         if hasattr(self.base, "single_transformer_blocks"):
             for b in self.base.single_transformer_blocks:
