@@ -181,7 +181,9 @@ def main_train_loop():
                     lf.write(file_msg)  # В файл пишется чистая строка без дублей
             
             # --- РУБЕЖ СОХРАНЕНИЯ И ГЕНЕРАЦИИ СЭМПЛОВ ---
-            if global_step % TrainConfig.SAVE_STEPS == 0 or frame_idx == (total_frames - 1):
+            # --- ИСПРАВЛЕННЫЙ РУБЕЖ СОХРАНЕНИЯ (СТРОГО ПО ШАГАМ) ---
+            if global_step % TrainConfig.SAVE_STEPS == 0:
+
                 print(f"[Т] Рубеж фиксации. Запекаем чекпоинт на шаге {global_step}...")
                 checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"flux_lora_step_{global_step}.safetensors")
                 lora_state_dict = {k: v for k, v in lora_model.state_dict().items() if "lora_" in k}
