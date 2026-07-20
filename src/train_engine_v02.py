@@ -110,12 +110,12 @@ def main_train_loop():
                         
                 # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
                 pred_tensor = run_lora_model_step(
-                    lora_model=lora_model, 
-                    batch=batch, 
+                    lora_model=lora_model,
+                    batch=mega_batch, 
                     packed_noisy_latents=packed_noisy_latents,
-                    timesteps_attr=t_attr, 
+                    timesteps_attr=t_attr,
                     prompt_embeds=prompt_embeds,
-                    pooled_projections=torch.zeros(b_size, 768, device=device, dtype=torch.bfloat16),
+                    pooled_projections=torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
                     txt_ids=txt_ids, 
                     img_ids=img_ids
                 ) # Закрывающая скобка строго здесь!
