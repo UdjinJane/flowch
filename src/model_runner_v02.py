@@ -5,10 +5,11 @@ class FluxLoRAMarshStep(torch.nn.Module):
         super().__init__()
         self.base = base_transformer
         self.b_dtype = torch.float8_e4m3fn
-        self.m_dtype = torch.bfloat16
+        # self.m_dtype = torch.bfloat16
 
     def patch_blocks(self):
         saved = []
+        return []
         # Динамический захват двойных блоков
         if hasattr(self.base, "transformer_blocks"):
             for b in self.base.transformer_blocks:
@@ -33,47 +34,43 @@ class FluxLoRAMarshStep(torch.nn.Module):
         return saved
 
 
-    def forward(self, lora_model, noisy_latents, t_attr, embeds, p_proj, t_ids, i_ids):
-        device = noisy_latents.device
-        saved_hooks = self.patch_blocks()
-        try:
-            if t_attr is not None:
-                t_vector = t_attr.reshape(-1)[:noisy_latents.shape[0]]
-            else:
-                t_vector = t_attr
+        def forward(self, lora_model, noisy_latents, t_attr, embeds, p_proj, t_ids, i_ids):
+            device = noisy_latents.device
+            # Отключаем ручной перехват блоков, так как переходим на системный autocast
+            try:
+                if t_attr is not None:
+                    t_vector = t_attr.reshape(-1)[:noisy_latents.shape[0]]
+                else:
+                    t_vector = t_attr
 
-            # --- ОДНОКРАТНАЯ ТЕЛЕМЕТРИЯ ДЛЯ ПЕРВОГО ТАКТА РЕАКТОРА ---
-            if not hasattr(self, "_telemetry_fired"):
-                print("\n" + "="*50)
-                print("[ТЕЛЕМЕТРИЯ МОСТИКА] Замер геометрии входных магистралей:")
-                print(f" -> hidden_states:         {list(noisy_latents.shape)}")
-                print(f" -> timestep (исходный):   {list(t_attr.shape) if t_attr is not None else 'None'}")
-                print(f" -> timestep (выровнен):   {list(t_vector.shape) if t_vector is not None else 'None'}")
-                print(f" -> encoder_hidden_states: {list(embeds.shape)}")
-                print(f" -> pooled_projections:    {list(p_proj.shape)}")
-                print(f" -> txt_ids:               {list(t_ids.shape)}")
-                print(f" -> img_ids:               {list(i_ids.shape)}")
-                print("="*50 + "\n")
-                self._telemetry_fired = True
+                # --- ОДНОКРАТНАЯ ТЕЛЕМЕТРИЯ ---
+                if not hasattr(self, "_telemetry_fired"):
+                    print("\n" + "="*50)
+                    print("[ТЕЛЕМЕТРИЯ МОСТИКА] Вход по именованному контуру:")
+                    print(f" -> hidden_states: {list(noisy_latents.shape)}")
+                    print("="*50 + "\n")
+                    self._telemetry_fired = True
 
-            # Маршевый проход строго по именам ключей для PEFT
-            out = lora_model(
-                hidden_states=noisy_latents.to(device=device, dtype=self.m_dtype),
-                timestep=t_vector.to(device=device, dtype=self.m_dtype) if t_vector is not None else None,
-                encoder_hidden_states=embeds.to(device=device, dtype=self.m_dtype),
-                pooled_projections=p_proj.to(device=device, dtype=self.m_dtype),
-                txt_ids=t_ids.to(device=device, dtype=self.m_dtype),
-                img_ids=i_ids.to(device=device, dtype=self.m_dtype),
-                return_dict=False
-            )
-            pred = out[0] if isinstance(out, tuple) else out
-            if pred.dim() == 4:
-                pred = pred.squeeze(1)
-            return pred.to(dtype=self.m_dtype)
-        finally:
-            # Железный откат инженерных систем
-            for b, old_fwd in saved_hooks:
-                b.forward = old_fwd
+                # Запуск системного выравнивателя типов для bfloat16/float8 матриц
+                with torch.amp.autocast(device_type="cuda", dtype=self.m_dtype):
+                    out = lora_model(
+                        hidden_states=noisy_latents.to(device=device, dtype=self.m_dtype),
+                        timestep=t_vector.to(device=device, dtype=self.m_dtype) if t_vector is not None else None,
+                        encoder_hidden_states=embeds.to(device=device, dtype=self.m_dtype),
+                        pooled_projections=p_proj.to(device=device, dtype=self.m_dtype),
+                        txt_ids=t_ids.to(device=device, dtype=self.m_dtype),
+                        img_ids=i_ids.to(device=device, dtype=self.m_dtype),
+                        return_dict=False
+                    )
+                    
+                pred = out[0] if isinstance(out, tuple) else out
+                if pred.dim() == 4:
+                    pred = pred.squeeze(1)
+                return pred.to(dtype=self.m_dtype)
+                
+            finally:
+                pass
+
 
 def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr, prompt_embeds, pooled_projections, txt_ids, img_ids):
     base_tf = lora_model.get_base_model() if hasattr(lora_model, "get_base_model") else lora_model
