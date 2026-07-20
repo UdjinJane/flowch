@@ -96,24 +96,35 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 t_show = t_next if (i + 1) == steps else t_curr
                 print(f"  [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | t = {t_show:.3f}")
                 print("[ОБТ] Фаза Е: Подготовка параметров Flux VAE...")
+                #
+                # === НАЧАЛО ОКОНЧАТЕЛЬНОЙ ГЕРМЕТИЗАЦИИ VAE CONFIG ===
                 v_conf = {
                     "_class_name": "AutoencoderKL",
-                    "block_out_channels": (128, 256, 512, 512),
                     "in_channels": 3,
+                    "out_channels": 3,
                     "latent_channels": 16,
+                    "sample_size": 1024,
                     "layers_per_block": 2,
                     "norm_num_groups": 32,
-                    "out_channels": 3,
-                    "sample_size": 1024,
                     "scaling_factor": 0.3611,
                     "shift_factor": 0.1159,
+                    "block_out_channels": (128, 256, 512, 512),
+                    "down_block_types": (
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D"
+                    ),
                     "up_block_types": (
-                    "UpDecoderBlock2D",
-                    "UpDecoderBlock2D",
-                    "UpDecoderBlock2D",
-                    "UpDecoderBlock2D"
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D"
                     )
                 }
+                # === КОНЕЦ ОКОНЧАТЕЛЬНОЙ ГЕРМЕТИЗАЦИИ VAE CONFIG ===
+
+                #
                 vae = AutoencoderKL.from_config(v_conf)
 
                 print("[ОБТ] Загрузка весов VAE и перевод контура в bfloat16...")
