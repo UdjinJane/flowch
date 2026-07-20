@@ -32,55 +32,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     total_tokens = (latent_h // 2) * (latent_w // 2)
     x_t = torch.randn(1, total_tokens, 64, device=device, dtype=torch.bfloat16)
 
-    print("[ОБТ] Фаза В: Развёртывание 2D геометрии img_ids и заглушек txt_ids...")
-    grid_h = torch.arange(32, device=device, dtype=torch.bfloat16)[:, None].repeat(1, 32)
-    grid_w = torch.arange(32, device=device, dtype=torch.bfloat16)[None, :].repeat(32, 1)
-    img_ids = torch.zeros(total_tokens, 3, device=device, dtype=torch.bfloat16)
-    img_ids[:, 1], img_ids[:, 2] = grid_h.flatten(), grid_w.flatten()
-    txt_ids = torch.zeros(256, 3, device=device, dtype=torch.bfloat16)
-
-    # Добавляем обязательный пулинг для эмбеддера времени
-    pooled_projections = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
-
-    print("[ОБТ] Фаза Г: Кастинг текстовых эмбеддингов Т5 в bfloat16...")
-    if text_embedding is not None:
-        cond = text_embedding.to(device, dtype=torch.bfloat16)
-    else:
-        print("[ОБТ] Внимание: Текстовый вектор пуст! Генерируем нулевой контекст [1, 256, 4096].")
-        cond = torch.zeros(1, 256, 4096, device=device, dtype=torch.bfloat16)
-
-    print(f"[ОБТ] Фаза Д: Запуск ODE траектории Rectified Flow ({steps} шагов Эйлера)...")
-    with torch.no_grad():
-        # Строим логарифмически-смещенную сетку таймстепов Эйлера
-        t_lines = torch.linspace(0.0, 1.0, steps + 1, device=device)
-        # Математический сдвиг сетки к началу координат для проработки геометрии мангала
-        steps_grid = t_lines / (1.0 + (1.0 - t_lines) * 0.5)
-
-        for i in range(steps):
-            t_curr = steps_grid[i].item()
-            t_next = steps_grid[i+1].item()
-            dt = t_next - t_curr  # Динамический калиброванный шаг
-
-            t_tensor = torch.ones(1, device=device) * t_curr
-
-            # Маршевый проход через изолированный раннер с полной врезкой LoRA-весов
-            batch_stub = {"text_ids_mask": torch.ones(1, 256, device=device, dtype=torch.bool)}
-            velocity = run_lora_model_step(
-                loaded_transformer,
-                batch_stub,
-                x_t,
-                t_tensor,
-                cond,
-                pooled_projections,
-                txt_ids,
-                img_ids
-            )
-
-            # Истинный флотский буравчик: снайперски выбивает нулевой элемент до чистого тензора
+    
+    ##
+            # Перепривязываем velocity на каждом шаге, чтобы не зависать в ПЗУ
             pred_tensor = velocity
-            while isinstance(pred_tensor, (tuple, list)):
+            
+            # Распаковываем контейнеры, если прилетел кортеж
+            if isinstance(pred_tensor, (tuple, list)):
                 pred_tensor = pred_tensor[0]
-
+ 
             # Если это объект diffusers output, забираем его sample
             if hasattr(pred_tensor, "sample"):
                 pred_tensor = pred_tensor.sample
