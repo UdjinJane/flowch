@@ -117,7 +117,7 @@ def main_train_loop():
                     timesteps_attr=t_attr,
                     prompt_embeds=prompt_embeds,
                     pooled_projections=torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
-                    img_ids=img_ids
+                    img_ids = generate_flux_img_ids( latents. shape[ 2], latents. shape[ 3], device). to( torch. bfloat16)
                     txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
                 ) # Закрывающая скобка строго здесь!
             # ----------------------------------------------------
