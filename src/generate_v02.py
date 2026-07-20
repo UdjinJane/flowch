@@ -144,11 +144,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                     # Исправленная денормализация Flux: снайперски снимаем сдвиг и масштаб
                     latents_decoded = (latents_4d * v_conf["scaling_factor"]) + v_conf["shift_factor"]
                     
-                    rgb_tensor = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)[0]
+                    dec_out = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)
+                    rgb_tensor = dec_out[0] if isinstance(dec_out, (tuple, list)) else dec_out
 
-    # Извлекаем чистый тензор из кортежа вывода VAE
-    if isinstance(rgb_tensor, (tuple, list)):
-        rgb_tensor = rgb_tensor[0]
 
     # Нормализация пикселей в диапазон [0, 1] и перевод в формат изображения
     rgb_tensor = (rgb_tensor / 2 + 0.5).clamp(0, 1)
