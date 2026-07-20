@@ -1,12 +1,14 @@
 import torch
 
+import torch
+
 class FluxLoRAMarshStep(torch.nn.Module):
     def __init__(self, base_transformer):
         super().__init__()
         self.base = base_transformer
         self.b_dtype = torch.float8_e4m3fn
         self.m_dtype = torch.bfloat16
-        
+
         def patch_blocks(self):
             saved = []
             # Динамический захват двойных блоков
@@ -16,10 +18,11 @@ class FluxLoRAMarshStep(torch.nn.Module):
                     saved.append((b, old_fwd))
                     # Имена аргументов строго совпадают с вызовом из diffusers
                     b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
-                    hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
-                    encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
-                    *args, **kwargs
+                        hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
+                        encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
+                        *args, **kwargs
                     )
+
         # Динамический захват одиночных блоков
         if hasattr(self.base, "single_transformer_blocks"):
             for b in self.base.single_transformer_blocks:
