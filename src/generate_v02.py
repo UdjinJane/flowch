@@ -133,7 +133,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 print("[ОБТ] Загрузка весов VAE и перевод контура в bfloat16...")
                 vae_state = load_file(TrainConfig.VAE_PATH, device="cpu")
                 vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
-                vae.load_state_dict(vae_clean, strict=True)
+                #vae.load_state_dict(vae_clean, strict=True)
+                # Отключаем strict, чтобы не падать из-за неиспользуемого энкодера в инференсе
+                vae.load_state_dict(vae_clean, strict=False)
                 vae = vae.to(device=device, dtype=torch.bfloat16)
 
                 print("[ОБТ] Фаза Ж: Распаковка 2D патчей и маршевый VAE-декод...")
