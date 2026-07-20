@@ -112,7 +112,7 @@ def main_train_loop():
                         
                 #
                 # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
-                txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
+                txt_ids = torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16)
                 pred_tensor = run_lora_model_step(
                     lora_model=lora_model,
                     batch=current_batch,
