@@ -112,14 +112,12 @@ def main_train_loop():
                         
                 # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
                 # Генерация позиционных ID для текста (txt_ids)
-                txt_ids = torch. zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
+                txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
 
                 # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 ---
                 pred_tensor = run_lora_model_step(
                     lora_model=lora_model,
-                    batch=mega_batch,
-                    packed_noisy_latents=packed_noisy_latents,
-                    timesteps_attr=t_attr,
+                    batch=current_batch, # Изолированный батч
                     prompt_embeds=prompt_embeds,
                     pooled_projections=torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
                     txt_ids=txt_ids,
