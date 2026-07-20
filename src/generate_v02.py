@@ -99,10 +99,20 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 v_conf = {
                     "_class_name": "AutoencoderKL",
                     "block_out_channels": (128, 256, 512, 512),
+                    "in_channels": 3,
                     "latent_channels": 16,
+                    "layers_per_block": 2,
+                    "norm_num_groups": 32,
+                    "out_channels": 3,
+                    "sample_size": 1024,
                     "scaling_factor": 0.3611,
                     "shift_factor": 0.1159,
-                    # Остальные параметры инициализации
+                    "up_block_types": (
+                    "UpDecoderBlock2D",
+                    "UpDecoderBlock2D",
+                    "UpDecoderBlock2D",
+                    "UpDecoderBlock2D"
+                    )
                 }
                 vae = AutoencoderKL.from_config(v_conf)
 
