@@ -49,7 +49,7 @@ class TrainConfig:
     LEARNING_RATE = 2e-5
     MAX_TRAIN_STEPS = 1500
     SAVE_STEPS = 100
-    NUM_EPOCHS = 10
+    NUM_EPOCHS = 40
     LORA_RANK = 16
     LORA_ALPHA = 16
     
