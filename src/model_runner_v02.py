@@ -1,7 +1,5 @@
 import torch
 
-import torch
-
 class FluxLoRAMarshStep(torch.nn.Module):
     def __init__(self, base_transformer):
         super().__init__()
@@ -9,19 +7,19 @@ class FluxLoRAMarshStep(torch.nn.Module):
         self.b_dtype = torch.float8_e4m3fn
         self.m_dtype = torch.bfloat16
 
-        def patch_blocks(self):
-            saved = []
-            # Динамический захват двойных блоков
-            if hasattr(self.base, "transformer_blocks"):
-                for b in self.base.transformer_blocks:
-                    old_fwd = b.forward
-                    saved.append((b, old_fwd))
-                    # Имена аргументов строго совпадают с вызовом из diffusers
-                    b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
-                        hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
-                        encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
-                        *args, **kwargs
-                    )
+    def patch_blocks(self):
+        saved = []
+        # Динамический захват двойных блоков
+        if hasattr(self.base, "transformer_blocks"):
+            for b in self.base.transformer_blocks:
+                old_fwd = b.forward
+                saved.append((b, old_fwd))
+                # Имена аргументов строго совпадают с вызовом из diffusers
+                b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
+                    hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
+                    encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
+                    *args, **kwargs
+                )
 
         # Динамический захват одиночных блоков
         if hasattr(self.base, "single_transformer_blocks"):
@@ -34,7 +32,6 @@ class FluxLoRAMarshStep(torch.nn.Module):
                     *args, **kwargs
                 )
         return saved
-
 
     def forward(self, lora_model, noisy_latents, t_attr, embeds, p_proj, t_ids, i_ids):
         device = noisy_latents.device
