@@ -14,24 +14,24 @@ class FluxLoRAMarshStep(torch.nn.Module):
             for b in self.base.transformer_blocks:
                 old_fwd = b.forward
                 saved.append((b, old_fwd))
-                # Имена аргументов строго совпадают с вызовом из diffusers
+                # Насильно держим входящие состояния в bfloat16 для безопасного torch.cat
                 b.forward = lambda hidden_states, encoder_hidden_states=None, *args, **kwargs: old_fwd(
-                    hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
-                    encoder_hidden_states.to(self.b_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
+                    hidden_states.to(self.m_dtype) if hidden_states is not None else hidden_states,
+                    encoder_hidden_states.to(self.m_dtype) if encoder_hidden_states is not None else encoder_hidden_states,
                     *args, **kwargs
                 )
-
         # Динамический захват одиночных блоков
         if hasattr(self.base, "single_transformer_blocks"):
             for b in self.base.single_transformer_blocks:
                 old_fwd = b.forward
                 saved.append((b, old_fwd))
-                # Имя аргумента строго hidden_states
+                # Удерживаем в bfloat16
                 b.forward = lambda hidden_states, *args, **kwargs: old_fwd(
-                    hidden_states.to(self.b_dtype) if hidden_states is not None else hidden_states,
+                    hidden_states.to(self.m_dtype) if hidden_states is not None else hidden_states,
                     *args, **kwargs
                 )
         return saved
+
 
     def forward(self, lora_model, noisy_latents, t_attr, embeds, p_proj, t_ids, i_ids):
         device = noisy_latents.device
