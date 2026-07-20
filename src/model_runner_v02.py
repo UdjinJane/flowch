@@ -5,7 +5,7 @@ class FluxLoRAMarshStep(torch.nn.Module):
         super().__init__()
         self.base = base_transformer
         self.b_dtype = torch.float8_e4m3fn
-        # self.m_dtype = torch.bfloat16
+        self.m_dtype = torch.bfloat16
 
     def patch_blocks(self):
         saved = []
