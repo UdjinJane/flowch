@@ -1,0 +1,25 @@
+def decode_elfish(text: str) -> str:
+    # Проверка на ручной принудительный запуск от Кэпа
+    force_decode = False
+    if text.strip().startswith("/декод"):
+        text = text.replace("/декод", "", 1).strip()
+        force_decode = True
+
+    # Бронированная Си-матрица перекодировки QWERTY <-> ЙЦУКЕН
+    layout = str.maketrans(
+        r"qwertyuiop[]asdfghjkl;'zxcvbnm,.QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>`~",
+        r"йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮёЁ"
+    )
+    
+    # Считаем латинские и русские буквы для точной оценки контекста
+    low_text = text.lower()
+    has_lat = any(c in "qwertyuiopasdfghjklzxcvbnm" for c in low_text)
+    has_rus = any(c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in low_text)
+    
+    # УСЛОВИЯ ВКЛЮЧЕНИЯ:
+    # 1. Сработал ручной маркер Кэпа (/декод) OR
+    # 2. В тексте есть латиница, но ПОЛНОСТЬЮ отсутствует кириллица (чистая опечатка)
+    if force_decode or (has_lat and not has_rus):
+        return text.translate(layout)
+        
+    return text
