@@ -80,47 +80,45 @@ def main_train_loop():
         print(f"[Т] Вход в эпоху плавки № {epoch}")
         lora_model.train()
         torch.cuda.manual_seed_all(42 + epoch)
+        #------------------------------------------------------------------------------------------------------------
+        # Фиксируем время старта эпохи
+        epoch_start_time = time.time()
         
-        for step, batch in enumerate(dataloader):
-            # --- ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ ЗОНД ОМНИССИИ ---
-            # print(f"[ПРИБОР] Форма latents из кэша: {batch['latents'].shape}")
-            # print(f"[ПРИБОР] Форма prompt_embeds из кэша: {batch['prompt_embeds'].shape}")
-            # sys.exit(0) # Аварийный стоп после первого замера!
-            # ------------------------------------------
+        for step, mega_batch in enumerate(dataloader):
+            # Извлекаем тензоры из даталоадера (весь датасет)
+            all_latents = mega_batch["latents"]
+            all_embeds = mega_batch["prompt_embeds"]
+            total_frames = all_latents.shape[0]
 
-            global_step += 1
+            # Нарезаем мега-батч на отдельные кадры (BATCH_SIZE = 1)
+            for frame_idx in range(total_frames):
+                global_step += 1
             
-            latents = batch["latents"].to(device=device, dtype=torch.bfloat16)
-            prompt_embeds = batch["prompt_embeds"].to(device=device, dtype=torch.bfloat16)
-            b_size = latents.shape[0]
+                # Вырезаем по 1 кадру (с размерностью B=1)
+                latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
+                prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
             
-            noise = torch.randn_like(latents)
-            t_attr = torch.rand(b_size, device=device, dtype=torch.bfloat16)
-            
-            packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
-            
-            # --- ФИНАЛЬНЫЙ МАТЕМАТИЧЕСКИЙ РОПЕ-КОНТУР V04 (СТРОКИ 94-95) ---
-            # Извлекаем латентную геометрию: 64 и 64
-            latents_h, latents_w = latents.shape[2], latents.shape[3]
-            
-            # Передаем чистые латенты. Функция сама сделает // 2 и выдаст сетку 32x32 (1024 патча)
-            img_ids = generate_flux_img_ids(latents_h, latents_w, device).to(torch.bfloat16)
-            
-            # txt_ids: строго 2D под длину текстового контекста prompt_embeds [256, 3]
-            txt_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
-            # --------------------------------------------------------------
-            
-            # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
-            pred_tensor = run_lora_model_step(
-                lora_model=lora_model, 
-                batch=batch, 
-                packed_noisy_latents=packed_noisy_latents,
-                timesteps_attr=t_attr, 
-                prompt_embeds=prompt_embeds,
-                pooled_projections=torch.zeros(b_size, 768, device=device, dtype=torch.bfloat16),
-                txt_ids=txt_ids, 
-                img_ids=img_ids
-            ) # Закрывающая скобка строго здесь!
+                # ... (Подготовка тензоров: шум, таймстепы)
+                noise = torch.randn_like(latents)
+                t_attr = torch.rand(1, device=device, dtype=torch.bfloat16)
+                # ... (Упаковка и генерация ID)
+                packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
+                img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
+                
+                # Пошаговый вызов модели            
+                
+                        
+                # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
+                pred_tensor = run_lora_model_step(
+                    lora_model=lora_model, 
+                    batch=batch, 
+                    packed_noisy_latents=packed_noisy_latents,
+                    timesteps_attr=t_attr, 
+                    prompt_embeds=prompt_embeds,
+                    pooled_projections=torch.zeros(b_size, 768, device=device, dtype=torch.bfloat16),
+                    txt_ids=txt_ids, 
+                    img_ids=img_ids
+                ) # Закрывающая скобка строго здесь!
             # ----------------------------------------------------
 
             
