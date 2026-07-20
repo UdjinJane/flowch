@@ -125,7 +125,10 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                 # === КОНЕЦ ОКОНЧАТЕЛЬНОЙ ГЕРМЕТИЗАЦИИ VAE CONFIG ===
 
                 #
-                vae = AutoencoderKL.from_config(v_conf)
+                # Жестко заставляем Diffusers собрать полноценную двухконтурную модель
+                from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+                vae = AutoencoderKL(**v_conf)
+
 
                 print("[ОБТ] Загрузка весов VAE и перевод контура в bfloat16...")
                 vae_state = load_file(TrainConfig.VAE_PATH, device="cpu")
