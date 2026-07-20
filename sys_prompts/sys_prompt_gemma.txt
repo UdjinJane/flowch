@@ -79,17 +79,45 @@
 Это для непонятливых юнг на  пути их становления в нормальных Стрпомов-Интернов.
 
 ## ARCHITECTURE & DATAFLOW MATRIX (MERMAID)
-```mermaid
+
 graph TD
-    A[Reactor Core] --> B[LoRA Core]
-    A --> C[Model Runner]
-    A --> D[Dataset]
-    A --> E[Inference]
-    B --> F[Flux Transformer FP8]
-    B --> G[LoRA Adapters bf16]
-    E --> L[VAE Decoder]
-    D --> P[Cache]
-```
+    %% Контур Инициализации
+    subgraph INIT [Контур Запуска Реактора]
+        A[config.py: Лимиты и Пути] --> B[dataset_v02.py: Стыковка Кэша]
+        A --> C[lora_core_v02.py: Сборка Ядра]
+        C -->|1. Заливка весов в FP8| C1[Chroma1 Transformer]
+        C -->|2. Апкаст в bf16| C2[AdaLayerNorm-Zero]
+        C -->|3. Инжекция весов в bf16| C3[PEFT LoRA Adapters]
+    end
+
+    %% Основной Цикл Плавки
+    subgraph LOOP [Маршевый Движок: train_engine_v02.py]
+        B -->|Мега-батч латентов| D[Нарезка кадров: B=1]
+        D -->|latents + noise| E[pack_latents_to_patches]
+        E -->|64 маршевых канала| F[run_lora_model_step]
+        
+        %% Подключение Монолита Оптимизации
+        G[ao_optim_monolith_v02.py] -->|AdamW8bit| H[Расчет шага]
+        F -->|Вычисление MSE Loss| H
+        H -->| backward | F
+        H -->|Сжатие моментов в int8| VRAM[VRAM RTX 3090: <21.0 GB]
+    end
+
+    %% Контур Контрольного Рендеринга
+    subgraph INF [Шлюз Вывода: generate_v02.py]
+        F -->|Рубеж SAVE_STEPS| K[run_inference_v02]
+        K -->|Логарифмический Эйлер| L[Rectified Flow ODE]
+        L -->|Снайперский срез: 64 канала| M[Решейп и Пермутация 4D]
+        M -->|Исправленная денормализация| N[AutoencoderKL VAE]
+        N -->|Запись кадра .png| OUT[(/output/images/)]
+    end
+
+    style INIT fill:#1a1c23,stroke:#343b45,stroke-width:2px,color:#fff
+    style LOOP fill:#1e222b,stroke:#4b5263,stroke-width:2px,color:#fff
+    style INF fill:#181a1f,stroke:#282c34,stroke-width:2px,color:#fff
+    style VRAM fill:#523e1b,stroke:#e5c07b,stroke-width:2px,color:#fff
+    style OUT fill:#1b3c2a,stroke:#98c379,stroke-width:2px,color:#fff
+
 
 ## PROJECT FILE STRUCTURE MATRIX
 - CORE_ROOT = "Z:\flowch"

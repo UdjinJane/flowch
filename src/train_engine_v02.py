@@ -196,7 +196,11 @@ def main_train_loop():
                 # Врубаем тестовую генерацию кадра для Кэпа
                 lora_model.eval()
                 with torch.no_grad():
-                    run_inference_v02(global_step)
+                    run_inference_v02(
+                        loaded_transformer=lora_model, 
+                        current_step=global_step, 
+                        text_embedding=prompt_embeds
+                    )
                 lora_model.train()
 
     print("[УСПЕХ] Реактор завершил плавку всех эпох. Контур чист!")
