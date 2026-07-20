@@ -156,21 +156,18 @@ def main_train_loop():
             gc.collect()
             torch.cuda.empty_cache()
 
-            
+            #
             if global_step % 10 == 0:
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-        
-                # Снимаем показатели времени и физической памяти шхуны
                 allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
                 reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
-        
-                # Высокоточный расчет скорости марша (it/s) без лагов
-                if 'last_log_time' in locals():
-                    elapsed_time = time.time() - last_log_time
-                    speed = 10.0 / elapsed_time if elapsed_time > 0 else 0.0
-                else:
-                    speed = 0.0
-                    last_log_time = time.time()
+                
+                # Точный скользящий замер за 10 шагов
+                elapsed_time = time.time() - last_log_time
+                speed = 10.0 / elapsed_time if elapsed_time > 0 else 0.0
+                last_log_time = time.time() # Сброс строго в точке замера
+
+
         
                 # Формируем расширенный рапорт для Мистральчика
                 console_msg = (
