@@ -75,6 +75,7 @@ def main_train_loop():
     os.makedirs(TrainConfig.LOGS_DIR, exist_ok=True)
     log_file_path = os.path.join(TrainConfig.LOGS_DIR, "train_logs.txt")
     global_step = 0
+    last_log_time = time.time()  # <--- Фиксируем базовую метку времени здесь!
     
     for epoch in range(1, TrainConfig.NUM_EPOCHS + 1):
         print(f"[Т] Вход в эпоху плавки № {epoch}")
@@ -184,13 +185,15 @@ def main_train_loop():
                 print(console_msg)  # В консоль летит красивый рапорт
                 with open(log_file_path, "a", encoding="utf-8") as lf:
                     lf.write(file_msg)  # В файл пишется чистая строка без дублей
-
-            if global_step % TrainConfig.SAVE_STEPS == 0:
-                print(f"[Т] Рубеж сохранения. Запекаем чекпоинт на шаге {global_step}...")
+            
+            # --- РУБЕЖ СОХРАНЕНИЯ И ГЕНЕРАЦИИ СЭМПЛОВ ---
+            if global_step % TrainConfig.SAVE_STEPS == 0 or frame_idx == (total_frames - 1):
+                print(f"[Т] Рубеж фиксации. Запекаем чекпоинт на шаге {global_step}...")
                 checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"flux_lora_step_{global_step}.safetensors")
                 lora_state_dict = {k: v for k, v in lora_model.state_dict().items() if "lora_" in k}
                 torch.save(lora_state_dict, checkpoint_path)
                 
+                # Врубаем тестовую генерацию кадра для Кэпа
                 lora_model.eval()
                 with torch.no_grad():
                     run_inference_v02(global_step)
