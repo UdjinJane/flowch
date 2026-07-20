@@ -34,10 +34,11 @@ class FluxLoRAMarshStep(torch.nn.Module):
         device = noisy_latents.device
         saved_hooks = self.patch_blocks()
         try:
+            t_vector = t_attr.flatten() if t_attr is not None else t_attr
             # Чистый позиционный маршевый проход через PEFT-обертку
             out = lora_model(
                 noisy_latents.to(device=device, dtype=self.m_dtype),
-                t_attr.to(device=device, dtype=self.m_dtype),
+                t_vector.to(device=device, dtype=self.m_dtype),
                 embeds.to(device=device, dtype=self.m_dtype),
                 p_proj.to(device=device, dtype=self.m_dtype),
                 t_ids.to(device=device, dtype=self.m_dtype),
