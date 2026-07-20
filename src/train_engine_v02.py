@@ -49,7 +49,12 @@ def main_train_loop():
     
     print("[Т] Прогрев и инжекция LoRA адаптеров...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
-    
+        # Принудительная активация чекпоинтинга для полной разгрузки VRAM
+    if hasattr(lora_model, "enable_gradient_checkpointing"):
+        lora_model.enable_gradient_checkpointing()
+    elif hasattr(lora_model, "get_base_model") and hasattr(lora_model.get_base_model(), "enable_gradient_checkpointing"):
+        lora_model.get_base_model().enable_gradient_checkpointing()
+
     trainable_params = []
     for name, param in lora_model.named_parameters():
         if "lora_" in name and any(t in name for t in TrainConfig.TARGET_MODULES):
