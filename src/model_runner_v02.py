@@ -38,8 +38,10 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
             return_dict=False
         )
 
-    pred_tensor = out if isinstance(out, tuple) else out
+    # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
+    pred_tensor = out[0] if isinstance(out, tuple) else out
     if pred_tensor.dim() == 4:
         pred_tensor = pred_tensor.squeeze(1)
 
     return pred_tensor.to(dtype=meta_dtype)
+
