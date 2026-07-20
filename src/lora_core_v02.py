@@ -72,12 +72,26 @@ class FluxLoraCoreV02:
         model = get_peft_model(transformer, lora_config)
 
         # Замораживаем основу, оставляем градиенты только для LoRA в bfloat16
+        
+        # Принудительно кастим только LoRA-слои через механизм модулей PyTorch
+        for name, module in model.named_modules():
+            if "lora_" in name.lower():
+                module.to(dtype=torch.bfloat16)
+
+        # Жестко распределяем флаги градиентов по тензорам параметров
         for name, param in model.named_parameters():
             if "lora_" in name:
-                param.data = param.data.to(torch.bfloat16)
                 param.requires_grad = True
             else:
                 param.requires_grad = False
+
+        
+#      for name, param in model.named_parameters():
+#          if "lora_" in name:
+#              param.data = param.data.to(torch.bfloat16)
+#              param.requires_grad = True
+#          else:
+#              param.requires_grad = False
 
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
         return model.to("cuda")
