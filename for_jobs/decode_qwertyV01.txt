@@ -35,3 +35,4 @@ def decode_stream(text: str) -> dict:
         "decoded": final_text,
         "contains_code": any(pattern in text for pattern in code_patterns)
     }
+	
