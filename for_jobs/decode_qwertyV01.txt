@@ -35,3 +35,31 @@ def decode_flowch_stream(text: str) -> str:
             decoded_tokens.append(token.translate(layout))
             
     return " ".join(decoded_tokens)
+
+
+******************* после разверывани open-webui *******************
+import openai  # или любой клиент, через который ты дергаешь LM Studio
+from flowch_interceptor import decode_flowch_stream
+
+def send_message_to_mistral(cap_raw_input: str):
+    """
+    Командный мостик отправки запросов в LM Studio.
+    """
+    # ШАГ 1: Перехватываем эльфийский на лету до отправки в модель
+    clean_text = decode_flowch_stream(cap_raw_input)
+    
+    # ШАГ 2: Формируем пакет для LM Studio API
+    # Мистраль увидит уже ИСПРАВЛЕННЫЙ и чистый текст!
+    messages = [
+        {"role": "system", "content": "Ты — Senior Python Developer... (твой жесткий сиспромпт)"},
+        {"role": "user", "content": clean_text}
+    ]
+    
+    # ШАГ 3: Запрос к реактору в соседней каюте
+    response = openai.ChatCompletion.create(
+        model="local-model",  # твой мистраль в LM Studio
+        messages=messages,
+        temperature=0.0  # держим строгость ответов
+    )
+    
+    return response.choices[0].message.content
