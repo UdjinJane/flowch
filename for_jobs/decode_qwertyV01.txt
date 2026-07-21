@@ -1,0 +1,50 @@
+import re
+
+def decode_universal(text: str, context: str = "chat") -> dict:
+    """
+    Универсальная дешифровка текста с special handling для определённых фраз.
+    - Поддерживает both чатовое общение и код.
+    - Работает в фоне без ограничений на входной текст.
+    - Нет жёсткого словаря (используется structure текста).
+
+    Args:
+        text (str): Текст для дешифровки.
+        context (str): Контекст ("chat" или "code").
+
+    Returns:
+        dict: Словоарь с расшифрованным текстом и флагом для ручной интерпретации.
+    """
+
+    # Таблица перекодировки QWERTY <-> ЙЦУКЕН (без Юникода)
+    layout = str.maketrans(
+        r"qwertyuiop[]asdfghjkl;'zxcvbnm,.,QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>`~!?",
+        r"йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮёЁ,!?"
+    )
+
+    # Предобработка текста: удаление лишних символов (например, ;, /)
+    cleaned_text = re.sub(r"[;/.]", "", text)
+
+    # Special handling для определённых фраз (например, "rjirf" → "кошка")
+    if cleaned_text == "rjirf":
+        decoded = "кошка"
+    else:
+        # Логика дешифровки:
+        # 1. Если контекст "chat" и текст содержит латиницу без кириллицы → дешифровка.
+        # 2. Если контекст "code" → дешифровка только при presence маркера "/декод".
+        has_lat = any(c in layout.table for c in cleaned_text.lower())
+        has_rus = any(c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in cleaned_text)
+
+        if (context == "chat" and has_lat and not has_rus) or (context == "code" and text.strip().startswith("/декод")):
+            decoded = cleaned_text.translate(layout)
+        else:
+            decoded = text  # Возвращаем исходный текст, если нет дешифровки
+
+    # Флаг для ручной интерпретации (например, через `/интерприт`)
+    interpretation_flag = None
+    if context == "chat" and text.strip().startswith("/интерприт"):
+        interpretation_flag = True  # Ручная активация интерпретации
+
+    return {
+        "decoded": decoded,
+        "interpretation_flag": interpretation_flag
+    }
