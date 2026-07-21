@@ -1,38 +1,37 @@
 import re
 
-def decode_stream(text: str) -> dict:
+def decode_flowch_stream(text: str) -> str:
     """
-    Монолитный дешифратор ЙЦУ-раскладки с обработкой Python-кода.
-    Сохраняет легитимный код и технические термины без изменений.
+    Изолированный программный шлюз ввода шхуны Flowch.
+    Перехватывает эльфийский Кэпа, игнорируя легитимные термины и синтаксис.
     """
     src_chars = r"qwertyuiop[]asdfghjkl;'zxcvbnm,./QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?`~"
     dst_chars = r"йцукенгшщзхъфывапролджэячсмитьбю.ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,ёЁ"
     layout = str.maketrans(src_chars, dst_chars)
-
-    # Паттерны для идентификации Python-кода и легитимных терминов
-    code_patterns = [
-        r"\bdef\b", r"\bimport\b", r"(", ")", r"\[|\]",  # Синтаксис
-        r"\bpython\b", r"\bcuda\b", r"\bai\b",           # Технические термины
-        r"haha", r"lol",                                   # Сленг
-    ]
-
-    # Токенизация с сохранением регистра и знаков препинания
-    tokens = re.findall(r"(\\w+|[^\\w\\s])", text)
-    decoded_tokens = []
-
-    for token in tokens:
-        clean_token = re.sub(r"[^\\w]", "", token).lower()
-        is_code = any(re.search(pattern, token) for pattern in code_patterns)
-
-        # Декодируем только если это не код и содержит латинские символы
-        if not is_code and any(ord(c) in layout for c in token.lower()):
-            decoded_tokens.append(token.translate(layout))
-        else:
-            decoded_tokens.append(token)
-
-    final_text = " ".join(decoded_tokens).strip()
-    return {
-        "decoded": final_text,
-        "contains_code": any(pattern in text for pattern in code_patterns)
+    
+    # Защищенная зона: термины, которые нельзя трогать ни при каких условиях
+    protected_terms = {
+        "comfyui", "cuda", "vram", "loss", "gpu", "core", "test", 
+        "run", "haha", "lol", "python", "def", "import", "bfloat16"
     }
-	
+    
+    # Разбиваем строго по пробелам, чтобы сохранить исходное форматирование
+    tokens = text.split(" ")
+    decoded_tokens = []
+    
+    for token in tokens:
+        if not token:
+            decoded_tokens.append("")
+            continue
+            
+        # Выделяем чистое слово для проверки на технический сленг
+        clean_word = re.sub(r"[^\w]", "", token).lower()
+        
+        # Если слово в защищенном списке или содержит явные признаки кода
+        if clean_word in protected_terms or any(c in token for c in ["(", ")", "[", "]", "{", "}", "=", ":", "_"]):
+            decoded_tokens.append(token)
+        else:
+            # Маппим раскладку, полностью сохраняя префиксы, суффиксы и знаки
+            decoded_tokens.append(token.translate(layout))
+            
+    return " ".join(decoded_tokens)
