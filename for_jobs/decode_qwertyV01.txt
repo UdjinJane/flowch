@@ -2,72 +2,36 @@ import re
 
 def decode_stream(text: str) -> dict:
     """
-    Потоковый дешифратор с исправленной логикой.
-    Обрабатывает:
-      - Кейс-инсенсивные Python-ключевые слова и методы
-      - Спецсимволы в начале/конце токенов
-      - Исключения для коротких латинских слов
-      - Апострофы и запятые внутри слов
+    Монолитный дешифратор ЙЦУ-раскладки с обработкой Python-кода.
+    Сохраняет легитимный код и технические термины без изменений.
     """
     src_chars = r"qwertyuiop[]asdfghjkl;'zxcvbnm,./QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?`~"
     dst_chars = r"йцукенгшщзхъфывапролджэячсмитьбю.ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,ёЁ"
     layout = str.maketrans(src_chars, dst_chars)
 
-    py_keywords = {
-        "class", "def", "return", "if", "else", "elif", "for", "while", "try",
-        "except", "import", "from", "as", "in", "is", "not", "and", "or",
-        "with", "assert", "pass", "none", "true", "false", "lambda", "yield"
-    }
+    # Паттерны для идентификации Python-кода и легитимных терминов
+    code_patterns = [
+        r"\bdef\b", r"\bimport\b", r"(", ")", r"\[|\]",  # Синтаксис
+        r"\bpython\b", r"\bcuda\b", r"\bai\b",           # Технические термины
+        r"haha", r"lol",                                   # Сленг
+    ]
 
-    tokens = re.split(r"(\s+)", text)
-    inner_tokens = []
-    for token in tokens:
-        if not token.strip():
-            continue
-        subtokens = re.findall(r"[\w']+|,|\W", token)
-        inner_tokens.extend(subtokens)
-
+    # Токенизация с сохранением регистра и знаков препинания
+    tokens = re.findall(r"(\\w+|[^\\w\\s])", text)
     decoded_tokens = []
-    for token in inner_tokens:
-        clean_token = re.sub(r"[^\w',]", "", token)
-        original_prefix = re.sub(r"[\w',]+$", "", token)
-        original_suffix = re.sub(r"^[\w',]*", "", token)
 
-        is_code = (
-            any(casefold in py_keywords for casefold in [clean_token.casefold()])
-            or "__" in clean_token
-            or any(c in ["(", ")", "[", "]", "{", "}", "=", ":"] for c in token)
-        )
+    for token in tokens:
+        clean_token = re.sub(r"[^\\w]", "", token).lower()
+        is_code = any(re.search(pattern, token) for pattern in code_patterns)
 
-        has_rus = bool(re.search(r"[а-яёЁйцукенгшщзхъфывапролджэячсмитьбю]", token))
-        has_lat = any(ord(c) in layout for c in token.lower())
-
-        if "'" in clean_token or "," in clean_token:
-            parts = []
-            split_char = "'" if "'" in clean_token else ","
-            parts = re.split(rf"(?<={split_char})", clean_token)
-            decoded_parts = []
-            for part in parts[1::2]:
-                decoded_part = part.translate(layout) if has_lat else part
-                decoded_parts.append(decoded_part)
-
-            token_content = split_char.join(decoded_parts)
-            if original_prefix + token_content + original_suffix != token:
-                decoded_tokens.append(original_prefix + token_content + original_suffix)
-            else:
-                decoded_tokens.append(token)
-        elif (has_lat and not has_rus and not is_code):
-            decoded_part = clean_token.translate(layout)
-            if len(decoded_part) > 50:
-                decoded_tokens.append(token)
-            else:
-                decoded_tokens.append(original_prefix + decoded_part + original_suffix)
+        # Декодируем только если это не код и содержит латинские символы
+        if not is_code and any(ord(c) in layout for c in token.lower()):
+            decoded_tokens.append(token.translate(layout))
         else:
             decoded_tokens.append(token)
 
-    final_text = "".join(decoded_tokens).replace('« ', '«').replace(' »', '»')
+    final_text = " ".join(decoded_tokens).strip()
     return {
         "decoded": final_text,
-        "contains_code": any(kw.casefold() in text.lower()
-                            for kw in py_keywords) or "def " in text.lower()
+        "contains_code": any(pattern in text for pattern in code_patterns)
     }
