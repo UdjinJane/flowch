@@ -82,13 +82,13 @@ class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
       "api_bridges": [
         {
           "name": "OpenWebUI_to_LMStudio",
-          "url": "http://host.docker.internal:1234",
+          "url": "http://host.docker.internal:1234/v1",
           "token": "sk-lm-3AEGoXB4:zIuxGyMffNDa8CcAD58G",
           "status": "CONNECTED_GREEN"
         },
         {
           "name": "OpenWebUI_to_Ollama",
-          "url": "http://ollama:11434",
+          "url": "http://host.docker.internal:11434",
           "status": "ACTIVE"
         }
       ]
