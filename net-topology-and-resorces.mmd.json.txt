@@ -1,0 +1,171 @@
+graph TB
+
+%% Настройка стилей для читаемости
+classDef hostNode fill:#1f1f1f,stroke:#00ffff,stroke-width:2px,color:#fff;
+classDef dockerNode fill:#112233,stroke:#00ff00,stroke-width:1px,color:#fff;
+classDef winNode fill:#221133,stroke:#cc00ff,stroke-width:1px,color:#fff;
+classDef hwNode fill:#332211,stroke:#ff9900,stroke-width:1px,color:#fff;
+
+%% ХОСТ 1: КАПИТАНСКИЙ МОСТИК DEVELOPMENT
+subgraph HOST_APEX [Космошхуна: APEX / XONICA]
+    direction TR
+    A_OS[Windows 11 Хост] --- A_IDE[VS Code / Jupyter Ноутбуки]
+    A_OS --- A_HW[Железо: DEV-Контур]
+    A_IP[Локальный IP: 192.168.1.X]
+end
+
+%% ХОСТ 2: МАШИННАЯ ПАЛУБА ДЛЯ СЕТОК
+subgraph HOST_GIPSY [Катер-Песочница: GIPSY]
+    direction TB
+    G_IP[Физический IP: 192.168.1.85]
+    
+    subgraph G_WIN [Windows 11 OS Контур]
+        G_UTF[UTF-8 Ядро] 
+        G_PY[pyenv: Python 3.11.9 чистый]
+        G_SWAP[Pagefile.sys: 48 GB Fixed]
+        G_LM[LM Studio Server: порт 1234]
+        
+        subgraph G_ANABIOZ [Трюм Анабиоза Моделей]
+            M_MINI[Ministral-3-14B-Reasoning в закачке]
+            M_QWEN[Qwen2.5 Coder/Math 7B на базе]
+            M_HEAVY[Qwen 32B / DeepSeek v2 ползут в фоне]
+        end
+    end
+    
+    subgraph G_WSL [Подсистема WSL2 / Docker Engine]
+        D_WEB[gipsy-webui-frontend: порт 3000]
+        D_OLL[gipsy-ollama-core: порт 11434]
+    end
+end
+
+%% ФИЗИЧЕСКИЕ И ВИРТУАЛЬНЫЕ СВЯЗИ (ШЛЮЗЫ)
+A_IDE ==>|3-метровый гигабитный патчкорд| G_IP
+G_IP --- G_WIN
+
+%% Внутренний мост Джипси
+D_WEB ==>|API мост: host.docker.internal:1234 /v1| G_LM
+D_WEB ---|Ollama API: порт 11434| D_OLL
+
+%% Проброс аппаратного ускорения
+G_HW_GPU[RTX 5060 Ti 16GB] .->|CUDA Пайплайн| D_OLL
+
+%% Будущий Апгрейд (Обозначен пунктиром)
+subgraph UPGRADE [Эшелон Планового Апгрейда Джипси]
+    U_CPU[Xeon E5-2690v4 14 ядер Broadwell]
+    U_RAM[128 GB ECC RAM 4-канал 2400MHz]
+    U_GPU[Вторая RTX 5060 16GB + Райзер 010S x1]
+end
+G_WIN -.->|Ожидание установки| UPGRADE
+
+%% Применение стилей
+class HOST_APEX,HOST_GIPSY hostNode;
+class D_WEB,D_OLL dockerNode;
+class G_WIN,G_LM,G_PY,G_SWAP winNode;
+class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
+
+
+### 📊 МАТРИЦА РЕСУРСОВ: ЧТО, ГДЕ И ПОЧЕМ
+
+{
+  "network_topology": {
+    "order_name": "APEX_GIPSY_LINK",
+    "last_update": "2026-07-23",
+    "connections": {
+      "physical_link": {
+        "type": "Wired Patchcord",
+        "length_meters": 3,
+        "bandwidth_mbps": 1000,
+        "from_host": "APEX (192.168.1.144)",
+        "to_host": "GIPSY (192.168.1.85)",
+        "status": "TCP_PORT_3000_OK_STABLE"
+      },
+      "api_bridges": [
+        {
+          "name": "OpenWebUI_to_LMStudio",
+          "url": "http://docker.internal",
+          "token": "sk-lm-3AEGoXB4:zIuxGyMffNDa8CcAD58G",
+          "status": "CONNECTED_GREEN"
+        },
+        {
+          "name": "OpenWebUI_to_Ollama",
+          "url": "http://ollama:11434",
+          "status": "ACTIVE"
+        }
+      ]
+    },
+    "hosts": {
+      "apex": {
+        "role": "Flagship Workstation / Primary Development Core",
+        "active_project_path": "Z:\\flowch",
+        "os_environment": "Windows 11 (WSL2 Engines Context, Subsystem Ubuntu: Stopped)",
+        "network": {
+          "primary_ip": "192.168.1.144",
+          "interface_alias": "Ethernet 5",
+          "status": "Up",
+          "secondary_dev_ip": "172.30.6.79 (Ethernet 4)"
+        },
+        "specification": {
+          "cpu_complex": {
+            "sockets": 2,
+            "models": ["CPU0: Intel Xeon E5-2687W v4", "CPU1: Intel Xeon E5-2687W v4"],
+            "total_physical_cores": 24,
+            "total_threads": 48,
+            "base_clock_mhz": 3001
+          },
+          "ram_topology": {
+            "total_ram_gb": 128,
+            "active_slots": 8,
+            "slot_configuration": "DIMM_A1 to DIMM_H1 (16GB x 8)",
+            "speed_mhz": 3200,
+            "channel_mode": "True Quad-Channel per CPU Socket"
+          },
+          "firepower_gpu": {
+            "model": "NVIDIA GeForce RTX 3090",
+            "physical_vram_gb": 24,
+            "wmi_reported_vram_gb": 4,
+            "driver_version": "32.0.16.1062"
+          },
+          "storage_vaults": [
+            {"drive": "C:", "total_gb": 465, "free_gb": 26, "status": "LOW_SPACE_WARNING"},
+            {"drive": "D:", "total_gb": 954, "free_gb": 327, "status": "OK"},
+            {"drive": "W:", "total_gb": 894, "free_gb": 15, "status": "CRITICAL_SPACE_WARNING"},
+            {"drive": "Y:", "total_gb": 1908, "free_gb": 320, "status": "OK"},
+            {"drive": "Z:", "total_gb": 1908, "free_gb": 306, "status": "PRIMARY_FLOWCH_STORAGE"}
+          ]
+        }
+      },
+      "gipsy_current_sandbox": {
+        "role": "Isolated LLM Server / Executable Machine Deck",
+        "network": {
+          "primary_ip": "192.168.1.85",
+          "interface_alias": "Ethernet",
+          "wsl_bridge_ip": "172.31.144.1"
+        },
+        "specification": {
+          "cpu": "1x Intel Xeon E5-2680v3 (12 Cores / 24 Threads Haswell)",
+          "ram_gb": 48,
+          "ram_status": "Asymmetric Flex-Mode (Clocked down to 2133 MHz)",
+          "virtual_memory_pagefile_gb": 48,
+          "pagefile_registry_lock": "C:\\pagefile.sys 49152 49152 (Fixed)",
+          "accelerator_gpu": "1x NVIDIA GeForce RTX 5060 Ti (16GB VRAM)",
+          "gpu_driver": "610.62",
+          "os_tuning": "Windows 11 (Global UTF-8 Active, Ultimate Performance active)",
+          "python_layer": "pyenv-win -> 3.11.9 (Isolated environment)",
+          "docker_services": {
+            "gipsy-webui-frontend": "Port 3000 -> 8080/tcp (Healthy)",
+            "gipsy-ollama-core": "Port 11434 -> 11434/tcp (AVX2 Engine Checked)"
+          },
+          "lm_studio_gateway": "Active on 0.0.0.0:1234",
+          "model_vault": {
+            "status": "Ministral-3-14B-Reasoning downloading, other models cached in analog sleep"
+          }
+        }
+      },
+      "gipsy_planned_upgrade": {
+        "target_cpu": "1x Intel Xeon E5-2690v4 (14 Cores / 28 Threads Broadwell)",
+        "target_ram": "128GB ECC REG Monolithic (True 4-Channel @ 2400 MHz)",
+        "target_gpu_complex": "2x NVIDIA RTX 5060/5060Ti (32GB Aggregate VRAM via Riser 010S x1)"
+      }
+    }
+  }
+}
