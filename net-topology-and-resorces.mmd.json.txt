@@ -11,11 +11,11 @@ subgraph HOST_APEX [Космошхуна: APEX / XONICA]
     direction TR
     A_OS[Windows 11 Хост] --- A_IDE[VS Code / Jupyter Ноутбуки]
     A_OS --- A_HW[Железо: DEV-Контур]
-    A_IP[Локальный IP: 192.168.1.X]
+    A_IP[Локальный IP: 192.168.1.144]
 end
 
 %% ХОСТ 2: МАШИННАЯ ПАЛУБА ДЛЯ СЕТОК
-subgraph HOST_GIPSY [Катер-Песочница: GIPSY]
+subgraph HOST_GIPSY [Катер-Песочница GIPSY: General-Purpose Isolated Python Sandbox for Y-models]
     direction TB
     G_IP[Физический IP: 192.168.1.85]
     
@@ -82,7 +82,7 @@ class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
       "api_bridges": [
         {
           "name": "OpenWebUI_to_LMStudio",
-          "url": "http://docker.internal",
+          "url": "http://host.docker.internal:1234",
           "token": "sk-lm-3AEGoXB4:zIuxGyMffNDa8CcAD58G",
           "status": "CONNECTED_GREEN"
         },
