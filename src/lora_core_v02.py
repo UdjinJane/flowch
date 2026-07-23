@@ -71,33 +71,21 @@ class FluxLoraCoreV02:
         )
         model = get_peft_model(transformer, lora_config)
 
-        # Замораживаем основу, оставляем градиенты только для LoRA в bfloat16
-        
-        # Безопасный кастинг всех LoRA-слоев в torch.bfloat16 через _apply
+        # 1. Кастинг LoRA-слоев в bfloat16 через _apply (ДО фиксации градиентов!)
         for name, module in model.named_modules():
             if "lora_" in name.lower():
-        # Применяем кастинг только к плавающим точкам — целочисленные маски защищены!
                 module._apply(lambda t: t.to(dtype=torch.bfloat16) if t.is_floating_point() else t)
 
-
-        # Жестко распределяем флаги градиентов по тензорам параметров
+        # 2. Жёсткое распределение флагов градиентов по тензорам параметров
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
 
-        
-#      for name, param in model.named_parameters():
-#          if "lora_" in name:
-#              param.data = param.data.to(torch.bfloat16)
-#              param.requires_grad = True
-#          else:
-#              param.requires_grad = False
-
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
         return model.to("cuda")
-
+# === КОНЕЦ БЛОКА 3 ===        
 # === БЛОК 4: РУЧНОЙ ЗАПУСК ХОЛОДНОГО ТЕСТА И ТЕРМОМЕТРЫ VRAM ===
 if __name__ == "__main__":
     import sys
