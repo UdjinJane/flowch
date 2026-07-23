@@ -164,10 +164,17 @@ def main_train_loop():
 
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                
+                # ПРЕДОХРАНИТЕЛЬ ГРАДИЕНТОВ (STRICT VALIDATION)
+                for param in trainable_params:
+                    if param.grad is not None and not torch.isfinite(param.grad).all():
+                        print(f"[КРИТ] Обнаружен взрыв или затухание градиентов (NaN/Inf) перед шагом оптимизатора!")
+                        sys.exit(1)
+                
                 optimizer.step()
                 optimizer.zero_grad()
 
-
+                # ---- END ПРЕДОХРАНИТЕЛЬ ГРАДИЕНТОВ (STRICT VALIDATION)
             #
             if global_step % 10 == 0:
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
