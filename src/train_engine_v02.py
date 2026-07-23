@@ -132,8 +132,8 @@ def main_train_loop():
 
             
             # --- РАСЧЕТ ЦЕЛЕВОГО ПОТОКА RECTIFIED FLOW ---
-            # Исправление инверсии знака и инжекция шага времени t_attr по Платиновой книге
-            target_flow = (t_attr.view(-1, 1, 1, 1) * (latents - noise)).to(dtype=torch.bfloat16, device=device)
+            # Истинный вектор скорости Rectified Flow: направление строго от кадра к шуму
+            target_flow = (noise - latents).to(dtype=torch.bfloat16, device=device)
             packed_target_flow = pack_latents_to_patches(target_flow)
 
 
