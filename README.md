@@ -1,3 +1,5 @@
+https://github.com/UdjinJane/flowch
+
 Запекаем LORA для CHROMA1.
 Соавтор и надежный партнер - интерн Gemma.
 
