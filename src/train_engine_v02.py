@@ -132,7 +132,18 @@ def main_train_loop():
 
             
             # --- РАСЧЕТ ЦЕЛЕВОГО ПОТОКА RECTIFIED FLOW ---
-            # Истинный вектор скорости Rectified Flow: направление строго от кадра к шуму
+            
+            # Истинный вектор скорости Rectified Flow
+            target_flow = (latents - noise).to(dtype=torch.bfloat16, device=device)
+            packed_target_flow = pack_latents_to_patches(target_flow)
+
+            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT FIX) ---
+            pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
+            packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
+
+            # Динамический срез без хардкода индексов
+            if pred_tensor.shape != packed_target_flow.shape:
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
 
 
 
