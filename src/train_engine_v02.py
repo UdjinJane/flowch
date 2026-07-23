@@ -129,8 +129,10 @@ def main_train_loop():
 
             
             # --- РАСЧЕТ ЦЕЛЕВОГО ПОТОКА RECTIFIED FLOW ---
-            target_flow = (noise - latents).to(dtype=torch.bfloat16, device=device)
+            # Исправление инверсии знака и инжекция шага времени t_attr по Платиновой книге
+            target_flow = (t_attr.view(-1, 1, 1, 1) * (latents - noise)).to(dtype=torch.bfloat16, device=device)
             packed_target_flow = pack_latents_to_patches(target_flow)
+
 
             # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT FIX) ---
             # Жестко ровняем типы и девайсы для ликвидации Scale Drift
