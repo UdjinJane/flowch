@@ -6,20 +6,12 @@ from config import TrainConfig
 class FluxTelemetryTracker:
     """Автономный модуль скользящей агрегации метрик для Flux-реактора V02_STABLE."""
 
-    import os
-from datetime import datetime
-import torch
-from config import TrainConfig
-
-class FluxTelemetryTracker:
-    """Модуль агрегации метрик, использующий TrainConfig.LOGS_DIR."""
-
     def __init__(self):
-        # Используем путь из конфига, хардкод устранён
-        self.target_dir = TrainConfig.LOGS_DIR
+        # Жестко связываем контур с центральным щитом, исключая ХАРДКОД
+        target_dir = TrainConfig.LOGS_DIR
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_file = os.path.join(self.target_dir, f"session_{timestamp}.txt")
-        os.makedirs(self.target_dir, exist_ok=True)
+        self.session_file = os.path.join(target_dir, f"session_{timestamp}.txt")
+        os.makedirs(target_dir, exist_ok=True)
         self.pred_buffer = []
         self.target_buffer = []
         self.loss_buffer = []
