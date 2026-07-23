@@ -100,8 +100,11 @@ def main_train_loop():
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
             
                 # ... (Подготовка тензоров: шум, таймстепы)
+                # Логит-нормальный замер времени для пробития плато лосса (sigma_scale=1.0)
+                sigma_scale = 1.0
+                t_attr = torch.sigmoid(torch.randn(1, device=device) * sigma_scale).to(dtype=torch.bfloat16)
                 noise = torch.randn_like(latents)
-                t_attr = torch.rand(1, device=device, dtype=torch.bfloat16)
+
                 # ... (Упаковка и генерация ID)
                 packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
                 img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
