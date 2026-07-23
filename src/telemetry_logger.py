@@ -30,11 +30,8 @@ class FluxTelemetryTracker:
         log_line = f"[СЕССИЯ] Шаг: {global_step} | Loss: {sum(self.loss_buffer)/n:.6f}"
         with open(self.session_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
-        self.pred_buffer.clear(); self.target_buffer.clear(); self.loss_buffer.clear()
-
-
+        
         # Полная очистка трюмов для следующего батча агрегации
         self.pred_buffer.clear()
         self.target_buffer.clear()
         self.loss_buffer.clear()
-        self.t_attr_buffer.clear()
