@@ -83,11 +83,7 @@ graph TD
     click P "Dataset Cache\n- Z:\flowch\cache\text_embeds/\n- Z:\flowch\cache\latent_embeds/" _ ""
     click Q "Output\n- Z:\flowch\output\images/\n- Чекпоинты: .safetensors" _ ""
 
-    %% Лакуны (проблемные места)
-    click N1 "AdaLayerNorm-Zero FP8 Overflow\n- Проблема: Переполнение в модуляции времени\n- Решение: Изолировать в bfloat16" _ ""
-    click N2 "LoRA Gradient Underflow\n- Проблема: Утрата малых градиентов в FP8\n- Решение: Градиентное масштабирование" _ ""
-    click N3 "Mixed Precision Cast Failures\n- Проблема: CUDA краши из-за смешанной точности\n- Решение: Приводить к bfloat16 до операций" _ ""
-
+    
     %% External Dependencies
     click K "Metadata JSONL\n- Путь: Z:\flowch\dataset\mng_oks_bl\metadata.jsonl\n- Формат: JSON Lines" _ ""
     click R "Logging\n- Консоль + Файл: Z:\flowch\output\train_logs.txt\n- Уровни: ОТК, КРИТ, УСПЕХ" _ ""
