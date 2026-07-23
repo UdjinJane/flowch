@@ -139,10 +139,14 @@ def main_train_loop():
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
             packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
 
-            # Жёсткая проверка геометрии: падаем сразу при рассинхроне
-            assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии: {pred_tensor.shape} vs {packed_target_flow.shape}"
+            # Снайперский срез: забираем первые 64 канала латентов из 256 каналов выхода Flux
+            if pred_tensor.shape[-1] == 256:
+                pred_tensor = pred_tensor[:, :, :64]
 
-            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")  
+            # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
+            assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
+            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+
             # ----------------------------------------------------------------------
 
             if torch.isnan(loss) or torch.isinf(loss):
