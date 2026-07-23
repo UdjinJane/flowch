@@ -108,9 +108,8 @@ def main_train_loop():
                 
                 # изолированный мини-батч текущего кадра          
                 current_batch = {"latents": latents, "prompt_embeds": prompt_embeds}
-
-                        
-                #
+      
+               
                 # --- СНАЙПЕРСКИЙ ВЫЗОВ РАННЕРА V02 (СТРОКИ 94-98) ---
                 txt_ids = torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16)
                 pred_tensor = run_lora_model_step(
@@ -123,8 +122,7 @@ def main_train_loop():
                     txt_ids=txt_ids,
                     img_ids=img_ids
                 )
-                
-                # ----------------------------------------------------
+                # ---------------- СНАЙПЕРСКИЙ ВЫЗОВ END--------------
 
             
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16)
