@@ -143,7 +143,7 @@ def main_train_loop():
 
             # Динамическое выравнивание по кортежу осей target_flow: исключаем ЗЛО В КУБЕ
             if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape, :packed_target_flow.shape]
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
 
             # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
             assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
