@@ -137,11 +137,20 @@ def main_train_loop():
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
             packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
 
-            # Теперь безопасно ровняем геометрию по всем осям 3D-тензора
-            if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape, :packed_target_flow.shape]
+            # --- РАСЧЕТ ЦЕЛЕВОГО ПОТОКА RECTIFIED FLOW ---
+            target_flow = (noise - latents).to(dtype=torch.bfloat16, device=device)
+            packed_target_flow = pack_latents_to_patches(target_flow)
 
-            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")  
+            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT SCALE DRIFT FIX) ---
+            pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
+            packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
+
+            # Безопасный срез 3D-тензора по длинам осей 1 и 2
+            if pred_tensor.shape != packed_target_flow.shape:
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
+
+            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+
             # ----------------------------------------------------------------------
 
             
