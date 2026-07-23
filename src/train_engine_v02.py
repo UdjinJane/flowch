@@ -132,36 +132,29 @@ def main_train_loop():
             target_flow = (noise - latents).to(dtype=torch.bfloat16, device=device)
             packed_target_flow = pack_latents_to_patches(target_flow)
 
-            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT SCALE DRIFT FIX) ---
+            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT FIX) ---
             # Жестко ровняем типы и девайсы для ликвидации Scale Drift
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
             packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
 
-            # Безопасный срез 3D-тензора по длинам осей 1 и 2
-            if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
+            # Жёсткая проверка геометрии: падаем сразу при рассинхроне
+            assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии: {pred_tensor.shape} vs {packed_target_flow.shape}"
 
-            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
-
-
+            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")  
             # ----------------------------------------------------------------------
 
-            
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"[КРИТ] Обнаружен взрыв градиентов на шаге {global_step}!")
-                sys.exit(1)
-                
+                sys.exit(1)  
+
             loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
-            loss.backward()
-            
+            loss.backward()  
+
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
                 optimizer.step()
                 optimizer.zero_grad()
-                
-            # Принудительно вычищаем системные ссылки Python и сбрасываем кэш CUDA на каждом шаге
-            gc.collect()
-            torch.cuda.empty_cache()
+
 
             #
             if global_step % 10 == 0:
