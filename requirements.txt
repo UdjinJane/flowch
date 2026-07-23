@@ -15,3 +15,7 @@ huggingface_hub>=0.23.0
 sentencepiece>=0.2.0
 protobuf
 tiktoken>=0.7.0
+# --- КРИТИЧЕСКИЕ ДАТЧИКИ И ДВИЖКИ ПЛАВКИ ДЛЯ ЯДРА V02 ---
+torchao
+bitsandbytes
+
