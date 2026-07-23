@@ -73,10 +73,12 @@ class FluxLoraCoreV02:
 
         # Замораживаем основу, оставляем градиенты только для LoRA в bfloat16
         
-        # Принудительно кастим только LoRA-слои через механизм модулей PyTorch
+        # Безопасный кастинг всех LoRA-слоев в torch.bfloat16 через _apply
         for name, module in model.named_modules():
             if "lora_" in name.lower():
-                module.to(dtype=torch.bfloat16)
+        # Применяем кастинг только к плавающим точкам — целочисленные маски защищены!
+                module._apply(lambda t: t.to(dtype=torch.bfloat16) if t.is_floating_point() else t)
+
 
         # Жестко распределяем флаги градиентов по тензорам параметров
         for name, param in model.named_parameters():
