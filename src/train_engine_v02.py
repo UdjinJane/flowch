@@ -11,6 +11,8 @@ from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
 from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
+from telemetry_logger import FluxTelemetryTracker
+
 
 # --- АВТОМАТИЗИРОВАННАЯ ЗАЩИТА ОТ КРИВЫХ РУК (ИНЖЕКЦИЯ ЗОЛОТА V02) ---
 try:
@@ -74,6 +76,7 @@ def main_train_loop():
     
     os.makedirs(TrainConfig.LOGS_DIR, exist_ok=True)
     log_file_path = os.path.join(TrainConfig.LOGS_DIR, "train_logs.txt")
+    telemetry = FluxTelemetryTracker()
     global_step = 0
     last_log_time = time.time()  # <--- Фиксируем базовую метку времени здесь!
     
@@ -146,6 +149,8 @@ def main_train_loop():
             # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
             assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
             loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+            telemetry.accumulate_step(t_attr, pred_tensor, packed_target_flow, loss)
+
 
             # ----------------------------------------------------------------------
 
@@ -184,6 +189,7 @@ def main_train_loop():
                 file_msg = f"Шаг: {global_step} | Loss: {current_loss:.4f} | Speed: {speed:.2f}it/s | VRAM: {allocated_vram:.2f}GB\n"
         
                 print(console_msg)  # В консоль летит красивый рапорт
+                telemetry.flush_aggregated_log(global_step, epoch)
                 with open(log_file_path, "a", encoding="utf-8") as lf:
                     lf.write(file_msg)  # В файл пишется чистая строка без дублей
             
