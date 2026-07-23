@@ -125,21 +125,12 @@ def main_train_loop():
                 # ---------------- СНАЙПЕРСКИЙ ВЫЗОВ END--------------
 
             
-            pred_tensor = pred_tensor.to(dtype=torch.bfloat16)
-            target_flow = (noise - latents).to(dtype=torch.bfloat16)
-            packed_target_flow = pack_latents_to_patches(target_flow)
-            
-          
-            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT SCALE DRIFT FIX) ---
-            # Сначала жестко ровняем типы и девайсы, блокируя Scale Drift
-            pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
-            packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
-
             # --- РАСЧЕТ ЦЕЛЕВОГО ПОТОКА RECTIFIED FLOW ---
             target_flow = (noise - latents).to(dtype=torch.bfloat16, device=device)
             packed_target_flow = pack_latents_to_patches(target_flow)
 
             # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT SCALE DRIFT FIX) ---
+            # Жестко ровняем типы и девайсы для ликвидации Scale Drift
             pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
             packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
 
@@ -148,6 +139,7 @@ def main_train_loop():
                 pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
 
             loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+
 
             # ----------------------------------------------------------------------
 
