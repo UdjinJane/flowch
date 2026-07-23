@@ -147,7 +147,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
                     latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
                     
                     # Исправленная денормализация Flux: снайперски снимаем сдвиг и масштаб
-                    latents_decoded = (latents_4d * v_conf["scaling_factor"]) + v_conf["shift_factor"]
+                    latents_decoded = (latents_4d - v_conf["shift_factor"]) / v_conf["scaling_factor"]
                     
                     dec_out = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)
                     rgb_tensor = dec_out[0] if isinstance(dec_out, (tuple, list)) else dec_out

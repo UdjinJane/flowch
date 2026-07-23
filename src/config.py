@@ -54,7 +54,9 @@ class TrainConfig:
     LORA_ALPHA = 16
     
     # Снайперские мишени LoRA под diffusers логику lora_core_v02.py
-    TARGET_MODULES = ["to_q", "to_k", "to_v", "to_out.0"]
+    # Мишени для инжекции LoRA-адаптеров Flux
+    TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+
     
     # Физические ограничения шхуны
     VRAM_LIMIT_GB = 21.0
