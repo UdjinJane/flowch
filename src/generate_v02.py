@@ -1,135 +1,178 @@
-import torch
-from typing import Tuple, Optional
+# Финальная версия generate_v02.py с примененными правками:
+
 import os
+import torch
+import time
+from PIL import Image
+from config import TrainConfig
+from diffusers import AutoencoderKL
+from safetensors.torch import load_file
+from model_runner_v02 import run_lora_model_step
 
-def verify_incoming_lora_weights(
-    transformer_model: torch.nn.Module,
-    checkpoint_path: str,
-    device: str = "cuda",
-    t_attr: float = 0.5,
-    batch_size: int = 1,
-    latent_dim: int = 4,
-    resolution: int = 512,
-    num_channels: int = 4,
-    in_channels: int = 4,
-    text_encoder_hidden_dim: int = 4096,
-    pooled_projection_dim: int = 768,
-    txt_ids_len: int = 256,
-    img_ids_len: int = 256
-) -> Tuple[bool, str]:
+def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=None, steps=25, device='cuda'):
     """
-    Безопасная верификация lora-чекпоинтов на АПЕКСе и катере GIPSY.
-    Разработка: Qwen3.5 9B (Регламент V02_STABLE)
+    [МАРШРУТ V02] Изолированный рендеринг кадра.
     """
-    
-    # --- БЛОК 1: ЗАГРУЗКА STATE-DICT С ЧЕКПОИНТА ---
-    try:
-        checkpoint_state_dict = torch.load(
-            checkpoint_path,
-            map_location="cuda",
-            weights_only=True
-        )
-    except Exception as e:
-        return False, f"Ошибка загрузки чекпоинта: {type(e).__name__}: {str(e)}"
-    
-    # --- БЛОК 2: ОЧИСТКА КЛЮЧЕЙ (УДАЛЕНИЕ ПРЕФИКСА model.diffusion_model.) ---
-    clean_state_dict = {}
-    for k, v in checkpoint_state_dict.items():
-        if k.startswith("model.diffusion_model."):
-            clean_key = k.replace("model.diffusion_model.", "")
-        else:
-            clean_key = k
-        clean_state_dict[clean_key] = v
-    
-    # --- БЛОК 3: ХРОНОЛОГИЧЕСКИЙ КАСТИНГ В BFLOAT16 (ДО ИНЖЕКЦИИ!) ---
-    for name, param in clean_state_dict.items():
-        if param.is_floating_point():
-            clean_state_dict[name] = param.to(dtype=torch.bfloat16)
+    if loaded_transformer is None:
+        print("[ОТК] Ошибка: Трансформер не передан!")
+        return
 
-    # --- БЛОК 4: ВАЛИДАЦИЯ ГЕОМЕТРИИ И ЗАГРУЗКА В TRANSFORMER_MODEL ---
-    try:
-        for name, param in transformer_model.named_parameters():
-            if "lora_" not in name.lower():
-                continue
-            
-            if name not in clean_state_dict:
-                return False, f"Отсутствует ключ в чекпоинте: {name}"
-            
-            checkpoint_tensor = clean_state_dict[name]
-            model_tensor = param.data
-            
-            # Строгая валидация геометрии и шейпов через assert
-            assert checkpoint_tensor.shape == model_tensor.shape, \
-                f"Shape mismatch для {name}: чекпоинт {checkpoint_tensor.shape} != модель {model_tensor.shape}"
-            
-            # Загрузка с проверкой dtype (bfloat16 должен сохраниться)
-            param.data = checkpoint_tensor.to(device=device, dtype=torch.bfloat16)
-        
-        if len(clean_state_dict) == 0:
-            return False, "Чекпоинт пуст или не содержит LoRA-слоев"
-        
-    except AssertionError as e:
-        return False, f"Ошибка валидации геометрии: {str(e)}"
-    except Exception as e:
-        return False, f"Ошибка загрузки весов: {type(e).__name__}: {str(e)}"
+    print(f"\n[ОБТ] >>> Бортовой рендеринг V02 | Шаг #{current_step} <<<")
+    t_start = time.time()
+
+    print("[ОБТ] Фаза А: Заморозка RNG и перевод в режим .eval()...")
+    old_rng = torch.get_rng_state()
+    was_training = loaded_transformer.training
+    torch.manual_seed(42 + current_step)
+    loaded_transformer.eval()
+
+    print("[ОБТ] Фаза Б: Аллокация маршевого шума Chroma1...")
+    latent_h, latent_w = 64, 64
+    total_tokens = (latent_h // 2) * (latent_w // 2)
+    x_t = torch.randn(1, total_tokens, 64, device=device, dtype=torch.bfloat16)
+
+    print("[ОБТ] Фаза В: Развёртывание 2D геометрии координат...")
+    grid_h = torch.arange(32, device=device, dtype=torch.bfloat16)[:, None].repeat(1, 32)
+    grid_w = torch.arange(32, device=device, dtype=torch.bfloat16)[None, :].repeat(32, 1)
     
-    # --- БЛОК 5: ВКЛЮЧЕНИЕ РЕЖИМА EVAL И NO-GRAD КОНТЕКСТА ---
-    transformer_model.eval()
+    img_ids = torch.zeros((total_tokens, 3), device=device, dtype=torch.bfloat16)
+    img_ids[:, 1], img_ids[:, 2] = grid_h.flatten(), grid_w.flatten()
     
+    # Динамическая длина ID под входящий кэш эмбеддингов контекста
+    txt_len = text_embedding.shape[1] if text_embedding is not None else 256
+    txt_ids = torch.zeros((txt_len, 3), device=device, dtype=torch.bfloat16)
+    
+    pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
+
+    print("[ОБТ] Фаза Г: Подготовка текстового контекста...")
+    if text_embedding is not None:
+        cond = text_embedding.to(device, dtype=torch.bfloat16)
+        # Если батч прилетел трехмерным [1, 1, N, D], снимаем лишнюю ось
+        if cond.dim() == 4 and cond.shape[0] == 1:
+            cond = cond.squeeze(0)
+    else:
+        print("[ОБТ] Внимание: Текстовый вектор пуст! Генерируем заглушку.")
+        cond = torch.zeros((1, 256, 4096), device=device, dtype=torch.bfloat16)
+
+    print(f"[ОБТ] Фаза Д: Запуск ODE траектории ({steps} шагов Эйлера)...")
     with torch.no_grad():
-        # --- БЛОК 6: ПОДГОТОВКА ТЕСТОВОЙ БАТЧИ ДЛЯ ЭЙЛЕРА ---
-        latent_shape = (batch_size, num_channels, resolution // 8, resolution // 8)
-        noise_tensor = torch.randn(*latent_shape, device=device, dtype=torch.bfloat16)
-        t_tensor = torch.tensor([t_attr], device=device, dtype=torch.bfloat16)
+        t_lines = torch.linspace(0.0, 1.0, steps + 1, device=device)
+        steps_grid = t_lines / (1.0 + (1.0 - t_lines) * 0.5)
+        
+        for i in range(steps):
+            t_curr = steps_grid[i].item()
+            t_next = steps_grid[i+1].item()
+            dt = t_next - t_curr
+            t_tensor = torch.ones(1, device=device) * t_curr
 
-        # --- БЛОК 7: ИМИТАЦИЯ КОНДИЦИОННЫХ ТЕНЗОРОВ (PROMPT EMBEDS) ---
-        prompt_embeds = torch.randn(text_encoder_hidden_dim, txt_ids_len, device=device, dtype=torch.bfloat16)
-        pooled_projections = torch.randn(pooled_projection_dim, txt_ids_len, device=device, dtype=torch.bfloat16)
-        
-        txt_ids = torch.arange(txt_ids_len, device=device, dtype=torch.long)
-        img_ids = torch.arange(img_ids_len, device=device, dtype=torch.long)
-        
-        # --- БЛОК 8: ПЕРЕКЛАДКА ВХОДНЫХ ТЕНЗОРОВ В BFLOAT16 ---
-        packed_noisy_latents = noise_tensor.to(device=device, dtype=torch.bfloat16)
-        t_vector = t_tensor.to(device=device, dtype=torch.bfloat16)
-        prompt_embeds_bf16 = prompt_embeds.to(device=device, dtype=torch.bfloat16)
-        pooled_projections_bf16 = pooled_projections.to(device=device, dtype=torch.bfloat16)
-        txt_ids_bf16 = txt_ids.to(device=device, dtype=torch.bfloat16)
-        img_ids_bf16 = img_ids.to(device=device, dtype=torch.bfloat16)
-        
-        # --- БЛОК 9: ВЫЗОВ МОДЕЛИ (ОДИН ШАГ ЭЙЛЕРА) ---
-        try:
-            out = transformer_model(
-                hidden_states=packed_noisy_latents,
-                timestep=t_vector,
-                encoder_hidden_states=prompt_embeds_bf16,
-                pooled_projections=pooled_projections_bf16,
-                txt_ids=txt_ids_bf16,
-                img_ids=img_ids_bf16,
-                return_dict=False
+            # Заглушка маски для маршевого раннера
+            batch_stub = {"text_ids_mask": torch.ones((1, txt_len), device=device, dtype=torch.bool)}
+            
+            # Вычисление вектора скорости
+            velocity = run_lora_model_step(
+                loaded_transformer,
+                batch_stub,
+                x_t,
+                t_tensor,
+                cond,
+                pooled_projections,
+                txt_ids,
+                img_ids
             )
             
-            # --- БЛОК 10: ВАЛИДАЦИЯ ВЫХОДНЫХ ТЕНЗОРОВ (ЯВНЫЕ СРЕЗЫ ПО ВСЕМ ОСЯМ!) ---
-            if isinstance(out, tuple):
-                out_latents = out[0]
-            else:
-                out_latents = out
+            # Истинный флотский буравчик: распаковка выхода модели
+            pred_tensor = velocity
+            if isinstance(pred_tensor, (tuple, list)):
+                pred_tensor = pred_tensor[0]
+            if hasattr(pred_tensor, "sample"):
+                pred_tensor = pred_tensor.sample
+            # Снайперский срез: забираем первые 64 канала изображения
+            pred_latents = pred_tensor[:, :, :64]
             
-            assert isinstance(out_latents, torch.Tensor), "Выход модели не является тензором"
-            assert out_latents.device.type == "cuda", f"Выход на устройстве {out_latents.device}, ожидается cuda"
-            
-            # Явные срезы по ВСЕМ осям для 3D/4D тензоров (защита от IndexError)
-            if out_latents.dim() >= 3:
-                sliced_output = out_latents[:, :out_latents.shape[1], :out_latents.shape[2]]
-            else:
-                sliced_output = out_latents
+            # Сдвиг по траектории потока (Шаг Эйлера)
+            x_t = x_t + pred_latents * dt
 
-            assert sliced_output.numel() > 0, "Выходной тензор пуст"
-            
-            # --- БЛОК 11: ВОЗВРАТ В TRAIN MODE И УСПЕШНЫЙ ВЫХОД ---
-            transformer_model.train()
-            return True, f"Верификация успешна. Выход: {sliced_output.shape}, dtype={sliced_output.dtype}"
-            
-        except Exception as e:
-            transformer_model.train()
-            return False, f"Ошибка тестового прогона Эйлера: {type(e).__name__}: {str(e)}"
+            if (i + 1) % 5 == 0 or (i + 1) == steps:
+                t_show = t_next if (i + 1) == steps else t_curr
+                print(f"  [~] Траектория ODE: {int(((i + 1) / steps) * 100)}% | t = {t_show:.3f}")
+                print("[ОБТ] Фаза Е: Подготовка параметров Flux VAE...")
+                #
+                # === НАЧАЛО ОКОНЧАТЕЛЬНОЙ ГЕРМЕТИЗАЦИИ VAE CONFIG ===
+                v_conf = {
+                    "_class_name": "AutoencoderKL",
+                    "in_channels": 3,
+                    "out_channels": 3,
+                    "latent_channels": 16,
+                    "sample_size": 1024,
+                    "layers_per_block": 2,
+                    "norm_num_groups": 32,
+                    "scaling_factor": 0.3611,
+                    "shift_factor": 0.1159,
+                    "block_out_channels": (128, 256, 512, 512),
+                    "down_block_types": (
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D",
+                        "DownEncoderBlock2D"
+                    ),
+                    "up_block_types": (
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D",
+                        "UpDecoderBlock2D"
+                    )
+                }
+                # === КОНЕЦ ОКОНЧАТЕЛЬНОЙ ГЕРМЕТИЗАЦИИ VAE CONFIG ===
+
+                #
+                # Жестко заставляем Diffusers собрать полноценную двухконтурную модель
+                from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+                vae = AutoencoderKL(**v_conf)
+
+
+                print("[ОБТ] Загрузка весов VAE и перевод контура в bfloat16...")
+                vae_state = load_file(TrainConfig.VAE_PATH, device="cpu")
+                vae_clean = {k.replace("vae.", "") if k.startswith("vae.") else k: v for k, v in vae_state.items()}
+                #vae.load_state_dict(vae_clean, strict=True)
+                # Отключаем strict, чтобы не падать из-за неиспользуемого энкодера в инференсе
+                vae.load_state_dict(vae_clean, strict=False)
+                vae = vae.to(device=device, dtype=torch.bfloat16)
+
+                print("[ОБТ] Фаза Ж: Распаковка 2D патчей и маршевый VAE-декод...")
+                with torch.no_grad():
+                    b_sz = x_t.shape[0]
+                    # Из 1024 токенов восстанавливаем 2D сетку патчей [B, 32, 32, 16, 2, 2]
+                    latents_4d = x_t.view(b_sz, 32, 32, 16, 2, 2)
+                    # Собираем пространственные оси обратно в шейп Flux [B, 16, 64, 64]
+                    latents_4d = latents_4d.permute(0, 3, 1, 4, 2, 5).reshape(b_sz, 16, 64, 64)
+                    
+                    
+                    # Исправленная денормализация Flux: снайперски снимаем сдвиг и масштаб строго по Платиновой книге
+                    latents_decoded = (latents_4d * v_conf["scaling_factor"]) + v_conf["shift_factor"]
+                    dec_out = vae.decode(latents_decoded.to(device, dtype=torch.bfloat16), return_dict=False)
+
+                    rgb_tensor = dec_out[0] if isinstance(dec_out, (tuple, list)) else dec_out
+
+
+    # Нормализация пикселей в диапазон [0, 1] и перевод в формат изображения
+    rgb_tensor = (rgb_tensor / 2 + 0.5).clamp(0, 1)
+    img_array = (rgb_tensor.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+    
+    output_dir = os.path.join(TrainConfig.OUTPUT_DIR, "images")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"mng_render_step_{current_step}.png")
+    Image.fromarray(img_array).save(output_path)
+
+    # Безусловное выжигание VAE из памяти для удержания лимита VRAM < 21.0 GB
+    del vae, vae_state, vae_clean, latents_4d, latents_decoded, rgb_tensor
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    print("[ОБТ] Фаза З: Деактивация контура инференса, возврат флагов...")
+    if was_training:
+        loaded_transformer.train()
+    torch.set_rng_state(old_rng)
+    
+    t_end = time.time()
+    print(f"[УСПЕХ] Рендеринг выполнен за {t_end - t_start:.2f} s. Файл зафиксирован: {output_path}\n")
