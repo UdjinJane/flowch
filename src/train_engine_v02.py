@@ -147,7 +147,13 @@ def main_train_loop():
 
             # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
             assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
-            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+            
+            # --- ЗАЩИТА ОТ UNDERFLOW (ПЛАТИНОВАЯ КНИГА БЛОК 3) ---
+            # Принудительно считаем MSE в float32, чтобы мелкие дельты градиентов
+            # оживших адаптеров LoRA не схлопнулись в ноль внутри FP8-backbone.
+            # На выходе возвращаем в bf16 для стабильной работы логгера телеметрии.
+            loss = F.mse_loss(pred_tensor.float(), packed_target_flow.float(), reduction="mean").to(torch.bfloat16)
+            #------------END GUARD-----------
             telemetry.accumulate_step(t_attr, pred_tensor, packed_target_flow, loss)
 
 
