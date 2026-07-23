@@ -73,6 +73,16 @@ def main_train_loop():
         optimizer = AdamW8bit(trainable_params, lr=TrainConfig.LEARNING_RATE, weight_decay=0.01)
     else:
         optimizer = AdamW(trainable_params, lr=TrainConfig.LEARNING_RATE, weight_decay=0.01)
+
+    # --- ИНИЦИАЛИЗАЦИЯ КОСИНУСНОГО ПЛАНИРОВЩИКА (ПЛАТИНОВАЯ КНИГА БЛОК 5) ---
+    # Тушит LR до 1e-6 к финалу TOTAL_STEPS, пробивая бетонное плато лосса
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=getattr(TrainConfig, "TOTAL_STEPS", TrainConfig.MAX_TRAIN_STEPS),
+        eta_min=1e-6
+    )
+    print(f"[УСПЕХ] Планировщик CosineAnnealingLR взведен на T_max={scheduler.T_max}")
+
     
     os.makedirs(TrainConfig.LOGS_DIR, exist_ok=True)
     log_file_path = os.path.join(TrainConfig.LOGS_DIR, "train_logs.txt")
@@ -179,6 +189,8 @@ def main_train_loop():
                 optimizer.zero_grad()
 
                 # ---- END ПРЕДОХРАНИТЕЛЬ ГРАДИЕНТОВ (STRICT VALIDATION)
+                # ТАКТ ПЛАНИРОВЩИКА: Безопасное увядание плазмы шага строго ПОСЛЕ step() [1.10]
+                scheduler.step()
             #
             if global_step % 10 == 0:
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
