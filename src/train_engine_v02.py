@@ -131,13 +131,19 @@ def main_train_loop():
             target_flow = (noise - latents).to(dtype=torch.bfloat16)
             packed_target_flow = pack_latents_to_patches(target_flow)
             
-            # --- ИСПРАВЛЕННЫЙ СНАЙПЕРСКИЙ СРЕЗ КАНАЛОВ (СТРОКА 126) ---
-            # Принудительно выравниваем и длину последовательности (dim 1), и каналы (dim 2)
+          
+            # --- ПРИНУДИТЕЛЬНЫЙ СИНХРОНИЗАТОР МАНТИССЫ (STRICT SCALE DRIFT FIX) ---
+            # Сначала жестко ровняем типы и девайсы, блокируя Scale Drift
+            pred_tensor = pred_tensor.to(dtype=torch.bfloat16, device=device)
+            packed_target_flow = packed_target_flow.to(dtype=torch.bfloat16, device=device)
+
+            # Теперь безопасно ровняем геометрию по всем осям 3D-тензора
             if pred_tensor.shape != packed_target_flow.shape:
-                pred_tensor = pred_tensor[:, :packed_target_flow.shape[1], :packed_target_flow.shape[2]]
-            # ----------------------------------------------------------
-            
-            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")
+                pred_tensor = pred_tensor[:, :packed_target_flow.shape, :packed_target_flow.shape]
+
+            loss = F.mse_loss(pred_tensor, packed_target_flow, reduction="mean")  
+            # ----------------------------------------------------------------------
+
             
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"[КРИТ] Обнаружен взрыв градиентов на шаге {global_step}!")

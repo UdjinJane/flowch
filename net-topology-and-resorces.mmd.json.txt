@@ -7,14 +7,14 @@ classDef winNode fill:#221133,stroke:#cc00ff,stroke-width:1px,color:#fff;
 classDef hwNode fill:#332211,stroke:#ff9900,stroke-width:1px,color:#fff;
 
 %% ХОСТ 1: КАПИТАНСКИЙ МОСТИК DEVELOPMENT
-subgraph HOST_APEX [Космошхуна: APEX / XONICA]
+subgraph HOST_APEX [Космошхуна: APEX]
     direction TR
     A_OS[Windows 11 Хост] --- A_IDE[VS Code / Jupyter Ноутбуки]
     A_OS --- A_HW[Железо: DEV-Контур]
     A_IP[Локальный IP: 192.168.1.144]
 end
 
-%% ХОСТ 2: МАШИННАЯ ПАЛУБА ДЛЯ СЕТОК
+%% ХОСТ 2: ИДЕТ В КИЛЬВАТЕРЕ ПЕСОЧНИЦА ДЛЯ СЕТОК
 subgraph HOST_GIPSY [Катер-Песочница GIPSY: General-Purpose Isolated Python Sandbox for Y-models]
     direction TB
     G_IP[Физический IP: 192.168.1.85]
