@@ -57,14 +57,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # Прямая инжекция запеченных весов из нашего сундучка core-моделей
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
 
-    ##
+    #------------------ ОБРАБОТКА АНОМАЛИИ ------------------------------
     with torch.no_grad():
         # 1. Возвращаем исходную пространственную сетку: (1, 1024, 64) -> (1, 32, 32, 64)
         latents_spatial = x_t.view(1, 32, 32, 64)
         # 2. Переносим ось скрытых каналов на второе место по стандарту PyTorch 4D: (1, 64, 32, 32)
         latents_4d = latents_spatial.permute(0, 3, 1, 2)
 
-        # === ИНЖЕКЦИЯ ЗОЛОТА V02 ===
+        # === ИНЖЕКЦИЯ ЗОЛОТА V02: СХЛОПЫВАНИЕ КАНАЛОВ ХРОМА1 (64) ПОД КОНТРАКТ VAE (16) ===
         lora_vae_proj = torch.nn.Conv2d(64, 16, kernel_size=1, bias=False).to(device=latents_4d.device, dtype=latents_4d.dtype)
         lora_vae_proj.weight.data.zero_()
         for channel_idx in range(16):
@@ -72,66 +72,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             
         latents_projected = lora_vae_proj(latents_4d)
 
-        # === ЖЕСТКИЙ ПРИБОРНЫЙ КОНТРОЛЬ СТАРПОМА ===
-        print("\n" + "="*60)
-        print("[РАДАР-КОНТРОЛЬ] Срез геометрии перед входом в декодер:")
-        print(f" -> latents_projected shape: {latents_projected.shape}")
-        if hasattr(vae, 'config'):
-            print(f" -> config latent_channels: {vae.config.get('latent_channels')}")
-            print(f" -> config block_out_channels: {vae.config.get('block_out_channels')}")
-        print("="*60 + "\n")
-
-        try:
-            # Трассируем проход через post_quant_conv
-            z = (latents_projected * 0.3611) + 0.1159
-            print("[РАДАР-КОНТРОЛЬ] Тестируем post_quant_conv...")
-            z_conv = vae.post_quant_conv(z)
-            print(f" -> После post_quant_conv shape: {z_conv.shape}")
-            
-            # Прогон по реальной цепочке слоев VAE Decoder из diffusers
-            print("[РАДАР-КОНТРОЛЬ] Вход в ядро декодера (vae.decoder)...")
-            sample = z_conv
-            
-            # 1. Слой conv_in
-            if hasattr(vae.decoder, 'conv_in'):
-                sample = vae.decoder.conv_in(sample)
-                print(f"  -> После conv_in shape: {sample.shape}")
-            
-            # 2. Блок mid_block
-            if hasattr(vae.decoder, 'mid_block') and vae.decoder.mid_block is not None:
-                sample = vae.decoder.mid_block(sample)
-                print(f"  -> После mid_block shape: {sample.shape}")
-            
-            # 3. Цепочка up_blocks (именно тут рвёт мантиссу!)
-            if hasattr(vae.decoder, 'up_blocks'):
-                for idx, block in enumerate(vae.decoder.up_blocks):
-                    sample = block(sample)
-                    print(f"  -> После Up-Block [{idx}] shape: {sample.shape}")
-            
-            # 4. Финальный узел нормализации (где зафиксирован бабах)
-            print(f"[РАДАР-КОНТРОЛЬ] Ожидаемые каналы conv_norm_out: {vae.decoder.conv_norm_out.num_features}")
-            print(f"[РАДАР-КОНТРОЛЬ] Реальная форма перед нормой: {sample.shape}")
-            
-            sample = vae.decoder.conv_norm_out(sample)
-            sample = vae.decoder.conv_act(sample)
-            dec_out = vae.decoder.conv_out(sample)
-            
-            img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
-            print("[УСПЕХ] Аномалия пробита в ручном режиме!")
-            
-        except Exception as diag_err:
-            print("\n" + "!"*60)
-            print(f"[КРИТИЧЕСКИЙ ДАМП] Градусник зафиксировал АВАРИЮ: {diag_err}")
-            print(f" -> Состояние тензора sample в точке излома: {sample.shape}")
-            print("!"*60 + "\n")
-            raise diag_err
+        # 3. Безопасный декод по реальной траектории без приборного вмешательства
+        dec_out = vae.decode((latents_projected * 0.3611) + 0.1159).sample
+        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
 
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
-
     
-
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
 def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
     """Гибридный верификатор (Qwen3.5+Ministral): префиксы, bfloat16, RoPE [1.10]."""
