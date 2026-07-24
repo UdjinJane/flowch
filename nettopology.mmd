@@ -18,20 +18,20 @@ end
 subgraph HOST_GIPSY [Катер-Песочница GIPSY: General-Purpose Isolated Python Sandbox for Y-models]
     direction TB
     G_IP[Физический IP: 192.168.1.85]
-    
+     
     subgraph G_WIN [Windows 11 OS Контур]
         G_UTF[UTF-8 Ядро] 
         G_PY[pyenv: Python 3.11.9 чистый]
         G_SWAP[Pagefile.sys: 48 GB Fixed]
         G_LM[LM Studio Server: порт 1234]
-        
+         
         subgraph G_ANABIOZ [Трюм Анабиоза Моделей]
             M_MINI[Ministral-3-14B-Reasoning в закачке]
             M_QWEN[Qwen2.5 Coder/Math 7B на базе]
             M_HEAVY[Qwen 32B / DeepSeek v2 ползут в фоне]
         end
     end
-    
+     
     subgraph G_WSL [Подсистема WSL2 / Docker Engine]
         D_WEB[gipsy-webui-frontend: порт 3000]
         D_OLL[gipsy-ollama-core: порт 11434]
@@ -63,9 +63,9 @@ class D_WEB,D_OLL dockerNode;
 class G_WIN,G_LM,G_PY,G_SWAP winNode;
 class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
 
-
 ### 📊 МАТРИЦА РЕСУРСОВ: ЧТО, ГДЕ И ПОЧЕМ
 
+```json
 {
   "network_topology": {
     "order_name": "APEX_GIPSY_LINK",
@@ -169,3 +169,4 @@ class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
     }
   }
 }
+```
