@@ -59,16 +59,28 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
 
     
     with torch.no_grad():
-        # 1. Возвращаем исходную пространственную сетку: (1, 1024, 64) -> (1, 32, 32, 64)
-        latents_spatial = x_t.view(1, 32, 32, 64)
-        
-        # 2. Переносим ось скрытых каналов на второе место по стандарту PyTorch 4D: (1, 64, 32, 32)
-        latents_4d = latents_spatial.permute(0, 3, 1, 2)
-        
-        # 3. Безопасный декод — теперь каналы 64 зайдут в VAE строго по своим магистралям
-        dec_out = vae.decode((latents_4d * 0.3611) + 0.1159)[0]
+     
+    # 1. Возвращаем исходную пространственную сетку: (1, 1024, 64) -> (1, 32, 32, 64)
+    latents_spatial = x_t.view(1, 32, 32, 64)
+    # 2. Переносим ось скрытых каналов на второе место по стандарту PyTorch 4D: (1, 64, 32, 32)
+    latents_4d = latents_spatial.permute(0, 3, 1, 2)
 
-        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+    # === ИНЖЕКЦИЯ ЗОЛОТА V02: СХЛОПЫВАНИЕ КАНАЛОВ ХРОМА1 (64) ПОД КОНТРАКТ VAE (16) ===
+    # Точечный 1x1 проектор для ликвидации аварии post_quant_conv
+    lora_vae_proj = torch.nn.Conv2d(64, 16, kernel_size=1, bias=False).to(device=latents_4d.device, dtype=latents_4d.dtype)
+    
+    # Жесткое детерминированное обнуление и выставление единичной матрицы в ПЗУ слоя
+    lora_vae_proj.weight.data.zero_()
+    for channel_idx in range(16):
+        lora_vae_proj.weight.data[channel_idx, channel_idx, 0, 0] = 1.0
+        
+    # Пропускаем латенты через стерильный контур проекции
+    latents_projected = lora_vae_proj(latents_4d)
+
+    # 3. Безопасный декод — теперь каналы 16 зайдут в VAE строго по своим магистралям
+    dec_out = vae.decode((latents_projected * 0.3611) + 0.1159)[0]
+    img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+
 
     output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
