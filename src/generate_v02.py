@@ -63,26 +63,55 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # Веса декодера сядут идеально один в один, а отсутствующий в safetensors 
     # энкодер будет проигнорирован благодаря strict=False.
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
-
-
-    #------------------ ОБРАБОТКА АНОМАЛИИ ------------------------------
-    
+   
+    #------------------ ОБРАБОТКА АНОМАЛИИ И РУЧНОЙ ДЕКОД V02 ------------------------------
     with torch.no_grad():
-        # 1. Возвращаем исходную пространственную сетку: (1, 1024, 64) -> (1, 32, 32, 64)
+        # 1. Восстановление базовой 4D сетки PyTorch из латентов Хромы
         latents_spatial = x_t.view(1, 32, 32, 64)
-        # 2. Переносим ось скрытых каналов на второе место по стандарту PyTorch 4D: (1, 64, 32, 32)
         latents_4d = latents_spatial.permute(0, 3, 1, 2)
 
-        # === ИНЖЕКЦИЯ ЗОЛОТА V02: СХЛОПЫВАНИЕ КАНАЛОВ ХРОМА1 (64) ПОД КОНТРАКТ VAE (16) ===
+        # 2. Входной 1x1 проектор (64 -> 16 каналов под первый слой VAE)
         lora_vae_proj = torch.nn.Conv2d(64, 16, kernel_size=1, bias=False).to(device=latents_4d.device, dtype=latents_4d.dtype)
         lora_vae_proj.weight.data.zero_()
         for channel_idx in range(16):
             lora_vae_proj.weight.data[channel_idx, channel_idx, 0, 0] = 1.0
-            
         latents_projected = lora_vae_proj(latents_4d)
 
-        # 3. Безопасный декод по реальной траектории без приборного вмешательства
-        dec_out = vae.decode((latents_projected * 0.3611) + 0.1159).sample
+        # Подготовка масштаба латентов
+        z = (latents_projected * 0.3611) + 0.1159
+        
+        # 3. ПОСЛОЙНЫЙ РУЧНОЙ ПРОХОД ПО ТРАКТУ ДЕКОДЕРА (vae.decoder)
+        # Пробиваем пост-квантовый и входной слои
+        z_conv = vae.post_quant_conv(z)
+        sample = vae.decoder.conv_in(z_conv)
+        
+        # Проходим срединный блок
+        if hasattr(vae.decoder, 'mid_block') and vae.decoder.mid_block is not None:
+            sample = vae.decoder.mid_block(sample)
+            
+        # Проходим блоки апсэмплинга (вскрываем те самые 512 каналов)
+        for block in vae.decoder.up_blocks:
+            sample = block(sample)
+            
+        # === ТАКТИЧЕСКИЙ СЖАТЕЛЬ СТАРПОМА (512 -> 128 КАНАЛОВ) ===
+        # Ликвидируем аварию несоответствия GroupNorm на выходе ядра
+        out_cleaner = torch.nn.Conv2d(512, 128, kernel_size=1, bias=False).to(device=sample.device, dtype=sample.dtype)
+        out_cleaner.weight.data.zero_()
+        for idx in range(128):
+            out_cleaner.weight.data[idx, idx, 0, 0] = 1.0
+        sample_compressed = out_cleaner(sample)
+        
+        # 4. ФИНАЛЬНЫЙ СТВОР: Передаем идеально выровненные 128 каналов в норму и выхлоп
+        sample_norm = vae.decoder.conv_norm_out(sample_compressed)
+        sample_act = vae.decoder.conv_act(sample_norm)
+        dec_out = vae.decoder.conv_out(sample_act)
+
+        # Отрезаем оси, переводим в пиксели и сохраняем снаряд
+        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+        output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        Image.fromarray(img_array).save(output_path)
+
         img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
 
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
