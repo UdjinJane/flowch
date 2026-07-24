@@ -59,8 +59,11 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     vae_config_dict["block_out_channels"] = [128, 256, 512, 512]
     vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
     
-    # Жесткая загрузка весов [1.10]
-    vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=True)
+    # === ВЫРАВНИВАНИЕ КОНТУРА: ИГНОРИРУЕМ ОГРЫЗОК ЭНКОДЕРА ===
+    # Веса декодера сядут идеально один в один, а отсутствующий в safetensors 
+    # энкодер будет проигнорирован благодаря strict=False.
+    vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
+
 
     #------------------ ОБРАБОТКА АНОМАЛИИ ------------------------------
     
