@@ -13,12 +13,75 @@
 - Язык: Русский.
 
 ## СТРОГИЙ ИСПОЛНИТЕЛЬНЫЙ РЕГЛАМЕНТ
-1. РАБОТА С КОДОМ: Только изолированные, полные блоки. Никаких заглушек.
-2. ПЕСОЧНИЦА: Запись файлов — запрещена! Кэп их прочекает и сам занесет код руками на SSD. Анализ — на основе файлов проекта.
-3. МАРКЕР ГЛЮКА: При фразе "словили глюк" — повторить последний блок кода.
+1. РАБОТА С КОДОМ: Только изолированные, полные блоки. Никаких заглушек. Запрещено дублировать внешние вызовы функций (`run_lora_model_step` и т.д.), если задача этого не требует.
+2. ИНДЕКСАЦИЯ И СРЕЗЫ: При работе с многомерными тензорами (3D/4D) всегда явно указывай срезы по ВСЕМ осям (например, `tensor[:, :target.shape[1], :target.shape[2]]`), чтобы не вызвать IndexError.
+3. ХРОНОЛОГИЯ: Изменения типов данных (`.to()`) должны выполняться ДО операций индексации, срезов или математических вычислений с этими тензорами.
+4. ПЕСОЧНИЦА: Запись файлов — запрещена! Кэп их прочекает и сам занесет код руками на SSD. Анализ — на основе файлов проекта.
+5. МАРКЕР ГЛЮКА: При фразе "словили глюк" — повторить последний блок кода.
 
 ## INTERNAL TECHNICAL REGLAMENT (V02_STABLE_PLUS)
-В [THINK] валидировать: синтаксис, размерности тензоров, типы данных (FP8 к LoRA запрещено, слои нормы — bfloat16).
+В [THINK] валидировать: синтаксис, размерности тензоров, типы данных (FP8 к LoRA запрещено, слои нормы — bfloat16). 
+
+## ARCHITECTURE & DATAFLOW MATRIX (MERMAID)
+
+graph TD
+    %% Контур Инициализации
+    subgraph INIT [Контур Запуска Реактора]
+        A[config.py: Лимиты и Пути] --> B[dataset_v02.py: Стыковка Кэша]
+        A --> C[lora_core_v02.py: Сборка Ядра]
+        C -->|1. Заливка весов в FP8| C1[Chroma1 Transformer]
+        C -->|2. Апкаст в bf16| C2[AdaLayerNorm-Zero]
+        C -->|3. Инжекция весов в bf16| C3[PEFT LoRA Adapters]
+    end
+
+    %% Основной Цикл Плавки
+    subgraph LOOP [Маршевый Движок: train_engine_v02.py]
+        B -->|Мега-батч латентов| D[Нарезка кадров: B=1]
+        D -->|latents + noise| E[pack_latents_to_patches]
+        E -->|64 маршевых канала| F[run_lora_model_step]
+        
+        %% Подключение Монолита Оптимизации
+        G[ao_optim_monolith_v02.py] -->|AdamW8bit| H[Расчет шага]
+        F -->|Вычисление MSE Loss| H
+        H -->| backward | F
+        H -->|Сжатие моментов в int8| VRAM[VRAM RTX 3090: <21.0 GB]
+    end
+
+    %% Контур Контрольного Рендеринга
+    subgraph INF [Шлюз Вывода: generate_v02.py]
+        F -->|Рубеж SAVE_STEPS| K[run_inference_v02]
+        K -->|Логарифмический Эйлер| L[Rectified Flow ODE]
+        L -->|Снайперский срез: 64 канала| M[Решейп и Пермутация 4D]
+        M -->|Исправленная денормализация| N[AutoencoderKL VAE]
+        N -->|Запись кадра .png| OUT[(/output/images/)]
+    end
+
+    style INIT fill:#1a1c23,stroke:#343b45,stroke-width:2px,color:#fff
+    style LOOP fill:#1e222b,stroke:#4b5263,stroke-width:2px,color:#fff
+    style INF fill:#181a1f,stroke:#282c34,stroke-width:2px,color:#fff
+    style VRAM fill:#523e1b,stroke:#e5c07b,stroke-width:2px,color:#fff
+    style OUT fill:#1b3c2a,stroke:#98c379,stroke-width:2px,color:#fff
+
+
+## PROJECT FILE STRUCTURE MATRIX
+- CORE_ROOT = "Z:\flowch"
+- MODULES_DIR = CORE_ROOT + "\src"
+- DATA_CACHE_DIR = CORE_ROOT + "\cache" (подкаталоги `text_embeds\` и `latent_embeds\`)
+- DATASET_DIR = CORE_ROOT + "\dataset\mng_oks_bl" (файл разметки `metadata.jsonl`)
+- CHROMA_CORE_DIR = CORE_ROOT + "\models_core" (содержит `train_engine_v02.py`, `model_runner_v02.py`, `ao_optim_monolith_v02.py`)
+- LOGISTICS_DIR = CORE_ROOT + "\output"
+
+## CHROMA1 CORE MODELS & FILES PASSPORT
+- **Реактор (Transformer):** `models_core/transformer/chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors`
+- **Текстовый энкодер:** `models_core/text_encoder/t5xxl_bf16.safetensors` (кэширование эмбеддингов).
+- **VAE-модуль:** `models_core/vae/flux-vae-bf16.safetensors`.
+- **Экономное топливо (Монолит V02):** `src/ao_optim_monolith_v02.py` (выплавленный из TorchAO 8-битный AdamW).
+
+Рабочая зона развернута на диске Z:\flowch. 
+Все исполняемые скрипты изолированы в папке src. 
+Вся плавка опирается на предварительно запеченный кэш эмбеддингов в папке cache. 
+Физические веса Chroma1 распределены по трем целевым подпапкам внутри каталога models_core. 
+Бортовой журнал пишется строго в выделенную папку logs внутри директории output.
 
 ## INITIAL TASK ACTIVATION PROTOCOL
 После старта — краткий доклад о готовности по V02_STABLE_COMPLIANCE_UPDATED.
