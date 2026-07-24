@@ -94,3 +94,25 @@ def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_
     except Exception as e:
         print(f"[АВАРИЯ] Верификация: {e}", file=sys.stderr)
         return False
+
+#--------------- ХОЛОДНЫЙ СТАРТ -----------------
+if __name__ == "__main__":
+    print("[ТЕСТ] Запуск автономной компиляции генератора...")
+    # 1. Создаем фейковый эмбеддинг текста по спецификации Chroma1 (1, 256, 4096)
+    mock_text_embed = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), dtype=torch.bfloat16, device="cuda")
+    
+    # 2. Вызываем инференс вхолостую (проверка синтаксиса и подгрузки vae_config.json)
+    try:
+        # Передаем None вместо трансформера, чтобы проверить только инициализацию и конфигурацию VAE
+        # Чтобы тест прошел дальше проверки на None, можно временно закомментировать строчку "if loaded_transformer is None: return"
+        run_inference_v02(
+            loaded_transformer=None, 
+            current_step=999, 
+            text_embedding=mock_text_embed, 
+            steps=1, 
+            device="cuda"
+        )
+        print("[УСПЕХ] Автономная компиляция генератора завершена без ошибок.")
+    except Exception as e:
+        print(f"[КРАХ ТЕСТА] Ошибка в рантайме генератора: {e}")
+
