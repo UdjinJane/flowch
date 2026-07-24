@@ -45,9 +45,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             x_t = x_t + velocity_sliced * (t_lines[i+1] - t_lines[i])
 
     # VAE Декодер — Прецизионная локальная инициализация по верифицированному vae_config.json
+    # VAE Декодер — Жесткая защита от невидимых BOM-байтов Windows (utf-8-sig)
+    import json
     vae_config_path = os.path.join(TrainConfig.SRC_DIR, "vae_config.json")
-    vae_config = AutoencoderKL.load_config(vae_config_path)
-    vae = AutoencoderKL.from_config(vae_config).to(device=device, dtype=torch.bfloat16)
+    with open(vae_config_path, "r", encoding="utf-8-sig") as f:
+        vae_config_dict = json.load(f)
+        
+    # Инициализация на основе чистого верифицированного словаря
+    vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
+
     
     # Прямая инжекция запеченных весов из нашего сундучка core-моделей
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
@@ -115,4 +121,3 @@ if __name__ == "__main__":
         print("[УСПЕХ] Автономная компиляция генератора завершена без ошибок.")
     except Exception as e:
         print(f"[КРАХ ТЕСТА] Ошибка в рантайме генератора: {e}")
-
