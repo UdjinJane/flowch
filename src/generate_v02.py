@@ -25,23 +25,24 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
     txt_ids = torch.zeros((cond.shape[1], 3), device=device, dtype=torch.bfloat16)
 
-    # ODE Траектория с прецизионной защитой от расхождения осей BroadCast
+    
+    # ODE Траектория с прецизионной двухмерной защитой от расхождения осей BroadCast
     with torch.no_grad():
         t_lines = torch.linspace(0.0, 1.0, steps + 1, device=device)
         for i in range(steps):
-            # 1. Получаем объединенный маршевый вектор скорости (кадр + текст) -> (B, 1280, 64)
+            # 1. Получаем объединенный маршевый вектор скорости (кадр + текст) -> (B, 1280, 256)
             velocity = run_lora_model_step(
-                loaded_transformer, 
-                {"text_ids_mask": torch.ones((1, cond.shape[1]), device=device, dtype=torch.bool)}, 
+                loaded_transformer,
+                {"text_ids_mask": torch.ones((1, cond.shape[1]), device=device, dtype=torch.bool)},
                 x_t, t_lines[i], cond, pooled_projections, txt_ids, img_ids
             )
             
-            # 2. Сохраняем батч и отсекаем 256 токенов текста, оставляя строго x_t.shape[1] (1024 кадра)
-            velocity_sliced = velocity[:, :x_t.shape[1], :]
+            # 2. ЖЕСТКИЙ ДВУХМЕРНЫЙ СРЕЗ: Сохраняем батч, отсекаем 256 токенов текста по оси 1 
+            # и принудительно зажимаем каналы до 64 по оси 2, ликвидируя аварию BroadCast
+            velocity_sliced = velocity[:, :x_t.shape[1], :x_t.shape[2]]
             
-            # 3. Безопасный шаг Эйлера без разрушения геометрии и перепутывания осей
+            # 3. Безопасный шаг Эйлера — теперь геометрия (1, 1024, 64) совпадает идеально
             x_t = x_t + velocity_sliced * (t_lines[i+1] - t_lines[i])
-
 
     # VAE Декодер
     vae = AutoencoderKL.from_config(TrainConfig.VAE_CONFIG_PATH).to(device=device, dtype=torch.bfloat16)
