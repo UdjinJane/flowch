@@ -84,9 +84,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
 
         
 
-    output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    Image.fromarray(img_array).save(output_path)
+        output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        Image.fromarray(img_array).save(output_path)
 
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
 def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
