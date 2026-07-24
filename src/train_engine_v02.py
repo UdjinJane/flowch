@@ -158,30 +158,29 @@ def main_train_loop():
             # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
             assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
             
+           
             # --- ЗАЩИТА ОТ UNDERFLOW И SCALE DRIFT С ПРЯМЫМ AUTOGRAD-ГРАФОМ V02 ---
-            
-            # 1. Считаем чистый MSE строго во float32. loss_active остается в 32 битах для сохранения мантиссы
+            # 1. Расчет скаляра ошибки строго в полной float32 точности для сохранения мантиссы
             loss_active = F.mse_loss(pred_tensor.float(), packed_target_flow.float(), reduction="mean")
             
-            # 2. Изолированная копия в bf16 для логгера, созданная БЕЗ нарушения графа Autograd
+            # 2. Изолированная копия в bf16 исключительно для логгера телеметрии
             loss = loss_active.detach().clone().to(torch.bfloat16)
-            
             # ------------ END GUARD -----------
 
-            # 3. Передаем в телеметрию оригинальные контракты (loss теперь в чистом bf16)
+            # 3. Передача оригинальных контрактов в телеметрию (loss заходит в типе bf16)
             telemetry.accumulate_step(t_attr, pred_tensor, packed_target_flow, loss)
 
-            # Проверка на взрыв градиентов на копии тензора
+            # Проверка на критический взрыв градиентов на копии тензора
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"[КРИТ] Обнаружен взрыв градиентов на шаге {global_step}!")
                 sys.exit(1)
 
-            # 4. Деление для накопления градиентов выполняем в честной float32 точности
+            # 4. Деление для накопления градиентов выполняем строго во float32 точности
             loss_backward_target = loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS
             
-            # 5. Пускаем обратную волну Autograd во float32 — LoRA-адаптеры спасены от затухания
+            # 5. Пускаем обратную волну Autograd в честных 32 битах — LoRA-адаптеры спасены
             loss_backward_target.backward()
-
+               
             #-------------- END OF POISON -------
 
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
