@@ -45,13 +45,25 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             x_t = x_t + velocity_sliced * (t_lines[i+1] - t_lines[i])
 
     # VAE Декодер — Прецизионная локальная инициализация по верифицированному vae_config.json
-    # VAE Декодер — Жесткая защита от невидимых BOM-байтов Windows (utf-8-sig)
-    # --- ЧИСТЫЙ КОНТУР ИНИЦИАЛИЗАЦИИ VAE ---
+    # === ФИНАЛЬНАЯ ГЕРМЕТИЗАЦИЯ VAE ===
+    
+    import json
+    import os
+    from safetensors.torch import load_file
+    
+    # Читаем конфиг, чиним block_out_channels, грузим VAE
+    vae_config_path = os.path.join(TrainConfig.SRC_DIR, "vae_config.json")
+    with open(vae_config_path, "r", encoding="utf-8-sig") as f:
+        vae_config_dict = json.load(f)
+        
     vae_config_dict["block_out_channels"] = [128, 256, 512, 512]
     vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
+    
+    # Жесткая загрузка весов [1.10]
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=True)
 
     #------------------ ОБРАБОТКА АНОМАЛИИ ------------------------------
+    
     with torch.no_grad():
         # 1. Возвращаем исходную пространственную сетку: (1, 1024, 64) -> (1, 32, 32, 64)
         latents_spatial = x_t.view(1, 32, 32, 64)
