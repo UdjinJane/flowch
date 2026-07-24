@@ -44,9 +44,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
             # 3. Безопасный шаг Эйлера — теперь геометрия (1, 1024, 64) совпадает идеально
             x_t = x_t + velocity_sliced * (t_lines[i+1] - t_lines[i])
 
-    # VAE Декодер
-    vae = AutoencoderKL.from_config(TrainConfig.VAE_CONFIG_PATH).to(device=device, dtype=torch.bfloat16)
+    # VAE Декодер — Прецизионная локальная инициализация по верифицированному vae_config.json
+    vae_config_path = os.path.join(TrainConfig.SRC_DIR, "vae_config.json")
+    vae_config = AutoencoderKL.load_config(vae_config_path)
+    vae = AutoencoderKL.from_config(vae_config).to(device=device, dtype=torch.bfloat16)
+    
+    # Прямая инжекция запеченных весов из нашего сундучка core-моделей
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
+
     
     with torch.no_grad():
         latents = x_t.view(1, 32, 32, 16, 2, 2).permute(0, 3, 1, 4, 2, 5).reshape(1, 16, 64, 64)
