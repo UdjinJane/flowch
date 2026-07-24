@@ -158,23 +158,31 @@ def main_train_loop():
             # Жёсткая проверка геометрии: теперь обязано быть 1024 vs 1024 и 64 vs 64
             assert pred_tensor.shape == packed_target_flow.shape, f"[КРИТ] Рассинхрон геометрии после среза: {pred_tensor.shape} vs {packed_target_flow.shape}"
             
-            # --- ЗАЩИТА ОТ UNDERFLOW (ПЛАТИНОВАЯ КНИГА БЛОК 3) ---
-            # Принудительно считаем MSE в float32, чтобы мелкие дельты градиентов
-            # оживших адаптеров LoRA не схлопнулись в ноль внутри FP8-backbone.
-            # На выходе возвращаем в bf16 для стабильной работы логгера телеметрии.
-            loss = F.mse_loss(pred_tensor.float(), packed_target_flow.float(), reduction="mean").to(torch.bfloat16)
-            #------------END GUARD-----------
+            # --- ЗАЩИТА ОТ UNDERFLOW И SCALE DRIFT С ПРЯМЫМ AUTOGRAD-ГРАФОМ V02 ---
+            
+            # 1. Считаем чистый MSE строго во float32. loss_active остается в 32 битах для сохранения мантиссы
+            loss_active = F.mse_loss(pred_tensor.float(), packed_target_flow.float(), reduction="mean")
+            
+            # 2. Изолированная копия в bf16 для логгера, созданная БЕЗ нарушения графа Autograd
+            loss = loss_active.detach().clone().to(torch.bfloat16)
+            
+            # ------------ END GUARD -----------
+
+            # 3. Передаем в телеметрию оригинальные контракты (loss теперь в чистом bf16)
             telemetry.accumulate_step(t_attr, pred_tensor, packed_target_flow, loss)
 
-
-            # ----------------------------------------------------------------------
-
+            # Проверка на взрыв градиентов на копии тензора
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"[КРИТ] Обнаружен взрыв градиентов на шаге {global_step}!")
-                sys.exit(1)  
+                sys.exit(1)
 
-            loss = loss / TrainConfig.GRADIENT_ACCUMULATION_STEPS
-            loss.backward()  
+            # 4. Деление для накопления градиентов выполняем в честной float32 точности
+            loss_backward_target = loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS
+            
+            # 5. Пускаем обратную волну Autograd во float32 — LoRA-адаптеры спасены от затухания
+            loss_backward_target.backward()
+
+            #-------------- END OF POISON -------
 
             if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
