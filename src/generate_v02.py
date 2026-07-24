@@ -50,9 +50,15 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     vae_config_path = os.path.join(TrainConfig.SRC_DIR, "vae_config.json")
     with open(vae_config_path, "r", encoding="utf-8-sig") as f:
         vae_config_dict = json.load(f)
-        
-    # Инициализация на основе чистого верифицированного словаря
+    
+    # Прецизионная инверсия каналов для ликвидации RuntimeError на слое conv_norm_out
+    if "block_out_channels" in vae_config_dict:
+        # Оригинальный контракт FLUX VAE требует обратного сужения каналов на апсэмпл
+        vae_config_dict["block_out_channels"] = list(reversed(vae_config_dict["block_out_channels"]))
+
+    # Инициализация на основе выровненного словаря
     vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
+
 
     
     # Прямая инжекция запеченных весов из нашего сундучка core-моделей
