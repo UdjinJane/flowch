@@ -52,9 +52,17 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         vae_config_dict = json.load(f)
 
     # === ТАКТИЧЕСКИЙ ХАРДКОД СТАРПОМА: ВЫРАВНИВАНИЕ МАГИСТРАЛЕЙ GROUPNORM ===
-    # Принудительно выставляем каналы финального блока [512] на все позиции, 
-    # чтобы узел conv_norm_out инициализировался строго на 512 каналов и не взрывал GroupNorm
-    vae_config_dict["block_out_channels"] = [512, 512, 512, 512]
+    # === ВЫРАВНИВАНИЕ КОНТУРА ПО ФАКТИЧЕСКИМ ЗАМЕРАМ ВЕСОВ ===
+    # Веса в файле строго соответствуют оригинальной цепочке Лодстона. 
+    # Возвращаем родную геометрию, чтобы слои энкодера и декодера сели в свои пазы без size mismatch.
+    vae_config_dict["block_out_channels"] = [128, 256, 512, 512]
+
+    # Сборка VAE на штатном конфиге
+    vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
+    
+    # Теперь веса зайдут идеально, можно вернуть strict=True для проверки герметичности
+    vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=True)
+
 
     # Сборка VAE на модифицированном в памяти конфиге
     vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
