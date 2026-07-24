@@ -46,30 +46,10 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
 
     # VAE Декодер — Прецизионная локальная инициализация по верифицированному vae_config.json
     # VAE Декодер — Жесткая защита от невидимых BOM-байтов Windows (utf-8-sig)
-    import json
-    vae_config_path = os.path.join(TrainConfig.SRC_DIR, "vae_config.json")
-    with open(vae_config_path, "r", encoding="utf-8-sig") as f:
-        vae_config_dict = json.load(f)
-
-    # === ТАКТИЧЕСКИЙ ХАРДКОД СТАРПОМА: ВЫРАВНИВАНИЕ МАГИСТРАЛЕЙ GROUPNORM ===
-    # === ВЫРАВНИВАНИЕ КОНТУРА ПО ФАКТИЧЕСКИМ ЗАМЕРАМ ВЕСОВ ===
-    # Веса в файле строго соответствуют оригинальной цепочке Лодстона. 
-    # Возвращаем родную геометрию, чтобы слои энкодера и декодера сели в свои пазы без size mismatch.
+    # --- ЧИСТЫЙ КОНТУР ИНИЦИАЛИЗАЦИИ VAE ---
     vae_config_dict["block_out_channels"] = [128, 256, 512, 512]
-
-    # Сборка VAE на штатном конфиге
     vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
-    
-    # Теперь веса зайдут идеально, можно вернуть strict=True для проверки герметичности
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=True)
-
-
-    # Сборка VAE на модифицированном в памяти конфиге
-    vae = AutoencoderKL.from_config(vae_config_dict).to(device=device, dtype=torch.bfloat16)
-
-    
-    # Прямая инжекция запеченных весов из нашего сундучка core-моделей
-    vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
 
     #------------------ ОБРАБОТКА АНОМАЛИИ ------------------------------
     with torch.no_grad():
