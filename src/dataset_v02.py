@@ -32,9 +32,9 @@ class CachedFluxDatasetV02(Dataset):
 
                 # === ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ РАДАР V08 ===
                 # Выводим в лог первую строку, чтобы глазами увидеть, что и где ищет скрипт
-                #if len(self.samples) == 0:
-                #    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
-                #    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
+                if len(self.samples) == 0:
+                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
+                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
                 # === КОНЕЦ РАДАРА ===
 
                 
