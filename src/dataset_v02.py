@@ -54,27 +54,24 @@ class CachedFluxDatasetV02(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
         
-        # Вскрываем монолитный словарь T5+CLIP кузнецов
+        # Вскрываем монолитный словарь T5+CLIP кузнецов V09_FINAL
         cached_dict = torch.load(sample["mono_text_path"], map_location="cpu")
-        # === ВРЕМЕННЫЙ СПЕКТРАЛЬНЫЙ АНАЛИЗАТОР КЛЮЧЕЙ V09 ===
-        if idx == 0:
-            print("=" * 60)
-            print(f"[АНАТОМИЯ МОНОЛИТА V09] Файл: {sample['mono_text_path']}")
-            if isinstance(cached_dict, dict):
-                print(" -> Доступные ключи в контейнере:")
-                for k, v in cached_dict.items():
-                    shape_info = f"Shape: {list(v.shape)}" if hasattr(v, "shape") else f"Type: {type(v)}"
-                    print(f"    └─ Ключ: '{k}' | {shape_info}")
-            else:
-                print(f" -> [⚠] Файл не является словарем! Тип: {type(cached_dict)}")
-                if hasattr(cached_dict, "shape"):
-                    print(f"    └─ Shape тензора: {list(cached_dict.shape)}")
-            print("=" * 60)
-        # === КОНЕЦ ИНЖЕКТОРА ===
-        # Достаем ключи по именам из манифеста, срезая лишнюю размерность батча
-        prompt_embeds = cached_dict["prompt_embeds"].squeeze(0)
-        text_ids_mask = cached_dict["prompt_attn_mask"].squeeze(0)
         
+        # Достаем истинные ключи из рапорта зонда, срезая ось батча [1, 256, 4096] -> [256, 4096]
+        prompt_embeds = cached_dict["t5_hidden"].squeeze(0)
+        
+        # Автоматическая сборка единичной маски внимания под фиксированную длину кузнецов (256 токенов)
+        text_ids_mask = torch.ones((prompt_embeds.shape), dtype=torch.bool)
+        
+        # Загружаем тяжелые латенты Chroma-материи (513 КБ)
+        latents = torch.load(sample["latent_path"], map_location="cpu", weights_only=True).squeeze(0)
+        
+        return {
+            "prompt_embeds": prompt_embeds,
+            "text_ids_mask": text_ids_mask,
+            "latents": latents
+        }
+
         # Загружаем латенты картинки
         latents = torch.load(sample["latent_path"], map_location="cpu", weights_only=True).squeeze(0)
         assert latents.shape == (16, 64, 64), f"Unexpected latent shape: {latents.shape}"
