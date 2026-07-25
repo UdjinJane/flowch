@@ -173,8 +173,11 @@ def main_train_loop():
                 loss_active = (F.mse_loss(pred_tensor_64.float(), target_flow.float(), reduction="none") * weight_mask).mean()
                 loss = loss_active.detach().clone().to(torch.bfloat16)
 
-                # ----------- ТЕЛЕМЕТРИЯ_НАШЕ ВСЁ-----------------------------               
-                telemetry.accumulate_step(t_attr, pred_tensor, target_flow, loss)
+              
+                # ----------- ТЕЛЕМЕТРИЯ_НАШЕ ВСЁ V12 -----------------------------
+                # Передаем строго выровненную 64-канальную мантиссу, чтобы у логгера не сорвало клапаны
+                telemetry.accumulate_step(t_attr, pred_tensor_64, target_flow, loss)
+
 
                 # 5. Обратная волна градиентов по каноническому шагу накопления
                 (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
