@@ -32,7 +32,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     
     # ODE Траектория с прецизионной двухмерной защитой от расхождения осей BroadCast
     with torch.no_grad():
-        t_lines = torch.linspace(0.0, 1.0, steps + 1, device=device)
+        # === АДАПТИВНЫЙ TIMESTEP SHIFT RECTIFIED FLOW (V04) ===
+        # Защита RoPE от искажений на 512px: применяем логарифмический сдвиг 
+        # планировщика (shift=3.0/mu=3.15) по каноническому стандарту кузницы AI-Toolkit.
+        # Это смещает плотность шагов к шуму, давая LoRA время прорисовать каркас.
+        t_raw = torch.linspace(0.0, 1.0, steps + 1, device=device)
+        # Формула сдвига: t = (shift * t) / (1 + (shift - 1) * t)
+        t_lines = (3.0 * t_raw) / (1.0 + (3.0 - 1.0) * t_raw)
+
         for i in range(steps):
             # 1. Получаем объединенный маршевый вектор скорости (кадр + текст) -> (B, 1280, 256)
             velocity = run_lora_model_step(
