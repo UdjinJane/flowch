@@ -156,24 +156,15 @@ def main_train_loop():
                 (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
 
                 # === КОНЕЦ ИНЖЕКЦИИ CHROMA V05 ===
-                # === КОНЕЦ ПОЗИЦИОННОГО ВЫЗОВА ===
+                # === КОНЕЦ ИНЖЕКЦИИ CHROMA V05 ===
 
+                if global_step % TrainConfig. GRADIENT_ACCUMULATION_STEPS == 0:
+                    torch. nn. utils. clip_grad_norm_( trainable_params, max_norm= 1.0)
 
-                # Расчет целевого потока и весовая маска (защита от затухания)
-                target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
-                weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
-
-                # Расчет лосса с учетом весов
-                loss_active = (F.mse_loss(pred_tensor.float(), target_flow.float(), reduction="none") * weight_mask).mean()
-                loss = loss_active.detach().clone().to(torch.bfloat16)
-                telemetry.accumulate_step(t_attr, pred_tensor, target_flow, loss)
-
-                # Накопление градиентов
-                (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
                 # === КОНЕЦ ИНЖЕКЦИИ ===
 
-            if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
                 
                 # ПРЕДОХРАНИТЕЛЬ ГРАДИЕНТОВ (STRICT VALIDATION)
                 for param in trainable_params:
