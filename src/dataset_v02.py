@@ -20,10 +20,8 @@ class CachedFluxDatasetV02(Dataset):
                     continue
                 data = json.loads(line)
                 img_name = data["file_name"]
-
                 base_name = os.path.splitext(img_name)[0]
-                embed_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
-                mask_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_mask.pt")
+
                 # === СТВОР МОНОЛИТНОГО КЭША V08_LOCAL ===
                 # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
                 mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
