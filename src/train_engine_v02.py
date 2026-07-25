@@ -138,11 +138,13 @@ def main_train_loop():
                 # === КОНЕЦ ЧАСТИ 1 ===
                 
                 # === ИНЖЕКЦИЯ CHROMA V05: ЧАСТЬ 2 (Синхронизация и лосс) ===
-                # 1. Расчет истинного направления потока Rectified Flow
+                # === ПРЯМОТОЧНЫЙ РАСЧЕТ ПОТОКА RECTIFIED FLOW V09_FINAL ===
+                # 1. Расчет истинного направления потока (извлекаем чистые 64 канала патча Flux)
                 raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+                
+                # 2. Прямоточный шлюз: убираем кустарный repeat, каналы должны сходиться один в один (64 к 64)
+                target_flow = raw_target_flow
 
-                # 2. Жесткий Chroma-сдвиг: проецируем 64 канала патча в 256 внутренних каналов
-                target_flow = raw_target_flow.repeat(1, 1, 4)
 
                 # 3. Активация защиты от Аномалии Песка (динамический вес по сигме)
                 weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
