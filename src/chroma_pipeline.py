@@ -31,8 +31,8 @@ def prepare_latent_image_ids(batch_size, height, width, patch_size=2, max_offset
     Returns:
         torch.Tensor: A tensor containing the positional embeddings.
     """
-    # the random pos embedding helps generalize to larger res without training at large res
-    # pos embedding for rope, 2d pos embedding, corner embedding and not center based
+    #  the random pos embedding helps generalize to larger res without training at large res
+    #  pos embedding for rope, 2d pos embedding, corner embedding and not center based
     latent_image_ids = torch.zeros(height // patch_size, width // patch_size, 3)
 
     # Add positional encodings
