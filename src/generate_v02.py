@@ -20,8 +20,6 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         "base_shift": 0.5, "max_shift": 1.15, "shift": 3.0
     })
 
-    # 2. VAE (Загрузка весов строго по схеме)
-    import json
     # 2. VAE (Загрузка весов со стопроцентной дезинфекцией UTF-8 BOM)
     import json
     with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r", encoding="utf-8-sig") as f:
