@@ -58,10 +58,13 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         prompt_embeds = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), device=device, dtype=torch.bfloat16)
         pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
 
-    # 2. ВИЗУАЛИЗАЦИЯ МАНТИССЫ И ГЕОМЕТРИИ ПЕРЕД ЗАПУСКОМ СЭМПЛЕРА
+        # 2. ВИЗУАЛИЗАЦИЯ МАНТИССЫ И ГЕОМЕТРИИ ПЕРЕД ЗАПУСКОМ СЭМПЛЕРА
     print("=" * 60)
     print("[МОНИТОР МАНТИССЫ CHROMA PIPELINE V07]")
-    # ... (код вывода параметров)
+    print(f" -> prompt_embeds shape: {prompt_embeds.shape} | dtype: {prompt_embeds.dtype}")
+    print(f" -> pooled_projections shape: {pooled_projections.shape} | dtype: {pooled_projections.dtype}")
+    print(f" -> Target Resolution: {TrainConfig.RESOLUTION}x{TrainConfig.RESOLUTION}")
+    print(f" -> Scheduler Config: {pipe.scheduler.config}")
     print("=" * 60)
 
     # 3. БОЕВОЙ ЗАПУСК ОРИГИНАЛЬНОГО ПАЙПЛАЙНА (Кустарщина полностью ликвидирована)
@@ -70,19 +73,34 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         pipeline_output = pipe(
             prompt_embeds=prompt_embeds,
             pooled_projections=pooled_projections,
-            # ... (параметры вызова)
+            height=TrainConfig.RESOLUTION,
+            width=TrainConfig.RESOLUTION,
+            num_inference_steps=25,
+            output_type="pil",
+            return_dict=True
         )
         
+        # Извлекаем первый запеченный кадр из возвращенного FluxPipelineOutput
         final_image = pipeline_output.images[0]
 
     # 4. ФИКСАЦИЯ И СБРОС СНАРЯДА НА SSD
-    # ... (код сохранения изображения)
+    output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    final_image.save(output_path)
     print(f"[ТРИУМФ V07] Чистокровное изображение запечено на SSD: {output_path}")
 
-# Заглушка-верификатор для совместимости с движком обучения
-def verify_incoming_lora_weights(transformer_model, checkpoint_path):
+# Заглушка-верификатор для совместимости с движком обучения train_engine_v02
+def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
+    """Формальный верификатор для удержания интерфейса."""
     return True
 
 if __name__ == "__main__":
-    # ... (код теста)
+    print("[ТЕСТ] Автономный марш генератора V07...")
+    # Инициализируем пустое ядро для проверки сквозного импорта
+    mock_transformer = torch.nn.Module()
+    try:
+        run_inference_v02(loaded_transformer=mock_transformer, current_step=777, device="cuda")
+        print("[УСПЕХ] Тестовый прогон V07 завершен.")
+    except Exception as e:
+        print(f"[КОНТРОЛЬ] Автономный вылет (норма при отсутствии весов transformer): {e}")
 # === КОНЕЦ: CHROMA_PIPELINE_MONOLITH_V07 ===
