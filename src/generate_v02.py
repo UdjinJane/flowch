@@ -22,7 +22,11 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
 
     # 2. VAE (Загрузка весов строго по схеме)
     import json
-    with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r") as f:
+    # 2. VAE (Загрузка весов со стопроцентной дезинфекцией UTF-8 BOM)
+    import json
+    with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r", encoding="utf-8-sig") as f:
+        vae_config = json.load(f)
+
         vae_config = json.load(f)
     vae_config["block_out_channels"] = [128, 256, 512, 512]
     vae = AutoencoderKL.from_config(vae_config).to(device=device, dtype=torch.bfloat16)
