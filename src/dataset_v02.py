@@ -24,7 +24,10 @@ class CachedFluxDatasetV02(Dataset):
 
                 # === СТВОР МОНОЛИТНОГО КЭША V08_LOCAL ===
                 # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
-                mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
+                # === ФИКС СУФФИКСА МОНОЛИТА V08_LOCAL ===
+                # Привязываемся к реальному имени файла весом 2.1 МБ на диске Z
+                mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
+
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
 
                 # === ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ РАДАР V08 ===
