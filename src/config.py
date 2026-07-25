@@ -25,9 +25,9 @@ class TrainConfig:
     # --- МАГИСТРАЛИ ДАННЫХ И КЭША (ДЛЯ DATASET_V02) ---
     METADATA_PATH = os.path.join(DATASET_DIR, "metadata.jsonl")
     CACHE_DIR = os.path.join(ROOT_DIR, "cache")
-    # === ФИКС ТЕКСТОВОЙ МАГИСТРАЛИ CHROMA V08 ===
-    # Принудительно переключаем генератор на реальный корневой монолитный кэш
-    CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "text_cache")
+    # === ГЕРМЕТИЗАЦИЯ ТЕКСТОВОЙ МАГИСТРАЛИ CHROMA V09_FINAL ===
+    # Переключаем радары на реальную подпапку text_cache внутри dataset
+    CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "dataset", "text_cache")
 
     # === ПОДКЛЮЧЕНИЕ ЧИСТОКРОВНОЙ МАТЕРИИ CHROMA V09 ===
     CACHE_LATENT_DIR = os.path.join(ROOT_DIR, "dataset", "latent_cache")
