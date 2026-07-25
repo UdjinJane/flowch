@@ -24,15 +24,18 @@ class CachedFluxDatasetV02(Dataset):
                 base_name = os.path.splitext(img_name)[0]
                 embed_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
                 mask_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_mask.pt")
+                # === СТВОР МОНОЛИТНОГО КЭША V08_LOCAL ===
+                # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
+                mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
-
-                if os.path.exists(embed_path) and os.path.exists(mask_path) and os.path.exists(latent_path):
+                
+                if os.path.exists(mono_text_path) and os.path.exists(latent_path):
                     self.samples.append({
-                        "embed_path": embed_path,
-                        "mask_path": mask_path,
+                        "mono_text_path": mono_text_path,
                         "latent_path": latent_path,
                         "img_name": img_name
                     })
+
 
         print(f"[УСПЕХ] Dataset_V02: Успешно состыковано {len(self.samples)} готовых к плавке кадров.")
 
@@ -41,18 +44,24 @@ class CachedFluxDatasetV02(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-
-        prompt_embeds = torch.load(sample["embed_path"], map_location="cpu", weights_only=True).squeeze(0)
-        text_ids_mask = torch.load(sample["mask_path"], map_location="cpu", weights_only=True).squeeze(0)
+        
+        # Вскрываем монолитный словарь T5+CLIP кузнецов
+        cached_dict = torch.load(sample["mono_text_path"], map_location="cpu")
+        
+        # Достаем ключи по именам из манифеста, срезая лишнюю размерность батча
+        prompt_embeds = cached_dict["prompt_embeds"].squeeze(0)
+        text_ids_mask = cached_dict["prompt_attn_mask"].squeeze(0)
+        
+        # Загружаем латенты картинки
         latents = torch.load(sample["latent_path"], map_location="cpu", weights_only=True).squeeze(0)
-
         assert latents.shape == (16, 64, 64), f"Unexpected latent shape: {latents.shape}"
-
+        
         return {
             "prompt_embeds": prompt_embeds,
             "text_ids_mask": text_ids_mask,
             "latents": latents
         }
+
 
 def get_dataloader_v02():
     dataset = CachedFluxDatasetV02()
