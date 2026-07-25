@@ -1,0 +1,3220 @@
+=====================================================================
+🛰️ ЛОГ ОБЪЕКТИВНОГО КОНТРОЛЯ VAE — КЛАДОВОЧКА V02
+Целевых ключевых слов для поиска: ['vae', 'decode', 'channels', 'post_quant_conv', 'fakevae', 'block_out_channels']
+=====================================================================
+
+
+📁 ФАЙЛ: extensions_built_in\advanced_generator\Img2ImgGenerator.py
+------------------------------------------------------------
+Строка  114: vae=self.sd.vae,
+Строка  170: encoded_image = pipe.vae.encode(
+Строка  178: latents = pipe.vae.config.scaling_factor * latents
+Строка  193: shape = (batch_size, pipe.transformer.config.in_channels, image.height // pipe.vae_scale_factor,
+Строка  194: image.width // pipe.vae_scale_factor)
+
+📁 ФАЙЛ: extensions_built_in\advanced_generator\ReferenceGenerator.py
+------------------------------------------------------------
+Строка  114: vae=self.sd.vae,
+Строка  125: vae=self.sd.vae,
+
+📁 ФАЙЛ: extensions_built_in\audio_models\ace_step\ace_step_15_model.py
+------------------------------------------------------------
+Строка   19: OobleckVAE,
+Строка  122: # quantize_model(self, self.model.decoder)
+Строка  146: self.vae = models["vae"]
+Строка  151: self.vae.to(device)
+Строка  156: vae=self.vae,
+Строка  181: except json.JSONDecodeError:
+Строка  289: if self.model.decoder.device == torch.device("cpu"):
+Строка  290: self.model.decoder.to(self.device_torch)
+Строка  305: pred = model.decoder(
+Строка  326: if self.vae.device == torch.device("cpu"):
+Строка  327: self.vae.to(device)
+Строка  328: output = self.vae.encode(audio_tensor.to(device=device, dtype=dtype))
+
+📁 ФАЙЛ: extensions_built_in\audio_models\ace_step\src\model.py
+------------------------------------------------------------
+Строка  879: # Encoder can have different size than decoder (XL models)
+Строка  891: self.decoder = DiTModel(
+Строка  939: self.decoder.gradient_checkpointing = value
+Строка  960: # VAE (ComfyUI Oobleck style — uses parametrizations.weight_norm)
+Строка  975: def __init__(self, channels):
+Строка  977: self.alpha = nn.Parameter(torch.zeros(channels))
+Строка  978: self.beta = nn.Parameter(torch.zeros(channels))
+Строка 1034: class VAEBottleneck(nn.Module):
+Строка 1039: def decode(self, x):
+Строка 1054: class OobleckVAE(nn.Module):
+Строка 1058: channels=128,
+Строка 1066: enc = [WNConv1d(in_ch, cm[0] * channels, 7, padding=3)]
+Строка 1068: enc.append(EncBlock(cm[i] * channels, cm[i + 1] * channels, strides[i]))
+Строка 1070: SnakeBeta(cm[-1] * channels),
+Строка 1071: WNConv1d(cm[-1] * channels, latent_dim * 2, 3, padding=1),
+Строка 1074: # Decoder
+Строка 1075: dec = [WNConv1d(latent_dim, cm[-1] * channels, 7, padding=3)]
+Строка 1077: dec.append(DecBlock(cm[i] * channels, cm[i - 1] * channels, strides[i - 1]))
+Строка 1079: SnakeBeta(cm[0] * channels),
+Строка 1080: WNConv1d(cm[0] * channels, in_ch, 7, padding=3, bias=False),
+Строка 1082: self.decoder = _SeqWrap(*dec)
+Строка 1083: self.bottleneck = VAEBottleneck()
+Строка 1089: def decode(self, x):
+Строка 1090: return self.decoder(self.bottleneck.decode(x))
+Строка 1092: def tiled_decode(self, x, tile_seconds=10.0, overlap_seconds=1.0):
+Строка 1093: """VRAM-light decode: split the latent into ~tile_seconds tiles with
+Строка 1094: overlap_seconds of overlap, decode each tile independently, and
+Строка 1096: z = self.bottleneck.decode(x)
+Строка 1104: return self.decoder(z)
+Строка 1116: decoded = self.decoder(z[..., start:end])
+Строка 1119: out = decoded.new_zeros(decoded.shape[0], decoded.shape[1], out_T)
+Строка 1120: ramp = torch.linspace(0, 1, fade_len, device=decoded.device, dtype=decoded.dtype)
+Строка 1123: n = decoded.shape[-1]
+Строка 1124: out[..., :n] = decoded
+Строка 1130: + decoded[..., :fade_len] * ramp
+Строка 1132: tail = decoded.shape[-1] - fade_len
+Строка 1133: out[..., write_pos:write_pos + tail] = decoded[..., fade_len:]
+Строка 1184: # hidden_size from decoder norm
+Строка 1185: hidden = dit_sd["decoder.scale_shift_table"].shape[2]
+Строка 1187: inter = dit_sd["decoder.layers.0.mlp.gate_proj.weight"].shape[0]
+Строка 1189: q_size = dit_sd["decoder.layers.0.self_attn.q_proj.weight"].shape[0]
+Строка 1191: head_dim = dit_sd["decoder.layers.0.self_attn.q_norm.weight"].shape[0]
+Строка 1194: k_size = dit_sd["decoder.layers.0.self_attn.k_proj.weight"].shape[0]
+Строка 1198: max(int(k.split(".")[2]) for k in dit_sd if k.startswith("decoder.layers.")) + 1
+Строка 1200: # encoder hidden (may differ from decoder hidden for XL models)
+Строка 1290: # --- VAE ---
+Строка 1291: print("  Loading VAE...")
+Строка 1292: vae_sd = {k.removeprefix("vae."): v for k, v in sd.items() if k.startswith("vae.")}
+Строка 1293: vae = OobleckVAE()
+Строка 1294: m, u = vae.load_state_dict(vae_sd, strict=False)
+Строка 1296: print(f"    VAE missing: {len(m)} (first 3: {m[:3]})")
+Строка 1298: print(f"    VAE unexpected: {len(u)}")
+Строка 1299: vae = vae.to(device).to(dtype).eval()
+Строка 1339: model=model, vae=vae, text_encoder=te, tokenizer=tok, device=device, dtype=dtype
+Строка 1350: """Encode audio file to VAE latent. Returns [1, 64, T] tensor."""
+Строка 1351: vae, device, dtype = models["vae"], models["device"], models["dtype"]
+Строка 1359: return vae.encode(wav.unsqueeze(0).to(device, dtype))  # [1, 64, T]
+Строка 1377: vae = models["vae"]
+Строка 1443: vt_cond = model.decoder(xt, tt, tt, attn, enc_h, enc_m, ctx)
+Строка 1446: vt_uncond = model.decoder(xt, tt, tt, attn, enc_h_uncond, enc_m, ctx)
+Строка 1458: # VAE decode
+Строка 1461: wav = vae.decode(xt.transpose(1, 2))  # [1, 2, samples]
+Строка 1463: print(f"VAE decode: {time.time() - t0:.2f}s")
+
+📁 ФАЙЛ: extensions_built_in\audio_models\ace_step\src\pipeline.py
+------------------------------------------------------------
+Строка    9: OobleckVAE,
+Строка   33: def __init__(self, transformer, vae, text_encoder, tokenizer, scheduler):
+Строка   35: self.vae: OobleckVAE = vae
+Строка   43: self.vae.to(*args, **kwargs)
+Строка  146: vt_cond = self.transformer.decoder(xt, tt, tt, attn, enc_h, enc_m, ctx)
+Строка  149: vt_uncond = self.transformer.decoder(
+Строка  161: # VAE decode
+Строка  163: wav = self.vae.tiled_decode(xt.transpose(1, 2))  # [1, 2, samples]
+Строка  165: wav = self.vae.decode(xt.transpose(1, 2))  # [1, 2, samples]
+
+📁 ФАЙЛ: extensions_built_in\audio_models\base_audio_model.py
+------------------------------------------------------------
+Строка   67: # we need to save the model, vae, text encoder, and tokenizer together since they are all trained together and depend on each other
+Строка   97: if self.vae.device == torch.device("cpu"):
+Строка   98: self.vae.to(device)
+Строка   99: return self.vae.encode(audio_tensor.to(device=device, dtype=dtype))
+
+📁 ФАЙЛ: extensions_built_in\captioner\AceStepCaptioner.py
+------------------------------------------------------------
+Строка  184: output = processor.batch_decode(
+
+📁 ФАЙЛ: extensions_built_in\captioner\Ideogram4Captioner.py
+------------------------------------------------------------
+Строка   87: except json.JSONDecodeError:
+Строка  162: output_text = self.processor.batch_decode(
+
+📁 ФАЙЛ: extensions_built_in\captioner\Qwen3VLCaptioner.py
+------------------------------------------------------------
+Строка  113: output_text = self.processor.batch_decode(
+
+📁 ФАЙЛ: extensions_built_in\concept_replacer\ConceptReplacer.py
+------------------------------------------------------------
+Строка   34: self.sd.vae.eval()
+Строка   35: self.sd.vae.to(self.device_torch)
+
+📁 ФАЙЛ: extensions_built_in\dataset_tools\tools\caption.py
+------------------------------------------------------------
+Строка   28: cap = cap.encode('ascii', 'ignore').decode('ascii')
+
+📁 ФАЙЛ: extensions_built_in\dataset_tools\tools\fuyu_utils.py
+------------------------------------------------------------
+Строка   53: output = self.tokenizer.decode(generation_output[0][prompt_len:], skip_special_tokens=True)
+Строка   63: # generation_text = self.processor.batch_decode(generation_output[:, -max_new_tokens:], skip_special_tokens=True)
+
+📁 ФАЙЛ: extensions_built_in\dataset_tools\tools\llava_utils.py
+------------------------------------------------------------
+Строка   82: outputs = self.tokenizer.decode(output_ids[0, input_ids.shape[1]:]).strip()
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\boogu_image.py
+------------------------------------------------------------
+Строка  124: self.vae_scale_factor = 8
+Строка  144: # 8 for the VAE downsample, 2 for the patch size.
+Строка  145: return self.vae_scale_factor * self.patch_size
+Строка  244: # --- VAE (FLUX AutoencoderKL) ---
+Строка  245: self.print_and_status_update("Loading VAE")
+Строка  246: vae = AutoencoderKL.from_pretrained(
+Строка  247: base, subfolder="vae", torch_dtype=self.vae_torch_dtype, token=HF_TOKEN
+Строка  249: vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  250: vae.eval()
+Строка  251: vae.requires_grad_(False)
+Строка  255: self.vae = vae
+Строка  386: # VAE
+Строка  390: device = self.vae_device_torch
+Строка  392: dtype = self.vae_torch_dtype
+Строка  393: if self.vae.device == torch.device("cpu"):
+Строка  394: self.vae.to(self.vae_device_torch)
+Строка  402: latents = self.vae.encode(images).latent_dist.sample()
+Строка  403: shift = self.vae.config["shift_factor"] or 0
+Строка  404: latents = (latents - shift) * self.vae.config["scaling_factor"]
+Строка  407: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  409: device = self.vae_device_torch
+Строка  411: dtype = self.vae_torch_dtype
+Строка  412: if self.vae.device == torch.device("cpu"):
+Строка  413: self.vae.to(self.vae_device_torch)
+Строка  416: shift = self.vae.config["shift_factor"] or 0
+Строка  417: latents = latents / self.vae.config["scaling_factor"] + shift
+Строка  418: return self.vae.decode(latents).sample
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\boogu_image_edit.py
+------------------------------------------------------------
+Строка   10: 2. Into the transformer as reference-image VAE latents
+Строка   14: Everything else (transformer, VAE, scheduler, time/velocity convention, saving)
+Строка   91: (the image processor's ``vae_scale_factor`` = 16 for this model). The Qwen
+Строка  123: """Encode ``[0, 1]`` reference image tensors to VAE latents.
+Строка  131: sc = self.get_bucket_divisibility()  # 16: VAE(8) * patch(2)
+Строка  152: # snap to a multiple of the bucket divisibility so the VAE latent grid
+Строка  216: # flows through the VAE ref latents), and this keeps the instruction
+Строка  295: # target pixel area from the noise latents (h, w are VAE-downsampled)
+Строка  297: target_pixels = (lh * self.vae_scale_factor) * (lw * self.vae_scale_factor)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\src\block_lumina2.py
+------------------------------------------------------------
+Строка  134: num_channels=frequency_embedding_size,
+Строка  141: in_channels=frequency_embedding_size, time_embed_dim=min(hidden_size, 1024)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\src\embeddings.py
+------------------------------------------------------------
+Строка   16: in_channels: int,
+Строка   26: self.linear_1 = nn.Linear(in_channels, time_embed_dim, sample_proj_bias)
+Строка   29: self.cond_proj = nn.Linear(cond_proj_dim, in_channels, bias=False)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\src\pipeline.py
+------------------------------------------------------------
+Строка  118: ``None`` for the base T2I model and carries reference-image VAE latents for
+Строка  142: # ``model`` is the BooguImageModel so we can reuse its encode/decode and
+Строка  164: ref_latents=None,  # edit/TI2I: List[List[(16, H, W)]] reference VAE latents
+Строка  172: ae_scale = model.vae_scale_factor  # 8
+Строка  174: latent_channels = transformer.config.in_channels
+Строка  184: shape = (1, latent_channels, h_lat, w_lat)
+Строка  227: images = model.decode_latents(latents, device=device, dtype=dtype)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\boogu_image\src\transformer.py
+------------------------------------------------------------
+Строка  512: in_channels: int = 16,
+Строка  513: out_channels: Optional[int] = None,
+Строка  547: self.out_channels = out_channels or in_channels
+Строка  564: in_features=patch_size * patch_size * in_channels,
+Строка  569: in_features=patch_size * patch_size * in_channels,
+Строка  661: out_dim=patch_size * patch_size * self.out_channels,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\chroma_model.py
+------------------------------------------------------------
+Строка   45: self.in_channels = 64
+Строка  221: self.print_and_status_update("Loading VAE")
+Строка  222: vae = AutoencoderKL.from_pretrained(
+Строка  224: subfolder="vae",
+Строка  227: vae = vae.to(self.device_torch, dtype=dtype)
+Строка  237: vae=vae,
+Строка  263: self.vae = vae
+Строка  278: vae=unwrap_model(self.vae),
+Строка  375: c=self.vae.config.latent_channels
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\chroma_radiance_model.py
+------------------------------------------------------------
+Строка   25: from toolkit.models.FakeVAE import FakeVAE
+Строка   46: self.in_channels = 64
+Строка  226: self.print_and_status_update("Loading VAE")
+Строка  227: # vae = AutoencoderKL.from_pretrained(
+Строка  229: #     subfolder="vae",
+Строка  232: vae = FakeVAE()
+Строка  233: vae = vae.to(self.device_torch, dtype=dtype)
+Строка  243: vae=vae,
+Строка  270: self.vae = vae
+Строка  285: vae=unwrap_model(self.vae),
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\pipeline.py
+------------------------------------------------------------
+Строка   57: latent_image_id_channels,
+Строка   65: latent_image_id_channels,
+Строка   75: vae,
+Строка   87: vae=vae,
+Строка   97: self.vae_scale_factor = 8 if not is_radiance else 1
+Строка  102: num_channels_latents,
+Строка  110: # VAE applies 8x compression on images but we must also account for packing which requires
+Строка  112: height = 2 * (int(height) // (self.vae_scale_factor * 2))
+Строка  113: width = 2 * (int(width) // (self.vae_scale_factor * 2))
+Строка  115: shape = (batch_size, num_channels_latents, height, width)
+Строка  136: latents = self._pack_latents(latents, batch_size, num_channels_latents, height, width)
+Строка  176: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  177: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  200: num_channels_latents = 64 // 4
+Строка  202: num_channels_latents = 3
+Строка  205: num_channels_latents,
+Строка  315: latents, height, width, self.vae_scale_factor)
+Строка  316: latents = (latents / self.vae.config.scaling_factor) + \
+Строка  317: self.vae.config.shift_factor
+Строка  318: image = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\src\layers.py
+------------------------------------------------------------
+Строка  187: def __init__(self, in_channels, hidden_size_input, max_freqs):
+Строка  192: in_channels (int): The number of channels in the input tensor.
+Строка  205: nn.Linear(in_channels + max_freqs**2, hidden_size_input)
+Строка  273: # Get the batch size, number of pixels, and number of channels.
+Строка  345: def __init__(self, hidden_size, out_channels, use_compiled):
+Строка  348: self.linear = nn.Linear(hidden_size, out_channels)
+Строка  359: def __init__(self, hidden_size, out_channels, use_compiled):
+Строка  365: in_channels=hidden_size,
+Строка  366: out_channels=out_channels,
+Строка  689: out_channels: int,
+Строка  695: hidden_size, patch_size * patch_size * out_channels, bias=True
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\src\model.py
+------------------------------------------------------------
+Строка   20: in_channels: int
+Строка   38: in_channels=64,
+Строка   97: self.in_channels = params.in_channels
+Строка   98: self.out_channels = self.in_channels
+Строка  114: self.img_in = nn.Linear(self.in_channels, self.hidden_size, bias=True)
+Строка  154: self.out_channels,
+Строка  281: )  # (N, T, patch_size ** 2 * out_channels)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\chroma\src\radiance.py
+------------------------------------------------------------
+Строка   24: in_channels: int
+Строка   47: in_channels=3,
+Строка  111: self.in_channels = params.in_channels
+Строка  112: self.out_channels = self.in_channels
+Строка  128: # self.img_in = nn.Linear(self.in_channels, self.hidden_size, bias=True)
+Строка  131: params.in_channels,
+Строка  177: #     self.out_channels,
+Строка  183: in_channels=params.in_channels,
+Строка  198: #     out_channels=params.in_channels,
+Строка  203: out_channels=params.in_channels,
+Строка  344: # )  # (N, T, patch_size ** 2 * out_channels)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ernie_image\ernie_image.py
+------------------------------------------------------------
+Строка   72: return 16 * 2  # 16 for the VAE, 2 for patch size
+Строка  148: self.print_and_status_update("Loading VAE")
+Строка  149: vae = AutoencoderKLFlux2.from_pretrained(
+Строка  150: base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  163: vae=vae,
+Строка  188: self.vae = vae
+Строка  202: vae=unwrap_model(self.vae),
+Строка  211: if self.vae.device == torch.device("cpu"):
+Строка  212: self.vae.to(self.device_torch)
+Строка  214: device = self.vae_device_torch
+Строка  216: dtype = self.vae_torch_dtype
+Строка  217: self.vae.eval()
+Строка  218: self.vae.requires_grad_(False)
+Строка  226: latents = self.vae.encode(image).latent_dist.sample()
+Строка  230: bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(
+Строка  233: bn_std = torch.sqrt(self.vae.bn.running_var.view(1, -1, 1, 1) + 1e-5).to(
+Строка  240: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  241: if self.vae.device == torch.device("cpu"):
+Строка  242: self.vae.to(self.device_torch)
+Строка  244: device = self.vae_device_torch
+Строка  246: dtype = self.vae_torch_dtype
+Строка  249: bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(device)
+Строка  250: bn_std = torch.sqrt(self.vae.bn.running_var.view(1, -1, 1, 1) + 1e-5).to(device)
+Строка  256: # Decode
+Строка  257: images = self.vae.decode(latents, return_dict=False)[0]
+Строка  302: dtype=self.vae.dtype,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ernie_image\transformer.py
+------------------------------------------------------------
+Строка   69: def __init__(self, in_channels: int, embed_dim: int, patch_size: int):
+Строка   72: self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size, bias=True)
+Строка  301: in_channels: int = 128,
+Строка  302: out_channels: int = 128,
+Строка  316: self.in_channels = in_channels
+Строка  317: self.out_channels = out_channels
+Строка  320: self.x_embedder = ErnieImagePatchEmbedDynamic(in_channels, hidden_size, patch_size)
+Строка  337: self.final_linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels)
+Строка  429: patches.view(B, Hp, Wp, p, p, self.out_channels)
+Строка  432: .view(B, self.out_channels, H, W)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\example_model\example_model.py
+------------------------------------------------------------
+Строка   87: self.vae_scale_factor = 8  # pixels per latent px (8x downsampling VAE)
+Строка  116: this. Latents are 1/8 the pixel size (VAE) and the transformer eats
+Строка  119: return self.vae_scale_factor * self.patch_size
+Строка  137: self.vae             the (frozen) VAE
+Строка  149: #   <name_or_path>/vae/           (diffusers AutoencoderKL)
+Строка  202: # --- VAE ---
+Строка  203: self.print_and_status_update("Loading VAE")
+Строка  204: vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae")
+Строка  205: vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  206: vae.eval()
+Строка  207: vae.requires_grad_(False)
+Строка  212: self.vae = vae
+Строка  286: would see extra channels here).
+Строка  301: concatenated control channels/tokens in, slice them off before
+Строка  412: # VAE encode / decode
+Строка  414: # BaseModel.encode_images / decode_latents already handle a diffusers
+Строка  417: # contract, since custom VAEs (or latent normalization, patchified
+Строка  418: # latents, video VAEs...) usually need it.
+Строка  429: device = self.vae_device_torch
+Строка  431: dtype = self.vae_torch_dtype
+Строка  432: if self.vae.device == torch.device("cpu"):
+Строка  433: self.vae.to(self.vae_device_torch)
+Строка  441: latents = self.vae.encode(images).latent_dist.sample()
+Строка  442: shift = self.vae.config["shift_factor"] or 0
+Строка  443: latents = (latents - shift) * self.vae.config["scaling_factor"]
+Строка  446: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  453: device = self.vae_device_torch
+Строка  455: dtype = self.vae_torch_dtype
+Строка  456: if self.vae.device == torch.device("cpu"):
+Строка  457: self.vae.to(self.vae_device_torch)
+Строка  460: shift = self.vae.config["shift_factor"] or 0
+Строка  461: latents = latents / self.vae.config["scaling_factor"] + shift
+Строка  462: return self.vae.decode(latents).sample
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\example_model\src\model.py
+------------------------------------------------------------
+Строка  158: in_channels: int = 16,    # VAE latent channels
+Строка  159: out_channels: int = 16,   # predicted velocity has the same channels
+Строка  167: self.in_channels = in_channels
+Строка  168: self.out_channels = out_channels
+Строка  174: in_channels, hidden_size, kernel_size=patch_size, stride=patch_size
+Строка  199: self.proj_out = nn.Linear(hidden_size, patch_size * patch_size * out_channels)
+Строка  272: x = x.view(b, gh, gw, p, p, self.out_channels)
+Строка  273: x = x.permute(0, 5, 1, 3, 2, 4).reshape(b, self.out_channels, h, w)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\example_model\src\pipeline.py
+------------------------------------------------------------
+Строка   15: 4. decode the final latents with the VAE and return PIL images
+Строка   20: ``decode_latents`` and device/dtype bookkeeping.
+Строка   66: # access to model.transformer, model.vae, model.decode_latents, etc.
+Строка  108: # pixel size -> latent size (VAE downsample only; the transformer
+Строка  110: gh = height // model.vae_scale_factor
+Строка  111: gw = width // model.vae_scale_factor
+Строка  117: shape = (1, transformer.in_channels, gh, gw)
+Строка  153: # 4. decode latents -> images in [-1, 1] -> uint8 PIL
+Строка  154: images = model.decode_latents(latents, device=device, dtype=dtype)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\f_light\f_light.py
+------------------------------------------------------------
+Строка  118: self.print_and_status_update("Loading VAE")
+Строка  119: vae = AutoencoderKL.from_pretrained(
+Строка  121: subfolder="vae",
+Строка  124: vae = vae.to(self.device_torch, dtype=dtype)
+Строка  131: vae=vae,
+Строка  156: self.vae = vae
+Строка  169: vae=unwrap_model(self.vae),
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\f_light\src\model.py
+------------------------------------------------------------
+Строка  229: def __init__(self, patch_size=16, in_channels=3, embed_dim=768):
+Строка  231: self.patch_proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+Строка  311: in_channels=4,
+Строка  327: self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
+Строка  360: self.final_proj = nn.Linear(hidden_size, patch_size * patch_size * in_channels)
+Строка  439: in_channels=4,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\f_light\src\pipeline.py
+------------------------------------------------------------
+Строка   37: num_channels)`. PIL images or numpy array present the denoised images of the diffusion pipeline.
+Строка   49: model_cpu_offload_seq = "text_encoder->dit_model->vae"
+Строка   52: vae: AutoencoderKL
+Строка   58: self, dit_model: torch.nn.Module, vae: AutoencoderKL, text_encoder: T5EncoderModel, tokenizer: T5TokenizerFast
+Строка   64: self, dit_model=dit_model, vae=vae, text_encoder=text_encoder, tokenizer=tokenizer
+Строка   67: # Move models to channels last for better performance
+Строка   69: if hasattr(self.vae, "to"):
+Строка   70: self.vae.to(memory_format=torch.channels_last)
+Строка   71: if hasattr(self.vae, "requires_grad_"):
+Строка   72: self.vae.requires_grad_(False)
+Строка   77: self.vae_scale_factor = 8
+Строка   80: def enable_vae_slicing(self):
+Строка   81: """Enable VAE slicing for memory efficiency."""
+Строка   82: if hasattr(self.vae, "enable_slicing"):
+Строка   83: self.vae.enable_slicing()
+Строка   85: def enable_vae_tiling(self):
+Строка   86: """Enable VAE tiling for memory efficiency."""
+Строка   87: if hasattr(self.vae, "enable_tiling"):
+Строка   88: self.vae.enable_tiling()
+Строка  151: if hasattr(self, "vae"):
+Строка  152: self.vae.to(device=torch_device, dtype=torch_dtype)
+Строка  206: latent_height = height // self.vae_scale_factor
+Строка  207: latent_width = width // self.vae_scale_factor
+Строка  276: # 7. Decode latents
+Строка  278: scaling_factor = getattr(self.vae.config, "scaling_factor", 0.18215) if hasattr(self.vae, "config") else 0.18215
+Строка  279: shift_factor = getattr(self.vae.config, "shift_factor", 0) if hasattr(self.vae, "config") else 0
+Строка  283: vae_dtype = self.vae.dtype if hasattr(self.vae, "dtype") else dtype
+Строка  284: decoded_images = self.vae.decode(latents.to(vae_dtype)).sample if hasattr(self.vae, "decode") else latents
+Строка  301: images = (decoded_images / 2 + 0.5).clamp(0, 1)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux2\flux2_klein_model.py
+------------------------------------------------------------
+Строка   14: flux2_vae_path: str = "ai-toolkit/flux2_vae"
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux2\flux2_model.py
+------------------------------------------------------------
+Строка   24: from .src.autoencoder import AutoEncoder, AutoEncoderParams, AutoEncoderSmallDecoderParams
+Строка   50: FLUX2_VAE_FILENAME = "ae.safetensors"
+Строка   59: flux2_vae_path: str = None
+Строка  186: self.print_and_status_update("Loading VAE")
+Строка  187: vae_path = self.model_config.vae_path
+Строка  189: if os.path.exists(os.path.join(model_path, FLUX2_VAE_FILENAME)):
+Строка  190: vae_path = os.path.join(model_path, FLUX2_VAE_FILENAME)
+Строка  192: if vae_path is None:
+Строка  193: vae_path = self.flux2_vae_path
+Строка  195: if vae_path is None or not os.path.exists(vae_path):
+Строка  196: vae_filename = FLUX2_VAE_FILENAME
+Строка  197: if vae_path is not None:
+Строка  199: if len(vae_path.split("/")) == 3 and vae_path.endswith(".safetensors"):
+Строка  200: vae_filename = vae_path.split("/")[-1]
+Строка  201: vae_path = "/".join(vae_path.split("/")[:-1])
+Строка  202: p = vae_path if vae_path is not None else model_path
+Строка  204: vae_path = huggingface_hub.hf_hub_download(
+Строка  206: filename=vae_filename,
+Строка  210: vae_state_dict = load_file(vae_path, device="cpu")
+Строка  213: if vae_state_dict['decoder.up.0.block.0.conv1.bias'].shape[0] == 96:
+Строка  214: # this is the small decoder version
+Строка  215: autoencoder_params = AutoEncoderSmallDecoderParams()
+Строка  218: vae = AutoEncoder(autoencoder_params)
+Строка  221: for key in vae_state_dict:
+Строка  222: vae_state_dict[key] = vae_state_dict[key].to(dtype)
+Строка  224: vae.load_state_dict(vae_state_dict, assign=True)
+Строка  234: vae=vae,
+Строка  262: self.vae = vae
+Строка  276: vae=unwrap_model(self.vae),
+Строка  361: batch_size, num_channels_latents, height, width = (
+Строка  370: * self.pipeline.vae_scale_factor
+Строка  372: * self.pipeline.vae_scale_factor
+Строка  412: if self.vae.device == torch.device("cpu"):
+Строка  413: self.vae.to(self.device_torch)
+Строка  415: self.vae, controls, limit_pixels=control_image_max_res
+Строка  524: device = self.vae_device_torch
+Строка  526: dtype = self.vae_torch_dtype
+Строка  528: # Move to vae to device if on cpu
+Строка  529: if self.vae.device == torch.device("cpu"):
+Строка  530: self.vae.to(device)
+Строка  535: latents = self.vae.encode(images)
+Строка  539: def decode_latents(self, latents, device=None, dtype=None):
+Строка  541: device = self.vae_device_torch
+Строка  543: dtype = self.vae_torch_dtype
+Строка  545: # Move to vae to device if on cpu
+Строка  546: if self.vae.device == torch.device("cpu"):
+Строка  547: self.vae.to(device)
+Строка  550: images = self.vae.decode(latents)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux2\src\autoencoder.py
+------------------------------------------------------------
+Строка   13: in_channels: int = 3
+Строка   18: z_channels: int = 32
+Строка   21: class AutoEncoderSmallDecoderParams:
+Строка   23: in_channels: int = 3
+Строка   29: z_channels: int = 32
+Строка   37: def __init__(self, in_channels: int):
+Строка   39: self.in_channels = in_channels
+Строка   42: num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+Строка   45: self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   46: self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   47: self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   48: self.proj_out = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   69: def __init__(self, in_channels: int, out_channels: int):
+Строка   71: self.in_channels = in_channels
+Строка   72: out_channels = in_channels if out_channels is None else out_channels
+Строка   73: self.out_channels = out_channels
+Строка   76: num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+Строка   79: in_channels, out_channels, kernel_size=3, stride=1, padding=1
+Строка   82: num_groups=32, num_channels=out_channels, eps=1e-6, affine=True
+Строка   85: out_channels, out_channels, kernel_size=3, stride=1, padding=1
+Строка   87: if self.in_channels != self.out_channels:
+Строка   89: in_channels, out_channels, kernel_size=1, stride=1, padding=0
+Строка  102: if self.in_channels != self.out_channels:
+Строка  109: def __init__(self, in_channels: int):
+Строка  113: in_channels, in_channels, kernel_size=3, stride=2, padding=0
+Строка  124: def __init__(self, in_channels: int):
+Строка  127: in_channels, in_channels, kernel_size=3, stride=1, padding=1
+Строка  140: in_channels: int,
+Строка  144: z_channels: int,
+Строка  147: self.quant_conv = torch.nn.Conv2d(2 * z_channels, 2 * z_channels, 1)
+Строка  152: self.in_channels = in_channels
+Строка  155: in_channels, self.ch, kernel_size=3, stride=1, padding=1
+Строка  169: block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
+Строка  181: self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  183: self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  187: num_groups=32, num_channels=block_in, eps=1e-6, affine=True
+Строка  190: block_in, 2 * z_channels, kernel_size=3, stride=1, padding=1
+Строка  235: class Decoder(nn.Module):
+Строка  242: in_channels: int,
+Строка  244: z_channels: int,
+Строка  247: self.post_quant_conv = torch.nn.Conv2d(z_channels, z_channels, 1)
+Строка  252: self.in_channels = in_channels
+Строка  258: self.z_shape = (1, z_channels, curr_res, curr_res)
+Строка  262: z_channels, block_in, kernel_size=3, stride=1, padding=1
+Строка  267: self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  269: self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  278: block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
+Строка  290: num_groups=32, num_channels=block_in, eps=1e-6, affine=True
+Строка  299: z = self.post_quant_conv(z)
+Строка  349: in_channels=params.in_channels,
+Строка  353: z_channels=params.z_channels,
+Строка  355: decoder_ch = params.ch
+Строка  357: decoder_ch = params.ch_encoder
+Строка  358: self.decoder = Decoder(
+Строка  360: in_channels=params.in_channels,
+Строка  361: ch=decoder_ch,
+Строка  365: z_channels=params.z_channels,
+Строка  372: math.prod(self.ps) * params.z_channels,
+Строка  388: self.decoder.gradient_checkpointing = value
+Строка  401: self.decoder.enable_gradient_checkpointing()
+Строка  426: def decode(self, z: Tensor) -> Tensor:
+Строка  434: dec = self.decoder(z)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux2\src\model.py
+------------------------------------------------------------
+Строка   11: in_channels: int = 128
+Строка   25: in_channels: int = 128
+Строка   39: in_channels: int = 128
+Строка   62: self.in_channels = params.in_channels
+Строка   63: self.out_channels = params.in_channels
+Строка   78: self.img_in = nn.Linear(self.in_channels, self.hidden_size, bias=False)
+Строка  128: self.out_channels,
+Строка  262: out_channels: int,
+Строка  266: self.linear = nn.Linear(hidden_size, out_channels, bias=False)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux2\src\pipeline.py
+------------------------------------------------------------
+Строка    7: from diffusers.image_processor import VaeImageProcessor
+Строка   44: model_cpu_offload_seq = "text_encoder->transformer->vae"
+Строка   50: vae: AutoEncoder,
+Строка   60: vae=vae,
+Строка   66: self.vae_scale_factor = 16  # 8x plus 2x pixel shuffle
+Строка   67: self.num_channels_latents = 128
+Строка   68: self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+Строка  239: num_channels_latents,
+Строка  247: height = int(height) // self.vae_scale_factor
+Строка  248: width = int(width) // self.vae_scale_factor
+Строка  250: shape = (batch_size, num_channels_latents, height, width)
+Строка  302: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  303: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  353: self.num_channels_latents,
+Строка  377: self.vae, control_img_list
+Строка  441: latents = latents.to(self.vae.dtype)
+Строка  442: image = self.vae.decode(latents).float()
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\flux_kontext\flux_kontext.py
+------------------------------------------------------------
+Строка   80: # so we need this for the VAE, te, etc
+Строка  140: self.print_and_status_update("Loading VAE")
+Строка  141: vae = AutoencoderKL.from_pretrained(
+Строка  142: base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  154: vae=vae,
+Строка  180: self.vae = vae
+Строка  196: vae=unwrap_model(self.vae),
+Строка  310: # move the kontext channels. We have them on batch dimension to here, but need to put them on the latent dimension
+Строка  346: c=self.vae.config.latent_channels
+Строка  398: self.vae.to(self.device_torch)
+Строка  401: control_tensor = control_tensor.to(self.vae_device_torch, dtype=self.torch_dtype)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\hidream_e1_model.py
+------------------------------------------------------------
+Строка   32: vae=self.vae,
+Строка  119: self.vae.to(self.device_torch)
+Строка  123: self.vae_device_torch, dtype=self.torch_dtype
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\hidream_model.py
+------------------------------------------------------------
+Строка  165: self.print_and_status_update("Loading vae")
+Строка  167: vae = AutoencoderKL.from_pretrained(
+Строка  169: subfolder="vae",
+Строка  224: vae.to(self.device_torch, dtype=dtype)
+Строка  232: vae.eval()
+Строка  240: vae=vae,
+Строка  270: self.vae = vae
+Строка  286: vae=self.vae,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\hidream_o1_model.py
+------------------------------------------------------------
+Строка   25: from toolkit.models.FakeVAE import FakeVAE
+Строка  231: vae = FakeVAE().to(self.device_torch, dtype=dtype)
+Строка  253: self.vae = vae
+Строка  273: if self.vae.device == torch.device("cpu"):
+Строка  274: self.vae.to(self.device_torch)
+Строка  276: device = self.vae_device_torch
+Строка  278: dtype = self.vae_torch_dtype
+Строка  283: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  284: if self.vae.device == torch.device("cpu"):
+Строка  285: self.vae.to(self.device_torch)
+Строка  287: device = self.vae_device_torch
+Строка  289: dtype = self.vae_torch_dtype
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\hidream_o1\model_config.py
+------------------------------------------------------------
+Строка   39: "in_channels": 3,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\hidream_o1\pipeline.py
+------------------------------------------------------------
+Строка  221: HiDream-O1 is a unified text/vision/diffusion model with no VAE — the
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\hidream_o1\qwen3_vl_transformers.py
+------------------------------------------------------------
+Строка   67: self.in_channels = config.in_channels
+Строка   72: self.in_channels,
+Строка   83: self.in_channels,
+Строка  601: class Qwen3VLTextDecoderLayer(GradientCheckpointingLayer):
+Строка  682: _no_split_modules = ["Qwen3VLTextDecoderLayer", "Qwen3VLVisionBlock"]
+Строка  690: "hidden_states": Qwen3VLTextDecoderLayer,
+Строка  925: _no_split_modules = ["Qwen3VLTextDecoderLayer"]
+Строка  937: Qwen3VLTextDecoderLayer(config, layer_idx)
+Строка  973: The feature is extracted from the different visual encoder layers, and fed to the decoder
+Строка  976: Indices of decoder layers whose hidden states should be collected and returned as
+Строка 1027: # create position embeddings to be shared across the decoder layers
+Строка 1030: # === Memory profiling for decoder loop (gated by DEBUG_MEM=1) ===
+Строка 1036: # decoder layers
+Строка 1037: for layer_idx, decoder_layer in enumerate(self.layers):
+Строка 1042: decoder_layer.__call__,
+Строка 1052: layer_outputs = decoder_layer(
+Строка 1068: f"[MEM][rank{_rank}][decoder] layer {layer_idx:2d}/{len(self.layers)}: alloc={_a:.2f}GB",
+Строка 1092: f"[MEM][rank{_rank}][decoder] LOOP END: alloc={_a:.2f}GB, GC_used={_gc_count}/{len(self.layers)} layers",
+Строка 1140: def __init__(self, config, hidden_size, patch_size, out_channels):
+Строка 1143: hidden_size, patch_size * patch_size * out_channels, bias=True
+Строка 1212: _no_split_modules = ["Qwen3VLTextDecoderLayer", "Qwen3VLVisionBlock"]
+Строка 1221: self.in_channels = 3
+Строка 1229: in_chans=self.in_channels,
+Строка 1241: out_channels=self.in_channels,
+Строка 1254: def set_decoder(self, decoder):
+Строка 1255: self.language_model = decoder
+Строка 1257: def get_decoder(self):
+Строка 1435: pixel_values_videos (`torch.FloatTensor` of shape `(batch_size, num_channels, image_size, image_size)`):
+Строка 1452: pixel_values (`torch.FloatTensor` of shape `(batch_size, num_channels, image_size, image_size)`):
+Строка 1529: def _run_decoder_flash(
+Строка 1532: """Run decoder layers with two-pass attention.
+Строка 1570: def _two_pass_layer_forward(hidden_states, decoder_layer, cos, sin, idx_ar):
+Строка 1573: Calls decoder_layer(...) through its __call__ to trigger FSDP hooks
+Строка 1578: original_attn_forward = decoder_layer.self_attn.forward
+Строка 1583: attn = decoder_layer.self_attn
+Строка 1648: # Temporarily disable gradient checkpointing on the decoder layer
+Строка 1650: _saved_gc = decoder_layer.gradient_checkpointing
+Строка 1651: decoder_layer.gradient_checkpointing = False
+Строка 1652: decoder_layer.self_attn.forward = _custom_two_pass_attn
+Строка 1654: hidden_states = decoder_layer(
+Строка 1659: decoder_layer.self_attn.forward = original_attn_forward
+Строка 1660: decoder_layer.gradient_checkpointing = _saved_gc
+Строка 1664: for layer_idx, decoder_layer in enumerate(text_model.layers):
+Строка 1669: decoder_layer,
+Строка 1678: decoder_layer,
+Строка 1796: # 6. Forward through decoder
+Строка 1806: f"[MEM][rank{_rank2}][_forward_gen] before decoder: alloc={_a:.2f}GB, "
+Строка 1813: hidden_states, mid_results = self._run_decoder_flash(
+Строка 1913: Indices of decoder layers whose hidden states should be collected and returned as
+Строка 2124: def set_decoder(self, decoder):
+Строка 2125: self.model.set_decoder(decoder)
+Строка 2127: def get_decoder(self):
+Строка 2128: return self.model.get_decoder()
+Строка 2348: is_encoder_decoder: bool = False,
+Строка 2437: if is_encoder_decoder:
+Строка 2440: "If `is_encoder_decoder` is True, make sure that `encoder_outputs` is defined."
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\models\embeddings.py
+------------------------------------------------------------
+Строка   41: in_channels=4,
+Строка   42: out_channels=1024,
+Строка   46: self.out_channels = out_channels
+Строка   47: self.proj = nn.Linear(in_channels * patch_size * patch_size, out_channels, bias=True)
+Строка   63: self.pooled_embedder = TimestepEmbedding(in_channels=text_emb_dim, time_embed_dim=hidden_size)
+Строка   78: self.time_proj = Timesteps(num_channels=frequency_embedding_size, flip_sin_to_cos=True, downscale_freq_shift=0)
+Строка   79: self.timestep_embedder = TimestepEmbedding(in_channels=frequency_embedding_size, time_embed_dim=hidden_size)
+Строка   94: def __init__(self, hidden_size, patch_size, out_channels):
+Строка   97: self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\models\transformers\transformer_hidream_image.py
+------------------------------------------------------------
+Строка  240: in_channels: int = 64,
+Строка  241: out_channels: Optional[int] = None,
+Строка  246: caption_channels: List[int] = None,
+Строка  255: self.out_channels = out_channels or in_channels
+Строка  263: in_channels = in_channels,
+Строка  264: out_channels = self.inner_dim,
+Строка  296: self.final_layer = OutEmbed(self.inner_dim, patch_size, self.out_channels)
+Строка  298: caption_channels = [caption_channels[1], ] * (num_layers + num_single_layers) + [caption_channels[0], ]
+Строка  300: for caption_channel in caption_channels:
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\pipelines\hidream_image\pipeline_hidream_image.py
+------------------------------------------------------------
+Строка   15: from diffusers.image_processor import VaeImageProcessor
+Строка  112: model_cpu_offload_seq = "text_encoder->text_encoder_2->text_encoder_3->text_encoder_4->image_encoder->transformer->vae"
+Строка  119: vae: AutoencoderKL,
+Строка  134: vae=vae,
+Строка  146: self.vae_scale_factor = (
+Строка  147: 2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
+Строка  150: # by the patch size. So the vae scale factor is multiplied by the patch size to account for this
+Строка  151: self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+Строка  183: removed_text = self.tokenizer_3.batch_decode(untruncated_ids[:, min(max_sequence_length, self.tokenizer_3.model_max_length) - 1 : -1])
+Строка  225: removed_text = tokenizer.batch_decode(untruncated_ids[:, 218 - 1 : -1])
+Строка  269: removed_text = self.tokenizer_4.batch_decode(untruncated_ids[:, min(max_sequence_length, self.tokenizer_4.model_max_length) - 1 : -1])
+Строка  440: def enable_vae_slicing(self):
+Строка  442: Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
+Строка  445: self.vae.enable_slicing()
+Строка  447: def disable_vae_slicing(self):
+Строка  449: Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
+Строка  452: self.vae.disable_slicing()
+Строка  454: def enable_vae_tiling(self):
+Строка  456: Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+Строка  460: self.vae.enable_tiling()
+Строка  462: def disable_vae_tiling(self):
+Строка  464: Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
+Строка  467: self.vae.disable_tiling()
+Строка  472: num_channels_latents,
+Строка  480: # VAE applies 8x compression on images but we must also account for packing which requires
+Строка  482: height = 2 * (int(height) // (self.vae_scale_factor * 2))
+Строка  483: width = 2 * (int(width) // (self.vae_scale_factor * 2))
+Строка  485: shape = (batch_size, num_channels_latents, height, width)
+Строка  545: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  546: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  548: division = self.vae_scale_factor * 2
+Строка  549: S_max = (self.default_sample_size * self.vae_scale_factor) ** 2
+Строка  607: num_channels_latents = self.transformer.config.in_channels
+Строка  610: num_channels_latents,
+Строка  726: latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+Строка  728: image = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\pipelines\hidream_image\pipeline_hidream_image_editing.py
+------------------------------------------------------------
+Строка   16: from diffusers.image_processor import VaeImageProcessor, PipelineImageInput
+Строка  177: model_cpu_offload_seq = "text_encoder->text_encoder_2->text_encoder_3->text_encoder_4->transformer->vae"
+Строка  183: vae: AutoencoderKL,
+Строка  198: vae=vae,
+Строка  210: self.vae_scale_factor = (
+Строка  211: 2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
+Строка  214: # by the patch size. So the vae scale factor is multiplied by the patch size to account for this
+Строка  215: self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+Строка  248: removed_text = self.tokenizer_3.batch_decode(
+Строка  285: removed_text = tokenizer.batch_decode(untruncated_ids[:, 218 - 1 : -1])
+Строка  322: removed_text = self.tokenizer_4.batch_decode(
+Строка  540: def enable_vae_slicing(self):
+Строка  542: Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
+Строка  545: self.vae.enable_slicing()
+Строка  547: def disable_vae_slicing(self):
+Строка  549: Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
+Строка  552: self.vae.disable_slicing()
+Строка  554: def enable_vae_tiling(self):
+Строка  556: Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+Строка  560: self.vae.enable_tiling()
+Строка  562: def disable_vae_tiling(self):
+Строка  564: Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
+Строка  567: self.vae.disable_tiling()
+Строка  681: num_channels_latents,
+Строка  689: # VAE applies 8x compression on images but we must also account for packing which requires
+Строка  691: height = 2 * (int(height) // (self.vae_scale_factor * 2))
+Строка  692: width = 2 * (int(width) // (self.vae_scale_factor * 2))
+Строка  694: shape = (batch_size, num_channels_latents, height, width)
+Строка  720: image_latents = retrieve_latents(self.vae.encode(image), sample_mode="argmax")
+Строка  721: image_latents = (image_latents - self.vae.config.shift_factor) * self.vae.config.scaling_factor
+Строка  825: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  827: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка 1036: height = height * self.vae_scale_factor
+Строка 1037: width = width * self.vae_scale_factor
+Строка 1054: num_channels_latents = self.transformer.config.in_channels
+Строка 1057: num_channels_latents,
+Строка 1195: latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+Строка 1197: image = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\pipelines\hidream_image\pipeline_output.py
+------------------------------------------------------------
+Строка   18: num_channels)`. PIL images or numpy array present the denoised images of the diffusion pipeline.
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\schedulers\flash_flow_match.py
+------------------------------------------------------------
+Строка   38: prev_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\hidream\src\schedulers\fm_solvers_unipc.py
+------------------------------------------------------------
+Строка  241: batch_size, channels, *remaining_dims = sample.shape
+Строка  248: sample = sample.reshape(batch_size, channels * np.prod(remaining_dims))
+Строка  263: sample = sample.reshape(batch_size, channels, *remaining_dims)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ideogram4\ideogram4.py
+------------------------------------------------------------
+Строка   29: from .src.vae import AutoEncoder, AutoEncoderParams, convert_diffusers_state_dict
+Строка  182: self.vae_scale_factor = 8
+Строка  208: # 8 for the VAE downsample, 2 for the patch size.
+Строка  209: return self.vae_scale_factor * self.patch_size
+Строка  263: def _load_vae(self, base: str):
+Строка  265: self.print_and_status_update("Loading VAE")
+Строка  266: vae_sd = _load_component_state_dict(base, "vae", "diffusion_pytorch_model")
+Строка  267: vae_sd = convert_diffusers_state_dict(vae_sd)
+Строка  268: vae = AutoEncoder(AutoEncoderParams())
+Строка  269: vae.load_state_dict(vae_sd)
+Строка  270: del vae_sd
+Строка  271: vae.to(self.vae_device_torch, dtype=dtype)
+Строка  272: vae.eval()
+Строка  273: vae.requires_grad_(False)
+Строка  274: return vae
+Строка  419: vae = self._load_vae(base)
+Строка  427: self.vae = vae
+Строка  554: # VAE
+Строка  558: device = self.vae_device_torch
+Строка  560: dtype = self.vae_torch_dtype
+Строка  561: if self.vae.device == torch.device("cpu"):
+Строка  562: self.vae.to(self.vae_device_torch)
+Строка  570: ae_channels = self.vae.params.z_channels
+Строка  571: moments = self.vae.encoder(images)
+Строка  572: mean = moments[:, :ae_channels]
+Строка  580: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  582: device = self.vae_device_torch
+Строка  584: dtype = self.vae_torch_dtype
+Строка  585: if self.vae.device == torch.device("cpu"):
+Строка  586: self.vae.to(self.vae_device_torch)
+Строка  593: images = self.vae.decoder(z)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ideogram4\src\pipeline.py
+------------------------------------------------------------
+Строка   71: # The VAE produces (B, ae_ch=32, H/8, W/8) latents. The transformer works on
+Строка   75: # reference Ideogram 4 decode exactly: 128 = (patch_h, patch_w, ae_ch) with ae_ch
+Строка   86: # -> (B, ph, pw, ae_ch, gh, gw) then merge (ph, pw, ae_ch) -> channels
+Строка  139: for layer_idx, decoder_layer in enumerate(language_model.layers):
+Строка  140: hidden_states = decoder_layer(
+Строка  300: # ``model`` is the Ideogram4Model so we can reuse its encode/decode and
+Строка  345: ae_scale = model.vae_scale_factor  # 8
+Строка  348: latent_channels = transformer.config.in_channels
+Строка  357: shape = (1, latent_channels, gh, gw)
+Строка  405: images = model.decode_latents(latents, device=device, dtype=dtype)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ideogram4\src\transformer.py
+------------------------------------------------------------
+Строка   51: # Latent dimension after patchification: ae_channels (32) * patch_size**2 (4) = 128.
+Строка   52: in_channels: int = 128
+Строка  347: def __init__(self, hidden_size: int, out_channels: int, adanln_dim: int) -> None:
+Строка  350: self.linear = nn.Linear(hidden_size, out_channels, bias=True)
+Строка  369: self.input_proj = nn.Linear(config.in_channels, config.emb_dim, bias=True)
+Строка  400: out_channels=config.in_channels,
+Строка  456: x: (B, L, in_channels) noise tokens.
+Строка  463: (B, L, in_channels) velocity prediction in float32. Only the positions
+Строка  466: batch_size, seq_len, in_channels = x.shape
+Строка  467: assert in_channels == self.config.in_channels
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ideogram4\src\vae.py
+------------------------------------------------------------
+Строка   18: in_channels: int = 3
+Строка   23: z_channels: int = 32
+Строка   31: def __init__(self, in_channels: int):
+Строка   33: self.in_channels = in_channels
+Строка   36: num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+Строка   39: self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   40: self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   41: self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   42: self.proj_out = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+Строка   63: def __init__(self, in_channels: int, out_channels: int):
+Строка   65: self.in_channels = in_channels
+Строка   66: out_channels = in_channels if out_channels is None else out_channels
+Строка   67: self.out_channels = out_channels
+Строка   70: num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+Строка   73: in_channels, out_channels, kernel_size=3, stride=1, padding=1
+Строка   76: num_groups=32, num_channels=out_channels, eps=1e-6, affine=True
+Строка   79: out_channels, out_channels, kernel_size=3, stride=1, padding=1
+Строка   81: if self.in_channels != self.out_channels:
+Строка   83: in_channels, out_channels, kernel_size=1, stride=1, padding=0
+Строка   96: if self.in_channels != self.out_channels:
+Строка  103: def __init__(self, in_channels: int):
+Строка  107: in_channels, in_channels, kernel_size=3, stride=2, padding=0
+Строка  118: def __init__(self, in_channels: int):
+Строка  121: in_channels, in_channels, kernel_size=3, stride=1, padding=1
+Строка  134: in_channels: int,
+Строка  138: z_channels: int,
+Строка  141: self.quant_conv = torch.nn.Conv2d(2 * z_channels, 2 * z_channels, 1)
+Строка  146: self.in_channels = in_channels
+Строка  149: in_channels, self.ch, kernel_size=3, stride=1, padding=1
+Строка  163: block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
+Строка  175: self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  177: self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  181: num_groups=32, num_channels=block_in, eps=1e-6, affine=True
+Строка  184: block_in, 2 * z_channels, kernel_size=3, stride=1, padding=1
+Строка  229: class Decoder(nn.Module):
+Строка  236: in_channels: int,
+Строка  238: z_channels: int,
+Строка  241: self.post_quant_conv = torch.nn.Conv2d(z_channels, z_channels, 1)
+Строка  246: self.in_channels = in_channels
+Строка  252: self.z_shape = (1, z_channels, curr_res, curr_res)
+Строка  256: z_channels, block_in, kernel_size=3, stride=1, padding=1
+Строка  261: self.mid.block_1 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  263: self.mid.block_2 = ResnetBlock(in_channels=block_in, out_channels=block_in)
+Строка  272: block.append(ResnetBlock(in_channels=block_in, out_channels=block_out))
+Строка  284: num_groups=32, num_channels=block_in, eps=1e-6, affine=True
+Строка  293: z = self.post_quant_conv(z)
+Строка  343: in_channels=params.in_channels,
+Строка  347: z_channels=params.z_channels,
+Строка  349: self.decoder = Decoder(
+Строка  351: in_channels=params.in_channels,
+Строка  356: z_channels=params.z_channels,
+Строка  363: math.prod(self.ps) * params.z_channels,
+Строка  379: self.decoder.gradient_checkpointing = value
+Строка  384: self.decoder.enable_gradient_checkpointing()
+Строка  404: raise KeyError(f"Unrecognized diffusers VAE state-dict key: {src_key}")
+Строка  421: if key.startswith("post_quant_conv."):
+Строка  422: return key.replace("post_quant_conv.", "decoder.post_quant_conv.", 1)
+Строка  428: if key == "decoder.conv_norm_out.weight":
+Строка  429: return "decoder.norm_out.weight"
+Строка  430: if key == "decoder.conv_norm_out.bias":
+Строка  431: return "decoder.norm_out.bias"
+Строка  433: m = re.match(r"^(encoder|decoder)\.mid_block\.resnets\.(\d+)\.(.+)$", key)
+Строка  438: m = re.match(r"^(encoder|decoder)\.mid_block\.attentions\.0\.(.+)$", key)
+Строка  459: m = re.match(r"^decoder\.up_blocks\.(\d+)\.resnets\.(\d+)\.(.+)$", key)
+Строка  465: f"decoder.up.{_NUM_RESOLUTIONS - 1 - diffusers_idx}.block.{res_idx}.{rest}"
+Строка  467: m = re.match(r"^decoder\.up_blocks\.(\d+)\.upsamplers\.0\.conv\.(.+)$", key)
+Строка  470: return f"decoder.up.{_NUM_RESOLUTIONS - 1 - diffusers_idx}.upsample.conv.{m.group(2)}"
+Строка  476: "decoder.conv_in.",
+Строка  477: "decoder.conv_out.",
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\krea2\krea2.py
+------------------------------------------------------------
+Строка    6: - autoencoder: the Qwen-Image VAE (f8, 16 latent channels, the same VAE the
+Строка   73: channels=16,
+Строка   98: QWEN_IMAGE_VAE_PATH = "Qwen/Qwen-Image"
+Строка  186: self.vae_scale_factor = 8  # Qwen-Image VAE is f8
+Строка  202: # the text embeddings see them) and as clean VAE latents appended to the
+Строка  227: # 8 for the VAE downsample, 2 for the patch size.
+Строка  228: return self.vae_scale_factor * self.patch_size
+Строка  291: def _load_vae(self):
+Строка  292: vae_path = self.model_config.model_kwargs.get("vae_path", QWEN_IMAGE_VAE_PATH)
+Строка  293: self.print_and_status_update(f"Loading Qwen-Image VAE from {vae_path}")
+Строка  294: vae = AutoencoderKLQwenImage.from_pretrained(
+Строка  295: vae_path, subfolder="vae", torch_dtype=self.vae_torch_dtype, token=HF_TOKEN
+Строка  297: vae.eval()
+Строка  298: vae.requires_grad_(False)
+Строка  299: return vae
+Строка  447: vae = self._load_vae()
+Строка  448: vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  452: self.vae = vae
+Строка  483: # Reference image(s) -> clean VAE latents for the t=0 sequence tokens.
+Строка  547: """Encode ``[0, 1]`` reference image tensors to VAE latents.
+Строка  555: sc = self.get_bucket_divisibility()  # 16: VAE(8) * patch(2)
+Строка  576: # snap to a multiple of the bucket divisibility so the VAE latent grid
+Строка  629: target_pixels = (lh * self.vae_scale_factor) * (
+Строка  630: lw * self.vae_scale_factor
+Строка  665: understanding of the reference; high-res detail flows through the VAE
+Строка  757: # VAE (Qwen-Image AutoencoderKLQwenImage -- same handling as qwen_image arch)
+Строка  761: device = self.vae_device_torch
+Строка  763: dtype = self.vae_torch_dtype
+Строка  765: if self.vae.device == torch.device("cpu"):
+Строка  766: self.vae.to(device)
+Строка  767: self.vae.eval()
+Строка  768: self.vae.requires_grad_(False)
+Строка  773: # AutoencoderKLQwenImage is a video VAE: add a frame dim.
+Строка  775: latents = self.vae.encode(images).latent_dist.sample()
+Строка  778: torch.tensor(self.vae.config.latents_mean)
+Строка  779: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  782: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(
+Строка  783: 1, self.vae.config.z_dim, 1, 1, 1
+Строка  790: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  792: device = self.vae_device_torch
+Строка  794: dtype = self.vae_torch_dtype
+Строка  796: if self.vae.device == torch.device("cpu"):
+Строка  797: self.vae.to(device)
+Строка  803: torch.tensor(self.vae.config.latents_mean)
+Строка  804: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  808: torch.tensor(self.vae.config.latents_std)
+Строка  809: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  814: # Full-resolution decode spikes VRAM; tile it when low on VRAM (decode
+Строка  818: self.vae.enable_tiling()
+Строка  820: images = self.vae.decode(latents).sample
+Строка  823: self.vae.disable_tiling()
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\krea2\src\mmdit.py
+------------------------------------------------------------
+Строка  100: channels: int
+Строка  252: def __init__(self, features: int, patch: int, channels: int):
+Строка  255: self.linear = torch.nn.Linear(features, patch * patch * channels, bias=True)
+Строка  416: config.channels * config.patch**2, config.features, bias=True
+Строка  450: self.last = LastLayer(config.features, config.patch, config.channels)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\krea2\src\pipeline.py
+------------------------------------------------------------
+Строка  279: # ``model`` is the Krea2Model so we can reuse its encode/decode and config.
+Строка  311: ae_scale = model.vae_scale_factor  # 8
+Строка  325: latent_channels = transformer.config.channels
+Строка  329: shape = (1, latent_channels, height // ae_scale, width // ae_scale)
+Строка  388: images = model.decode_latents(latents, device=device, dtype=dtype)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ltx2\convert_ltx2_to_diffusers.py
+------------------------------------------------------------
+Строка   48: LTX_2_0_VIDEO_VAE_RENAME_DICT = {
+Строка   59: # Decoder
+Строка   76: LTX_2_3_VIDEO_VAE_RENAME_DICT = {
+Строка   77: **LTX_2_0_VIDEO_VAE_RENAME_DICT,
+Строка   78: # Decoder extra blocks
+Строка   83: LTX_2_0_AUDIO_VAE_RENAME_DICT = {
+Строка  157: def convert_ltx2_audio_vae_per_channel_statistics(
+Строка  161: new_key = ".".join(["decoder", key])
+Строка  186: LTX_2_0_VAE_SPECIAL_KEYS_REMAP = {
+Строка  191: LTX_2_0_AUDIO_VAE_SPECIAL_KEYS_REMAP = {}
+Строка  234: "in_channels": 4,
+Строка  235: "out_channels": 4,
+Строка  241: "vae_scale_factors": (8, 32, 32),
+Строка  245: "audio_in_channels": 4,
+Строка  246: "audio_out_channels": 4,
+Строка  261: "caption_channels": 16,
+Строка  277: "in_channels": 128,
+Строка  278: "out_channels": 128,
+Строка  284: "vae_scale_factors": (8, 32, 32),
+Строка  290: "audio_in_channels": 128,
+Строка  291: "audio_out_channels": 128,
+Строка  308: "caption_channels": 3840,
+Строка  327: "in_channels": 128,
+Строка  328: "out_channels": 128,
+Строка  334: "vae_scale_factors": (8, 32, 32),
+Строка  340: "audio_in_channels": 128,
+Строка  341: "audio_out_channels": 128,
+Строка  358: "caption_channels": 3840,
+Строка  383: "caption_channels": 16,
+Строка  403: "caption_channels": 3840,
+Строка  430: "caption_channels": 3840,
+Строка  522: def get_ltx2_video_vae_config(
+Строка  529: "in_channels": 3,
+Строка  530: "out_channels": 3,
+Строка  531: "latent_channels": 128,
+Строка  532: "block_out_channels": (256, 512, 1024, 2048),
+Строка  539: "decoder_block_out_channels": (256, 512, 1024),
+Строка  541: "decoder_layers_per_block": (5, 5, 5, 5),
+Строка  543: "decoder_spatio_temporal_scaling": (True, True, True),
+Строка  544: "decoder_inject_noise": (False, False, False, False),
+Строка  558: "decoder_causal": False,
+Строка  560: "decoder_spatial_padding_mode": "reflect",
+Строка  565: rename_dict = LTX_2_0_VIDEO_VAE_RENAME_DICT
+Строка  566: special_keys_remap = LTX_2_0_VAE_SPECIAL_KEYS_REMAP
+Строка  571: "in_channels": 3,
+Строка  572: "out_channels": 3,
+Строка  573: "latent_channels": 128,
+Строка  574: "block_out_channels": (256, 512, 1024, 2048),
+Строка  581: "decoder_block_out_channels": (256, 512, 1024),
+Строка  583: "decoder_layers_per_block": (5, 5, 5, 5),
+Строка  585: "decoder_spatio_temporal_scaling": (True, True, True),
+Строка  586: "decoder_inject_noise": (False, False, False, False),
+Строка  601: "decoder_causal": False,
+Строка  603: "decoder_spatial_padding_mode": "reflect",
+Строка  608: rename_dict = LTX_2_0_VIDEO_VAE_RENAME_DICT
+Строка  609: special_keys_remap = LTX_2_0_VAE_SPECIAL_KEYS_REMAP
+Строка  614: "in_channels": 3,
+Строка  615: "out_channels": 3,
+Строка  616: "latent_channels": 128,
+Строка  617: "block_out_channels": (256, 512, 1024, 1024),
+Строка  624: "decoder_block_out_channels": (256, 512, 512, 1024),
+Строка  626: "decoder_layers_per_block": (4, 6, 4, 2, 2),
+Строка  628: "decoder_spatio_temporal_scaling": (True, True, True, True),
+Строка  629: "decoder_inject_noise": (False, False, False, False, False),
+Строка  649: "decoder_causal": False,
+Строка  651: "decoder_spatial_padding_mode": "zeros",
+Строка  656: rename_dict = LTX_2_3_VIDEO_VAE_RENAME_DICT
+Строка  657: special_keys_remap = LTX_2_0_VAE_SPECIAL_KEYS_REMAP
+Строка  661: def convert_ltx2_video_vae(
+Строка  666: config, rename_dict, special_keys_remap = get_ltx2_video_vae_config(
+Строка  672: vae = AutoencoderKLLTX2Video.from_config(diffusers_config)
+Строка  689: vae.load_state_dict(original_state_dict, strict=True, assign=True)
+Строка  690: return vae
+Строка  693: def get_ltx2_audio_vae_config(
+Строка  700: "base_channels": 128,
+Строка  701: "output_channels": 2,
+Строка  705: "in_channels": 2,
+Строка  707: "latent_channels": 8,
+Строка  719: rename_dict = LTX_2_0_AUDIO_VAE_RENAME_DICT
+Строка  720: special_keys_remap = LTX_2_0_AUDIO_VAE_SPECIAL_KEYS_REMAP
+Строка  725: "base_channels": 128,
+Строка  726: "output_channels": 2,
+Строка  730: "in_channels": 2,
+Строка  732: "latent_channels": 8,
+Строка  744: rename_dict = LTX_2_0_AUDIO_VAE_RENAME_DICT
+Строка  745: special_keys_remap = LTX_2_0_AUDIO_VAE_SPECIAL_KEYS_REMAP
+Строка  749: def convert_ltx2_audio_vae(
+Строка  752: config, rename_dict, special_keys_remap = get_ltx2_audio_vae_config(version)
+Строка  756: vae = AutoencoderKLLTX2Audio.from_config(diffusers_config)
+Строка  773: vae.load_state_dict(original_state_dict, strict=True, assign=True)
+Строка  774: return vae
+Строка  784: "in_channels": 128,
+Строка  785: "hidden_channels": 1024,
+Строка  786: "out_channels": 2,
+Строка  805: "in_channels": 128,
+Строка  806: "hidden_channels": 1536,
+Строка  807: "out_channels": 2,
+Строка  819: "bwe_in_channels": 128,
+Строка  820: "bwe_hidden_channels": 512,
+Строка  821: "bwe_out_channels": 2,
+Строка  836: "num_mel_channels": 64,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\ltx2\ltx2.py
+------------------------------------------------------------
+Строка   43: convert_ltx2_video_vae,
+Строка   44: convert_ltx2_audio_vae,
+Строка   77: vae_prefix = "vae."
+Строка   78: audio_vae_prefix = "audio_vae."
+Строка  105: class ComboVae(torch.nn.Module):
+Строка  106: """Combines video and audio VAEs for joint encoding and decoding."""
+Строка  110: vae: AutoencoderKLLTX2Video,
+Строка  111: audio_vae: AutoencoderKLLTX2Audio,
+Строка  114: self.vae = vae
+Строка  115: self.audio_vae = audio_vae
+Строка  119: return self.vae.device
+Строка  123: return self.vae.dtype
+Строка  127: return self.vae.config
+Строка  134: return self.vae.encode(*args, **kwargs)
+Строка  136: def decode(
+Строка  141: return self.vae.decode(*args, **kwargs)
+Строка  189: """Convert waveform to log-mel spectrogram [batch, channels, time, n_mels]."""
+Строка  387: "num_channels": 3,
+Строка  453: self.print_and_status_update("Loading VAEs and other components")
+Строка  455: original_vae_ckpt = get_model_state_dict_from_combined_ckpt(
+Строка  456: combined_state_dict, vae_prefix
+Строка  458: vae = convert_ltx2_video_vae(
+Строка  459: original_vae_ckpt, version=self.ltx_version
+Строка  461: del original_vae_ckpt
+Строка  462: original_audio_vae_ckpt = get_model_state_dict_from_combined_ckpt(
+Строка  463: combined_state_dict, audio_vae_prefix
+Строка  465: audio_vae = convert_ltx2_audio_vae(
+Строка  466: original_audio_vae_ckpt, version=self.ltx_version
+Строка  468: del original_audio_vae_ckpt
+Строка  486: vae = AutoencoderKLLTX2Video.from_pretrained(
+Строка  487: base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  489: audio_vae = AutoencoderKLLTX2Audio.from_pretrained(
+Строка  490: base_model_path, subfolder="audio_vae", torch_dtype=dtype
+Строка  511: vae=vae,
+Строка  512: audio_vae=audio_vae,
+Строка  540: self.vae = ComboVae(pipe.vae, pipe.audio_vae)
+Строка  548: mel_bins=audio_vae.config.mel_bins,
+Строка  550: n_fft=1024,  # todo get this from vae if we can, I couldnt find it.
+Строка  558: device = self.vae_device_torch
+Строка  560: dtype = self.vae_torch_dtype
+Строка  562: if self.pipeline.vae.device == torch.device("cpu"):
+Строка  563: self.pipeline.vae.to(device)
+Строка  564: self.pipeline.vae.eval()
+Строка  565: self.pipeline.vae.requires_grad_(False)
+Строка  568: self.pipeline.vae.tile_sample_min_num_frames = 64
+Строка  569: self.pipeline.vae.tile_sample_stride_num_frames = 16
+Строка  571: self.pipeline.vae.use_framewise_decoding = True
+Строка  572: self.pipeline.vae.use_framewise_encoding = True
+Строка  591: latents = self.pipeline.vae.encode(images).latent_dist.sample()
+Строка  595: latents_mean = self.pipeline.vae.latents_mean.view(1, -1, 1, 1, 1).to(
+Строка  598: latents_std = self.pipeline.vae.latents_std.view(1, -1, 1, 1, 1).to(
+Строка  604: self.pipeline.vae.use_framewise_decoding = False
+Строка  605: self.pipeline.vae.use_framewise_encoding = False
+Строка  614: vae=unwrap_model(self.pipeline.vae),
+Строка  615: audio_vae=unwrap_model(self.pipeline.audio_vae),
+Строка  646: vae=pipeline.vae,
+Строка  647: audio_vae=pipeline.audio_vae,
+Строка  689: # set vae to tile decode
+Строка  690: # pipeline.vae.enable_tiling(
+Строка  698: self.pipeline.vae.tile_sample_min_num_frames = 16
+Строка  699: self.pipeline.vae.tile_sample_stride_num_frames = 8
+Строка  700: self.pipeline.vae.use_framewise_decoding = True
+Строка  745: # pipeline.vae.use_tiling = False
+Строка  746: self.pipeline.vae.use_framewise_decoding = False
+Строка  760: # shape = [1, frames, channels, height, width]
+Строка  773: if self.pipeline.audio_vae.device == torch.device("cpu"):
+Строка  774: self.pipeline.audio_vae.to(self.device_torch)
+Строка  786: # Add batch dimension if needed: [channels, samples] -> [batch, channels, samples]
+Строка  801: latents = self.pipeline.audio_vae.encode(
+Строка  819: latents_mean = self.pipeline.audio_vae.latents_mean
+Строка  820: latents_std = self.pipeline.audio_vae.latents_std
+Строка  878: # videos come in (bs, num_frames, channels, height, width)
+Строка  879: # images come in (bs, channels, height, width)
+Строка  957: num_mel_bins = self.pipeline.audio_vae.config.mel_bins
+Строка  958: # latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
+Строка  959: num_channels_latents_audio = (
+Строка  960: self.pipeline.audio_vae.config.latent_channels
+Строка  966: / float(self.pipeline.audio_vae_temporal_compression_ratio)
+Строка  971: num_channels_latents=num_channels_latents_audio,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\nucleus_image\nucleus_image_model.py
+------------------------------------------------------------
+Строка   74: return 16 * 2  # 16 for the VAE, 2 for patch size
+Строка  155: self.print_and_status_update("Loading VAE")
+Строка  156: vae = AutoencoderKLQwenImage.from_pretrained(
+Строка  157: base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  170: vae=vae,
+Строка  195: self.vae = vae
+Строка  209: vae=unwrap_model(self.vae),
+Строка  219: device = self.vae_device_torch
+Строка  221: dtype = self.vae_torch_dtype
+Строка  223: # Move to vae to device if on cpu
+Строка  224: if self.vae.device == torch.device("cpu"):
+Строка  225: self.vae.to(device)
+Строка  226: self.vae.eval()
+Строка  227: self.vae.requires_grad_(False)
+Строка  231: # it uses wan vae, so add dim for frame count
+Строка  234: latents = self.vae.encode(images).latent_dist.sample()
+Строка  237: torch.tensor(self.vae.config.latents_mean)
+Строка  238: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  241: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(
+Строка  242: 1, self.vae.config.z_dim, 1, 1, 1
+Строка  310: pixel_height = latent_model_input.shape[2] * self.pipeline.vae_scale_factor
+Строка  311: pixel_width = latent_model_input.shape[3] * self.pipeline.vae_scale_factor
+Строка  316: num_channels_latents=self.pipeline.transformer.config.in_channels // 4,
+Строка  339: vae_scale_factor=self.pipeline.vae_scale_factor
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\__init__.py
+------------------------------------------------------------
+Строка  118: self.print_and_status_update("Loading vae")
+Строка  120: vae = AutoencoderKL.from_pretrained(
+Строка  121: extras_path, subfolder="vae", torch_dtype=torch.bfloat16
+Строка  133: vae.to(self.device_torch, dtype=dtype)
+Строка  138: vae.eval()
+Строка  144: vae=vae,
+Строка  158: self.vae = vae
+Строка  179: vae=self.vae,
+Строка  264: self.vae.to(self.device_torch)
+Строка  268: self.vae_device_torch, dtype=self.torch_dtype
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\models\embeddings.py
+------------------------------------------------------------
+Строка   26: in_channels: int,
+Строка   36: self.linear_1 = nn.Linear(in_channels, time_embed_dim, sample_proj_bias)
+Строка   39: self.cond_proj = nn.Linear(cond_proj_dim, in_channels, bias=False)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\models\transformers\block_lumina2.py
+------------------------------------------------------------
+Строка  194: num_channels=frequency_embedding_size, flip_sin_to_cos=True, downscale_freq_shift=0.0, scale=timestep_scale
+Строка  198: in_channels=frequency_embedding_size, time_embed_dim=min(hidden_size, 1024)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\models\transformers\transformer_omnigen2.py
+------------------------------------------------------------
+Строка  192: in_channels: Number of input channels
+Строка  193: out_channels: Number of output channels (defaults to in_channels)
+Строка  218: in_channels: int = 16,
+Строка  219: out_channels: Optional[int] = None,
+Строка  243: self.out_channels = out_channels or in_channels
+Строка  254: in_features=patch_size * patch_size * in_channels,
+Строка  259: in_features=patch_size * patch_size * in_channels,
+Строка  335: out_dim=patch_size * patch_size * self.out_channels
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\pipelines\image_processor.py
+------------------------------------------------------------
+Строка   23: from diffusers.image_processor import PipelineImageInput, VaeImageProcessor, is_valid_image_imagelist
+Строка   26: class OmniGen2ImageProcessor(VaeImageProcessor):
+Строка   32: Whether to downscale the image's (height, width) dimensions to multiples of `vae_scale_factor`. Can accept
+Строка   33: `height` and `width` arguments from [`image_processor.VaeImageProcessor.preprocess`] method.
+Строка   34: vae_scale_factor (`int`, *optional*, defaults to `8`):
+Строка   35: VAE scale factor. If `do_resize` is `True`, the image is automatically resized to multiples of this factor.
+Строка   52: vae_scale_factor: int = 16,
+Строка   62: vae_scale_factor=vae_scale_factor,
+Строка   81: Returns the height and width of the image, downscaled to the next integer multiple of `vae_scale_factor`.
+Строка   86: should have shape `[batch, height, width]` or `[batch, height, width, channels]`. If it is a PyTorch
+Строка   87: tensor, it should have shape `[batch, channels, height, width]`.
+Строка   96: `vae_scale_factor`.
+Строка  132: new_height, new_width = int(height * ratio) // self.config.vae_scale_factor * self.config.vae_scale_factor, int(width * ratio) // self.config.vae_scale_factor * self.config.vae_scale_factor
+Строка  244: if channel == self.config.vae_latent_channels:
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\pipelines\omnigen2\pipeline_omnigen2.py
+------------------------------------------------------------
+Строка   68: `(batch_size, height, width, num_channels)`. Contains the generated images.
+Строка  127: - VAE for image encoding/decoding
+Строка  132: vae (AutoencoderKL): The VAE model for image encoding/decoding.
+Строка  138: model_cpu_offload_seq = "mllm->transformer->vae"
+Строка  143: vae: AutoencoderKL,
+Строка  153: vae: The VAE model for image encoding/decoding.
+Строка  162: vae=vae,
+Строка  167: self.vae_scale_factor = (
+Строка  168: 2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
+Строка  170: self.image_processor = OmniGen2ImageProcessor(vae_scale_factor=self.vae_scale_factor * 2, do_resize=True)
+Строка  176: num_channels_latents: int,
+Строка  189: num_channels_latents: The number of channels in the latent space.
+Строка  200: height = int(height) // self.vae_scale_factor
+Строка  201: width = int(width) // self.vae_scale_factor
+Строка  203: shape = (batch_size, num_channels_latents, height, width)
+Строка  211: def encode_vae(self, img: torch.FloatTensor) -> torch.FloatTensor:
+Строка  213: Encode an image into the VAE latent space.
+Строка  221: z0 = self.vae.encode(img.to(dtype=self.vae.dtype)).latent_dist.sample()
+Строка  222: if self.vae.config.shift_factor is not None:
+Строка  223: z0 = z0 - self.vae.config.shift_factor
+Строка  224: if self.vae.config.scaling_factor is not None:
+Строка  225: z0 = z0 * self.vae.config.scaling_factor
+Строка  226: z0 = z0.to(dtype=self.vae.dtype)
+Строка  240: Prepare input images for processing by encoding them into the VAE latent space.
+Строка  260: ref_latents.append(self.encode_vae(img_j.to(device=device)).squeeze(0))
+Строка  311: #     removed_text = self.processor.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length - 1 : -1])
+Строка  493: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  494: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  530: dtype = self.vae.dtype
+Строка  546: width, height = ref_latents[0][0].shape[-1] * self.vae_scale_factor, ref_latents[0][0].shape[-2] * self.vae_scale_factor
+Строка  561: latent_channels = self.transformer.config.in_channels
+Строка  564: latent_channels,
+Строка  695: if self.vae.config.scaling_factor is not None:
+Строка  696: latents = latents / self.vae.config.scaling_factor
+Строка  697: if self.vae.config.shift_factor is not None:
+Строка  698: latents = latents + self.vae.config.shift_factor
+Строка  699: image = self.vae.decode(latents, return_dict=False)[0]
+Строка  715: batch_size, num_channels_latents, height, width = latents.shape
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\pipelines\omnigen2\pipeline_omnigen2_chat.py
+------------------------------------------------------------
+Строка   68: `(batch_size, height, width, num_channels)`. Contains the generated images.
+Строка  128: - VAE for image encoding/decoding
+Строка  133: vae (AutoencoderKL): The VAE model for image encoding/decoding.
+Строка  139: model_cpu_offload_seq = "mllm->transformer->vae"
+Строка  143: vae: AutoencoderKL,
+Строка  153: vae: The VAE model for image encoding/decoding.
+Строка  162: vae=vae,
+Строка  167: self.vae_scale_factor = (
+Строка  168: 2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
+Строка  170: self.image_processor = OmniGen2ImageProcessor(vae_scale_factor=self.vae_scale_factor * 2, do_resize=True)
+Строка  176: num_channels_latents: int,
+Строка  189: num_channels_latents: The number of channels in the latent space.
+Строка  200: height = int(height) // self.vae_scale_factor
+Строка  201: width = int(width) // self.vae_scale_factor
+Строка  203: shape = (batch_size, num_channels_latents, height, width)
+Строка  211: def encode_vae(self, img: torch.FloatTensor) -> torch.FloatTensor:
+Строка  213: Encode an image into the VAE latent space.
+Строка  221: z0 = self.vae.encode(img.to(dtype=self.vae.dtype)).latent_dist.sample()
+Строка  222: if self.vae.config.shift_factor is not None:
+Строка  223: z0 = z0 - self.vae.config.shift_factor
+Строка  224: if self.vae.config.scaling_factor is not None:
+Строка  225: z0 = z0 * self.vae.config.scaling_factor
+Строка  226: z0 = z0.to(dtype=self.vae.dtype)
+Строка  240: Prepare input images for processing by encoding them into the VAE latent space.
+Строка  260: ref_latents.append(self.encode_vae(img_j.to(device=device)).squeeze(0))
+Строка  486: output_texts = self.processor.batch_decode(
+Строка  525: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  526: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  564: dtype = self.vae.dtype
+Строка  580: width, height = ref_latents[0][0].shape[-1] * self.vae_scale_factor, ref_latents[0][0].shape[-2] * self.vae_scale_factor
+Строка  595: latent_channels = self.transformer.config.in_channels
+Строка  598: latent_channels,
+Строка  796: if self.vae.config.scaling_factor is not None:
+Строка  797: latents = latents / self.vae.config.scaling_factor
+Строка  798: if self.vae.config.shift_factor is not None:
+Строка  799: latents = latents + self.vae.config.shift_factor
+Строка  800: image = self.vae.decode(latents, return_dict=False)[0]
+Строка  816: batch_size, num_channels_latents, height, width = latents.shape
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\schedulers\scheduling_dpmsolver_multistep.py
+------------------------------------------------------------
+Строка  348: batch_size, channels, *remaining_dims = sample.shape
+Строка  354: sample = sample.reshape(batch_size, channels * np.prod(remaining_dims))
+Строка  365: sample = sample.reshape(batch_size, channels, *remaining_dims)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\omnigen2\src\schedulers\scheduling_flow_match_euler_discrete.py
+------------------------------------------------------------
+Строка   36: prev_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\prx_pixel_t2i\prx_pixel_t2i.py
+------------------------------------------------------------
+Строка   11: - **Pixel space, no VAE.** The transformer denoises raw RGB directly
+Строка   12: (``in_channels=3``, ``patch_size=16``). We use a ``FakeVAE`` (identity,
+Строка   13: scaling_factor=1) so BaseModel's encode_images/decode_latents become no-ops
+Строка   52: from toolkit.models.FakeVAE import FakeVAE
+Строка  102: self.vae_scale_factor = 1  # pixel space: no VAE downsampling
+Строка  111: # pixels must be divisible by patch_size (no VAE downsample): 1 * 16 = 16
+Строка  112: return self.vae_scale_factor * self.patch_size
+Строка  128: # in_channels=3, ...) and the safetensors in one shot.
+Строка  163: # --- "VAE": identity, since PRXPixel is pixel space ---
+Строка  164: self.print_and_status_update("Preparing pixel-space VAE (identity)")
+Строка  165: vae = FakeVAE(scaling_factor=1.0)
+Строка  166: vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  170: self.vae = vae
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\prx_pixel_t2i\src\pipeline.py
+------------------------------------------------------------
+Строка   10: - **pixel space**: there is no VAE. The model's "latents" are the RGB image
+Строка   11: itself in [-1, 1]; the final "decode" is just a clamp + uint8 cast.
+Строка   39: # access to model.transformer, model.decode_latents, device/dtype, the
+Строка   97: # 1. starting noise -- pixel space, so channels = transformer.in_channels (3),
+Строка   98: #    spatial size = the requested pixels (no VAE downsample). Scaled by the
+Строка  101: shape = (1, transformer.in_channels, height, width)
+Строка  148: #    decode_latents is an identity (FakeVAE) but we route through it so
+Строка  150: images = model.decode_latents(latents, device=device, dtype=torch.float32)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\prx_pixel_t2i\src\transformer_prx.py
+------------------------------------------------------------
+Строка   14: # ``in_channels=3`` (raw RGB, no VAE), ``bottleneck_size`` (two-layer patch
+Строка  577: out_channels (`int`):
+Строка  578: Number of output channels per pixel (e.g. RGB = 3).
+Строка  581: def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
+Строка  585: hidden_size, patch_size * patch_size * out_channels, bias=True
+Строка  620: # n=batch, c=channels, h=grid_height, p=patch_height, w=grid_width, q=patch_width
+Строка  661: # n=batch, h=grid_height, w=grid_width, c=channels, p=patch_height, q=patch_width
+Строка  674: in_channels (`int`, *optional*, defaults to 16):
+Строка  675: Number of input channels in the latent image. The pixel-space PRX uses `3` (raw RGB, no VAE).
+Строка  711: in_channels: int = 16,
+Строка  731: self.in_channels = in_channels
+Строка  733: self.out_channels = self.in_channels * self.patch_size**2
+Строка  751: patch_dim = self.in_channels * self.patch_size**2
+Строка  780: self.final_layer = FinalLayer(self.hidden_size, 1, self.out_channels)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\qwen_image\qwen_image.py
+------------------------------------------------------------
+Строка   82: return 16 * 2  # 16 for the VAE, 2 for patch size
+Строка  176: self.print_and_status_update("Loading VAE")
+Строка  177: vae = AutoencoderKLQwenImage.from_pretrained(
+Строка  178: base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  202: vae=vae,
+Строка  227: self.vae = vae
+Строка  241: vae=unwrap_model(self.vae),
+Строка  289: # set vae to tile decode
+Строка  290: pipeline.vae.enable_tiling()
+Строка  313: pipeline.vae.disable_tiling()
+Строка  325: batch_size, num_channels_latents, height, width = latent_model_input.shape
+Строка  331: batch_size, num_channels_latents, height // ps, ps, width // ps, ps
+Строка  335: batch_size, (height // ps) * (width // ps), num_channels_latents * (ps * ps)
+Строка  362: batch_size, height // ps, width // ps, num_channels_latents, ps, ps
+Строка  365: noise_pred = noise_pred.reshape(batch_size, num_channels_latents, height, width)
+Строка  431: device = self.vae_device_torch
+Строка  433: dtype = self.vae_torch_dtype
+Строка  435: # Move to vae to device if on cpu
+Строка  436: if self.vae.device == torch.device("cpu"):
+Строка  437: self.vae.to(device)
+Строка  438: self.vae.eval()
+Строка  439: self.vae.requires_grad_(False)
+Строка  443: # it uses wan vae, so add dim for frame count
+Строка  446: latents = self.vae.encode(images).latent_dist.sample()
+Строка  449: torch.tensor(self.vae.config.latents_mean)
+Строка  450: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  453: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(
+Строка  454: 1, self.vae.config.z_dim, 1, 1, 1
+Строка  464: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  466: device = self.vae_device_torch
+Строка  468: dtype = self.vae_torch_dtype
+Строка  470: if self.vae.device == torch.device("cpu"):
+Строка  471: self.vae.to(device)
+Строка  475: # add frame count dim for wan vae
+Строка  479: torch.tensor(self.vae.config.latents_mean)
+Строка  480: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  484: torch.tensor(self.vae.config.latents_std)
+Строка  485: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  490: images = self.vae.decode(latents).sample
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\qwen_image\qwen_image_edit.py
+------------------------------------------------------------
+Строка   75: vae=unwrap_model(self.vae),
+Строка  119: # set vae to tile decode
+Строка  120: pipeline.vae.enable_tiling()
+Строка  144: pipeline.vae.disable_tiling()
+Строка  154: self.vae.to(self.device_torch)
+Строка  158: self.vae_device_torch, dtype=self.torch_dtype
+Строка  225: # control is stacked on channels, move it to the batch dimension for packing
+Строка  228: batch_size, num_channels_latents, height, width = latent_model_input.shape
+Строка  231: control_num_channels_latents,
+Строка  238: batch_size, num_channels_latents, height // 2, 2, width // 2, 2
+Строка  242: batch_size, (height // 2) * (width // 2), num_channels_latents * 4
+Строка  247: batch_size, num_channels_latents, height // 2, 2, width // 2, 2
+Строка  251: batch_size, (height // 2) * (width // 2), num_channels_latents * 4
+Строка  285: batch_size, height // 2, width // 2, num_channels_latents, 2, 2
+Строка  288: noise_pred = noise_pred.reshape(batch_size, num_channels_latents, height, width)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\qwen_image\qwen_image_edit_plus.py
+------------------------------------------------------------
+Строка   36: VAE_IMAGE_SIZE,
+Строка   83: vae=unwrap_model(self.vae),
+Строка  137: # set vae to tile decode
+Строка  138: pipeline.vae.enable_tiling()
+Строка  163: pipeline.vae.disable_tiling()
+Строка  240: batch_size, num_channels_latents, height, width = latent_model_input.shape
+Строка  241: if self.vae.device != self.device_torch:
+Строка  242: self.vae.to(self.device_torch)
+Строка  244: control_image_res = VAE_IMAGE_SIZE
+Строка  247: control_image_res = height * self.pipeline.vae_scale_factor * width * self.pipeline.vae_scale_factor
+Строка  251: batch_size, num_channels_latents, height // 2, 2, width // 2, 2
+Строка  255: batch_size, (height // 2) * (width // 2), num_channels_latents * 4
+Строка  313: clb, cl_num_channels_latents, cl_height, cl_width = (
+Строка  319: cl_num_channels_latents,
+Строка  329: num_channels_latents * 4,
+Строка  377: batch_size, height // 2, width // 2, num_channels_latents, 2, 2
+Строка  380: noise_pred = noise_pred.reshape(batch_size, num_channels_latents, height, width)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\qwen_image\qwen_image_pipelines.py
+------------------------------------------------------------
+Строка   10: VAE_IMAGE_SIZE,
+Строка   61: multiple_of = self.vae_scale_factor * 2
+Строка   95: isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels
+Строка  101: vae_image_sizes = []
+Строка  102: vae_images = []
+Строка  108: vae_width, vae_height = calculate_dimensions(
+Строка  109: VAE_IMAGE_SIZE, image_width / image_height
+Строка  112: vae_image_sizes.append((vae_width, vae_height))
+Строка  116: vae_images.append(
+Строка  118: img, vae_height, vae_width
+Строка  158: num_channels_latents = self.transformer.config.in_channels // 4
+Строка  160: vae_images,
+Строка  162: num_channels_latents,
+Строка  174: height // self.vae_scale_factor // 2,
+Строка  175: width // self.vae_scale_factor // 2,
+Строка  180: vae_height // self.vae_scale_factor // 2,
+Строка  181: vae_width // self.vae_scale_factor // 2,
+Строка  183: for vae_width, vae_height in vae_image_sizes
+Строка  333: latents, height, width, self.vae_scale_factor
+Строка  335: latents = latents.to(self.vae.dtype)
+Строка  337: torch.tensor(self.vae.config.latents_mean)
+Строка  338: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  341: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(
+Строка  342: 1, self.vae.config.z_dim, 1, 1, 1
+Строка  345: image = self.vae.decode(latents, return_dict=False)[0][:, :, 0]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\wan22\wan22_14b_i2v_model.py
+------------------------------------------------------------
+Строка   54: # num_channels_latents = self.transformer.config.in_channels
+Строка   55: num_channels_latents = 16
+Строка   58: num_channels_latents,
+Строка   80: vae=self.vae
+Строка  102: # shape = [1, frames, channels, height, width]
+Строка  119: # videos come in (bs, num_frames, channels, height, width)
+Строка  120: # images come in (bs, channels, height, width)
+Строка  134: vae=self.vae
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\wan22\wan22_14b_model.py
+------------------------------------------------------------
+Строка  168: _wan_vae_path = "ai-toolkit/wan2.1-vae"
+Строка  388: vae=self.vae,
+Строка  559: if self.use_vae_tiling:
+Строка  560: # set vae to tile decode
+Строка  561: pipeline.vae.enable_tiling()
+Строка  581: if self.use_vae_tiling:
+Строка  583: pipeline.vae.disable_tiling()
+Строка  585: # shape = [1, frames, channels, height, width]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\wan22\wan22_5b_model.py
+------------------------------------------------------------
+Строка  131: vae=self.vae,
+Строка  188: num_channels_latents = self.transformer.config.in_channels
+Строка  191: num_channels_latents,
+Строка  210: latent_model_input=latents, first_frame=first_frame_n1p1, vae=self.vae
+Строка  213: if self.use_vae_tiling:
+Строка  214: # set vae to tile decode
+Строка  215: pipeline.vae.enable_tiling()
+Строка  237: if self.use_vae_tiling:
+Строка  239: pipeline.vae.disable_tiling()
+Строка  241: # shape = [1, frames, channels, height, width]
+Строка  258: # videos come in (bs, num_frames, channels, height, width)
+Строка  259: # images come in (bs, channels, height, width)
+Строка  277: vae=self.vae,
+Строка  293: vae=self.vae,
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\wan22\wan22_pipeline.py
+------------------------------------------------------------
+Строка   22: vae: AutoencoderKLWan,
+Строка   37: vae=vae,
+Строка   77: if num_frames % self.vae_scale_factor_temporal != 1:
+Строка   78: num_frames = num_frames // self.vae_scale_factor_temporal * self.vae_scale_factor_temporal + 1
+Строка   82: width = width // (self.vae.config.scale_factor_spatial * 2) * (self.vae.config.scale_factor_spatial * 2)
+Строка   83: height = height // (self.vae.config.scale_factor_spatial * 2) * (self.vae.config.scale_factor_spatial * 2)
+Строка   85: # unload vae and transformer
+Строка   86: vae_device = self.vae.device
+Строка   91: if vae_device == torch.device("cpu"):
+Строка   92: vae_device = self.reset_device_map
+Строка   95: print("Unloading vae")
+Строка   96: self.vae.to("cpu")
+Строка  163: num_channels_latents = self.transformer.config.in_channels
+Строка  169: # first 16 channels are latent. other 20 are conditioning
+Строка  173: # we need to trick the in_channls to think it is only 16 channels
+Строка  174: num_channels_latents = 16
+Строка  178: num_channels_latents,
+Строка  305: # load vae
+Строка  306: print("Loading Vae")
+Строка  307: self.vae.to(vae_device)
+Строка  311: latents = latents.to(self.vae.dtype)
+Строка  313: torch.tensor(self.vae.config.latents_mean)
+Строка  314: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  317: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+Строка  321: video = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\z_image\z_image.py
+------------------------------------------------------------
+Строка   45: # repo to pull the vae / text encoder / tokenizer / config from when loading a
+Строка  137: # repo to pull config/vae/te from when loading a single-file checkpoint
+Строка  146: return 8 * 2  # 8 for the VAE, 2 for patch size
+Строка  237: # vae / text encoder / tokenizer / config from the base diffusers repo.
+Строка  349: self.print_and_status_update("Loading VAE")
+Строка  350: vae = AutoencoderKL.from_pretrained(
+Строка  351: base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  364: vae=vae,
+Строка  389: self.vae = vae
+Строка  403: vae=unwrap_model(self.vae),
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\z_image\z_image_l2p_model.py
+------------------------------------------------------------
+Строка   17: from toolkit.models.FakeVAE import FakeVAE
+Строка   47: "in_channels": 16,
+Строка   61: """L2P pixel-space decoder: a small 4-stage U-Net that fuses the transformer
+Строка   64: def __init__(self, in_channels: int, si_t_hidden_size: int):
+Строка   68: nn.Conv2d(in_channels, 64, kernel_size=3, padding=1), nn.SiLU()
+Строка  117: self.out_conv = nn.Conv2d(64, in_channels, kernel_size=1)
+Строка  143: FinalLayer + unpatchify tail with a pixel-space U-Net decoder."""
+Строка  151: self.local_decoder = MicroDiffusionModel(
+Строка  152: in_channels=self.in_channels,
+Строка  174: # Capture original noisy pixel images for the U-Net decoder.
+Строка  273: # L2P tail: extract image tokens, reshape to (B, dim, H/p, W/p), decode in pixel space.
+Строка  284: decoded = self.local_decoder(noisy_images, feat_map)
+Строка  285: decoded = decoded.unsqueeze(2)  # add F=1 axis to match (C, F, H, W) downstream
+Строка  286: x_out = list(decoded.unbind(0))
+Строка  345: # the pixel-size x_embedder or local_decoder keys. Also infer
+Строка  346: # in_channels from the local_decoder shape so we match whatever
+Строка  348: has_l2p_keys = any(k.startswith("local_decoder.") for k in sd)
+Строка  352: inferred_in_channels = None
+Строка  353: if "local_decoder.enc1.0.weight" in sd:
+Строка  354: inferred_in_channels = sd["local_decoder.enc1.0.weight"].shape[1]
+Строка  356: inferred_in_channels = 3
+Строка  360: config["in_channels"] = (
+Строка  361: inferred_in_channels if inferred_in_channels else 3
+Строка  365: f"  detected pixel-space checkpoint (L2P), in_channels={config['in_channels']}"
+Строка  373: f"  built transformer: in_channels={transformer.in_channels}, "
+Строка  402: if transformer.config.in_channels != 3:
+Строка  406: new_config["in_channels"] = 3
+Строка  425: # FinalLayer is unused in L2P; pixel decoding is done by local_decoder.
+Строка  430: # local_decoder.* keys are absent from the source checkpoint; they keep
+Строка  497: self.print_and_status_update("Loading VAE")
+Строка  498: # vae = AutoencoderKL.from_pretrained(
+Строка  499: #     base_model_path, subfolder="vae", torch_dtype=dtype
+Строка  501: vae = FakeVAE(scaling_factor=1.0)
+Строка  513: vae=vae,
+Строка  538: self.vae = vae
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\zeta_chroma\zeta_chroma_model.py
+------------------------------------------------------------
+Строка   25: from toolkit.models.FakeVAE import FakeVAE
+Строка   26: from .zeta_chroma_transformer import ZImageDCT, ZImageDCTParams, vae_flatten, vae_unflatten, prepare_latent_image_ids, make_text_position_ids
+Строка  105: in_channels = self.patch_size * self.patch_size * 3  # RGB patches
+Строка  108: in_channels=in_channels,
+Строка  172: self.print_and_status_update("Loading VAE")
+Строка  173: vae = FakeVAE(scaling_factor=1.0)
+Строка  174: vae.to(self.device_torch, dtype=dtype)
+Строка  186: vae=vae,
+Строка  211: self.vae = vae
+Строка  225: vae=unwrap_model(self.vae),
+Строка  289: img, _ = vae_flatten(latent_model_input, patch_size=self.patch_size)
+Строка  324: pred = vae_unflatten(pred.float(), pixel_shape, patch_size=self.patch_size)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\zeta_chroma\zeta_chroma_pipeline.py
+------------------------------------------------------------
+Строка   16: vae_unflatten,
+Строка   91: in_channels = patch_size * patch_size * 3
+Строка  117: (batch_size, num_patches, in_channels),
+Строка  176: image = vae_unflatten(img.float(), pixel_shape, patch_size=patch_size)
+
+📁 ФАЙЛ: extensions_built_in\diffusion_models\zeta_chroma\zeta_chroma_transformer.py
+------------------------------------------------------------
+Строка   20: in_channels: int = 128
+Строка   35: # DCT decoder params
+Строка   36: decoder_hidden_size: int = 3840
+Строка   37: decoder_num_res_blocks: int = 4
+Строка   38: decoder_max_freqs: int = 8
+Строка  321: # --- Decoder components ---
+Строка  329: def __init__(self, in_channels, hidden_size_input, max_freqs):
+Строка  334: nn.Linear(in_channels + max_freqs**2, hidden_size_input)
+Строка  372: def __init__(self, channels):
+Строка  374: self.channels = channels
+Строка  375: self.in_ln = nn.LayerNorm(channels, eps=1e-6)
+Строка  377: nn.Linear(channels, channels, bias=True),
+Строка  379: nn.Linear(channels, channels, bias=True),
+Строка  383: nn.Linear(channels, 3 * channels, bias=True),
+Строка  404: def __init__(self, model_channels, out_channels):
+Строка  407: model_channels, elementwise_affine=False, eps=1e-6
+Строка  409: self.linear = nn.Linear(model_channels, out_channels, bias=True)
+Строка  420: in_channels,
+Строка  421: model_channels,
+Строка  422: out_channels,
+Строка  423: z_channels,
+Строка  430: self.cond_embed = nn.Linear(z_channels, patch_size**2 * model_channels)
+Строка  432: in_channels=in_channels,
+Строка  433: hidden_size_input=model_channels,
+Строка  437: [ResBlock(model_channels) for _ in range(num_res_blocks)]
+Строка  439: self.final_layer = DCTFinalLayer(model_channels, out_channels)
+Строка  456: self.in_channels = params.in_channels
+Строка  457: self.out_channels = params.in_channels
+Строка  467: self.f_patch_size * self.patch_size * self.patch_size * params.in_channels,
+Строка  543: in_channels=params.in_channels,
+Строка  544: model_channels=params.decoder_hidden_size,
+Строка  545: out_channels=params.in_channels,
+Строка  546: z_channels=params.dim,
+Строка  547: num_res_blocks=params.decoder_num_res_blocks,
+Строка  549: max_freqs=params.decoder_max_freqs,
+Строка  582: B * num_patches, self.patch_size**2, self.in_channels
+Строка  621: decoder_condition = img_hidden.reshape(B * num_patches, self.dim)
+Строка  622: output = self.dec_net(pixel_values, decoder_condition)
+Строка  654: def vae_flatten(latents, patch_size=2):
+Строка  667: def vae_unflatten(latents, shape, patch_size=2):
+
+📁 ФАЙЛ: extensions_built_in\flex2\flex2.py
+------------------------------------------------------------
+Строка   98: # so we need this for the VAE, te, etc
+Строка  158: self.print_and_status_update("Loading VAE")
+Строка  159: vae = AutoencoderKL.from_pretrained(
+Строка  160: base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  172: vae=vae,
+Строка  198: self.vae = vae
+Строка  214: vae=unwrap_model(self.vae),
+Строка  330: c=self.vae.config.latent_channels
+Строка  514: control_tensor = control_tensor.to(self.vae_device_torch, dtype=self.torch_dtype)
+
+📁 ФАЙЛ: extensions_built_in\flex2\pipeline.py
+------------------------------------------------------------
+Строка   18: vae,
+Строка   25: super().__init__(scheduler, vae, text_encoder, tokenizer, text_encoder_2, tokenizer_2, transformer)
+Строка   70: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка   72: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  130: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  131: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  179: # num_channels_latents = self.transformer.config.in_channels // 8
+Строка  180: num_channels_latents = 128 // 8
+Строка  202: dtype=self.vae.dtype,
+Строка  206: num_control_channels = num_channels_latents
+Строка  207: control_image = self.vae.encode(control_image).latent_dist.sample(generator=generator)
+Строка  208: control_image = (control_image - self.vae.config.shift_factor) * self.vae.config.scaling_factor
+Строка  224: num_control_channels += 1
+Строка  230: num_control_channels,
+Строка  237: num_channels_latents,
+Строка  335: latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
+Строка  336: latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+Строка  337: image = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: extensions_built_in\image_reference_slider_trainer\ImageReferenceSliderTrainerProcess.py
+------------------------------------------------------------
+Строка   78: self.sd.vae.eval()
+Строка   79: self.sd.vae.to(self.device_torch)
+
+📁 ФАЙЛ: extensions_built_in\sd_trainer\SDTrainer.py
+------------------------------------------------------------
+Строка  268: # move vae to device if we did not cache latents
+Строка  270: self.sd.vae.eval()
+Строка  271: self.sd.vae.to(self.device_torch)
+Строка  274: self.sd.vae.to('cpu')
+Строка  355: vae = self.sd.vae
+Строка  356: # if not (self.model_config.arch in ["flux"]) or self.sd.vae.__class__.__name__ == "AutoencoderPixelMixer":
+Строка  357: #     vae = self.sd.vae
+Строка  360: vae=vae,
+Строка  383: # enable gradient checkpointing on the vae
+Строка  384: if vae is not None and self.train_config.gradient_checkpointing:
+Строка  386: vae.enable_gradient_checkpointing()
+Строка  387: vae.train()
+Строка  469: output = denoised_latents / self.sd.vae.config['scaling_factor']
+Строка  470: output = self.sd.vae.decode(output).sample
+Строка  478: # you can do mse against the two here  or run the denoised through the vae for pixel space loss against the
+Строка  560: # stack first channel to match channels of noise_pred
+Строка  641: stepped_latents = stepped_latents.to(self.sd.vae.device, dtype=self.sd.vae.dtype)
+Строка  651: bl = bl.to(self.sd.vae.device)
+Строка  939: # seperate out the batch and channels
+Строка 1298: if self.sd.vae.dtype != self.sd.vae_torch_dtype:
+Строка 1299: self.sd.vae = self.sd.vae.to(self.sd.vae_torch_dtype)
+Строка 1377: # match in channels
+Строка 1379: in_channels = self.assistant_adapter.config.in_channels
+Строка 1380: if adapter_images.shape[1] != in_channels:
+Строка 1381: # we need to match the channels
+Строка 1382: adapter_images = adapter_images[:, :in_channels, :, :]
+Строка 1398: # scale down to the size of the latents, mask multiplier shape(bs, 1, width, height), noisy_latents shape(bs, channels, width, height)
+
+📁 ФАЙЛ: extensions_built_in\ultimate_slider_trainer\UltimateSliderTrainerProcess.py
+------------------------------------------------------------
+Строка  206: # move vae to device so we can encode on the fly
+Строка  208: self.sd.vae.to(self.device_torch)
+Строка  209: self.sd.vae.eval()
+Строка  210: self.sd.vae.requires_grad_(False)
+
+📁 ФАЙЛ: flux_train_ui.py
+------------------------------------------------------------
+Строка  121: generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+
+📁 ФАЙЛ: toolkit\audio\album_artwork.py
+------------------------------------------------------------
+Строка   21: for frame in container.decode(stream):
+
+📁 ФАЙЛ: toolkit\audio\make_video.py
+------------------------------------------------------------
+Строка   20: for frame in container.decode(stream):
+
+📁 ФАЙЛ: toolkit\basic.py
+------------------------------------------------------------
+Строка   25: raise Exception("Expected tensor of shape (batch_size, channels, width, height)")
+Строка   37: # Assumes that the content and style features are of shape (batch_size, channels, width, height)
+
+📁 ФАЙЛ: toolkit\config_modules.py
+------------------------------------------------------------
+Строка  237: self.in_channels: int = kwargs.get('in_channels', 3)
+Строка  238: self.channels: List[int] = kwargs.get('channels', [320, 640, 1280, 1280])
+Строка  270: self.safe_reducer_channels: int = kwargs.get('safe_reducer_channels', 512)
+Строка  271: self.safe_channels: int = kwargs.get('safe_channels', 2048)
+Строка  424: # automatically adapte the vae scaling based on the image norm
+Строка  619: self.vae_path = kwargs.get('vae_path', None)
+Строка  652: self.vae_device = kwargs.get("vae_device", None)
+Строка  653: self.vae_dtype = kwargs.get("vae_dtype", self.dtype)
+Строка  702: # can be used to load the extras like text encoder or vae from here
+
+📁 ФАЙЛ: toolkit\cuda_malloc.py
+------------------------------------------------------------
+Строка   34: gpu_names.add(device_info.DeviceString.decode('utf-8'))
+
+📁 ФАЙЛ: toolkit\custom_adapter.py
+------------------------------------------------------------
+Строка  372: in_channels=3,
+Строка  375: reducer_channels=self.config.safe_reducer_channels,
+Строка  376: channels=self.config.safe_channels,
+Строка  737: control_tensor = control_tensor.to(sd.vae_device_torch, dtype=sd.torch_dtype)
+Строка 1085: # videos come in (bs, num_frames, channels, height, width)
+Строка 1086: # images come in (bs, channels, height, width)
+
+📁 ФАЙЛ: toolkit\data_loader.py
+------------------------------------------------------------
+Строка  519: if hasattr(self.sd.vae, 'config') and hasattr(self.sd.vae.config, 'scale_factor_temporal'):
+Строка  520: temporal_compression = self.sd.vae.config.scale_factor_temporal
+
+📁 ФАЙЛ: toolkit\dataloader_mixins.py
+------------------------------------------------------------
+Строка   79: where N is the number of images, C is the number of channels,
+Строка  454: waveform, sample_rate = torchaudio.load(self.path)  # [channels, samples]
+Строка  627: # Stack frames into tensor [frames, channels, height, width]
+Строка  662: waveform, sample_rate = torchaudio.load(self.path)  # [channels, samples]
+Строка  667: peak = waveform.abs().amax()  # global peak across channels
+Строка 1218: hash_str = base64.urlsafe_b64encode(hashlib.md5(hash_input).digest()).decode('ascii')
+Строка 1463: # pipeline expectws an rgb image so we need to put alpha in all channels
+Строка 1680: hash_str = base64.urlsafe_b64encode(hashlib.md5(hash_input).digest()).decode('ascii')
+Строка 1739: # move sd items to cpu except for vae
+Строка 1871: hash_str = base64.urlsafe_b64encode(hashlib.md5(hash_input).digest()).decode('ascii')
+Строка 1970: # move sd items to cpu except for vae
+Строка 2025: hash_str = base64.urlsafe_b64encode(hashlib.md5(hash_input).digest()).decode('ascii')
+
+📁 ФАЙЛ: toolkit\image_utils.py
+------------------------------------------------------------
+Строка  115: msg = " raised while trying to decode as JPEG."
+Строка  516: def show_latents(latents: torch.Tensor, vae: 'AutoencoderTiny', name='AI Toolkit'):
+Строка  517: if vae.device == 'cpu':
+Строка  518: vae.to(latents.device)
+Строка  519: latents = latents / vae.config['scaling_factor']
+Строка  520: imgs = vae.decode(latents).sample
+
+📁 ФАЙЛ: toolkit\inversion_utils.py
+------------------------------------------------------------
+Строка   35: #     sd.unet.in_channels,
+Строка  101: VAE_SCALE_FACTOR = 2 ** (len(sd.vae.config['block_out_channels']) - 1)
+Строка  105: height = h * VAE_SCALE_FACTOR
+Строка  106: width = w * VAE_SCALE_FACTOR
+Строка  141: #     sd.unet.in_channels,
+Строка  260: #         model.unet.in_channels,
+
+📁 ФАЙЛ: toolkit\ip_adapter.py
+------------------------------------------------------------
+Строка  409: in_channels=3,
+Строка  412: reducer_channels=self.config.safe_reducer_channels,
+Строка  413: channels=self.config.safe_channels,
+Строка  638: hidden_size = sd.unet.config['block_out_channels'][-1]
+Строка  641: hidden_size = list(reversed(sd.unet.config['block_out_channels']))[block_id]
+Строка  644: hidden_size = sd.unet.config['block_out_channels'][block_id]
+
+📁 ФАЙЛ: toolkit\kohya_lora.py
+------------------------------------------------------------
+Строка   42: in_dim = org_module.in_channels
+Строка   43: out_dim = org_module.out_channels
+Строка  411: vae: AutoencoderKL,
+Строка  689: def create_network_from_weights(multiplier, file, vae, text_encoder, unet, weights_sd=None, for_inference=False, **kwargs):
+
+📁 ФАЙЛ: toolkit\kohya_model_util.py
+------------------------------------------------------------
+Строка   23: UNET_PARAMS_MODEL_CHANNELS = 320
+Строка   27: UNET_PARAMS_IN_CHANNELS = 4
+Строка   28: UNET_PARAMS_OUT_CHANNELS = 4
+Строка   34: VAE_PARAMS_Z_CHANNELS = 4
+Строка   35: VAE_PARAMS_RESOLUTION = 256
+Строка   36: VAE_PARAMS_IN_CHANNELS = 3
+Строка   37: VAE_PARAMS_OUT_CH = 3
+Строка   38: VAE_PARAMS_CH = 128
+Строка   39: VAE_PARAMS_CH_MULT = [1, 2, 4, 4]
+Строка   40: VAE_PARAMS_NUM_RES_BLOCKS = 2
+Строка   88: def renew_vae_resnet_paths(old_list, n_shave_prefix_segments=0):
+Строка  125: def renew_vae_attention_paths(old_list, n_shave_prefix_segments=0):
+Строка  172: channels = old_tensor.shape[0] // 3
+Строка  174: target_shape = (-1, channels) if len(old_tensor.shape) == 3 else (-1)
+Строка  176: num_heads = old_tensor.shape[0] // config["num_head_channels"] // 3
+Строка  178: old_tensor = old_tensor.reshape((num_heads, 3 * channels // num_heads) + old_tensor.shape[1:])
+Строка  179: query, key, value = old_tensor.split(channels // num_heads, dim=1)
+Строка  396: vae_ldm_to_diffusers_dict = {
+Строка  397: "decoder.conv_in.bias": "decoder.conv_in.bias",
+Строка  398: "decoder.conv_in.weight": "decoder.conv_in.weight",
+Строка  399: "decoder.conv_out.bias": "decoder.conv_out.bias",
+Строка  400: "decoder.conv_out.weight": "decoder.conv_out.weight",
+Строка  401: "decoder.mid.attn_1.k.bias": "decoder.mid_block.attentions.0.to_k.bias",
+Строка  402: "decoder.mid.attn_1.k.weight": "decoder.mid_block.attentions.0.to_k.weight",
+Строка  403: "decoder.mid.attn_1.norm.bias": "decoder.mid_block.attentions.0.group_norm.bias",
+Строка  404: "decoder.mid.attn_1.norm.weight": "decoder.mid_block.attentions.0.group_norm.weight",
+Строка  405: "decoder.mid.attn_1.proj_out.bias": "decoder.mid_block.attentions.0.to_out.0.bias",
+Строка  406: "decoder.mid.attn_1.proj_out.weight": "decoder.mid_block.attentions.0.to_out.0.weight",
+Строка  407: "decoder.mid.attn_1.q.bias": "decoder.mid_block.attentions.0.to_q.bias",
+Строка  408: "decoder.mid.attn_1.q.weight": "decoder.mid_block.attentions.0.to_q.weight",
+Строка  409: "decoder.mid.attn_1.v.bias": "decoder.mid_block.attentions.0.to_v.bias",
+Строка  410: "decoder.mid.attn_1.v.weight": "decoder.mid_block.attentions.0.to_v.weight",
+Строка  411: "decoder.mid.block_1.conv1.bias": "decoder.mid_block.resnets.0.conv1.bias",
+Строка  412: "decoder.mid.block_1.conv1.weight": "decoder.mid_block.resnets.0.conv1.weight",
+Строка  413: "decoder.mid.block_1.conv2.bias": "decoder.mid_block.resnets.0.conv2.bias",
+Строка  414: "decoder.mid.block_1.conv2.weight": "decoder.mid_block.resnets.0.conv2.weight",
+Строка  415: "decoder.mid.block_1.norm1.bias": "decoder.mid_block.resnets.0.norm1.bias",
+Строка  416: "decoder.mid.block_1.norm1.weight": "decoder.mid_block.resnets.0.norm1.weight",
+Строка  417: "decoder.mid.block_1.norm2.bias": "decoder.mid_block.resnets.0.norm2.bias",
+Строка  418: "decoder.mid.block_1.norm2.weight": "decoder.mid_block.resnets.0.norm2.weight",
+Строка  419: "decoder.mid.block_2.conv1.bias": "decoder.mid_block.resnets.1.conv1.bias",
+Строка  420: "decoder.mid.block_2.conv1.weight": "decoder.mid_block.resnets.1.conv1.weight",
+Строка  421: "decoder.mid.block_2.conv2.bias": "decoder.mid_block.resnets.1.conv2.bias",
+Строка  422: "decoder.mid.block_2.conv2.weight": "decoder.mid_block.resnets.1.conv2.weight",
+Строка  423: "decoder.mid.block_2.norm1.bias": "decoder.mid_block.resnets.1.norm1.bias",
+Строка  424: "decoder.mid.block_2.norm1.weight": "decoder.mid_block.resnets.1.norm1.weight",
+Строка  425: "decoder.mid.block_2.norm2.bias": "decoder.mid_block.resnets.1.norm2.bias",
+Строка  426: "decoder.mid.block_2.norm2.weight": "decoder.mid_block.resnets.1.norm2.weight",
+Строка  427: "decoder.norm_out.bias": "decoder.conv_norm_out.bias",
+Строка  428: "decoder.norm_out.weight": "decoder.conv_norm_out.weight",
+Строка  429: "decoder.up.0.block.0.conv1.bias": "decoder.up_blocks.3.resnets.0.conv1.bias",
+Строка  430: "decoder.up.0.block.0.conv1.weight": "decoder.up_blocks.3.resnets.0.conv1.weight",
+Строка  431: "decoder.up.0.block.0.conv2.bias": "decoder.up_blocks.3.resnets.0.conv2.bias",
+Строка  432: "decoder.up.0.block.0.conv2.weight": "decoder.up_blocks.3.resnets.0.conv2.weight",
+Строка  433: "decoder.up.0.block.0.nin_shortcut.bias": "decoder.up_blocks.3.resnets.0.conv_shortcut.bias",
+Строка  434: "decoder.up.0.block.0.nin_shortcut.weight": "decoder.up_blocks.3.resnets.0.conv_shortcut.weight",
+Строка  435: "decoder.up.0.block.0.norm1.bias": "decoder.up_blocks.3.resnets.0.norm1.bias",
+Строка  436: "decoder.up.0.block.0.norm1.weight": "decoder.up_blocks.3.resnets.0.norm1.weight",
+Строка  437: "decoder.up.0.block.0.norm2.bias": "decoder.up_blocks.3.resnets.0.norm2.bias",
+Строка  438: "decoder.up.0.block.0.norm2.weight": "decoder.up_blocks.3.resnets.0.norm2.weight",
+Строка  439: "decoder.up.0.block.1.conv1.bias": "decoder.up_blocks.3.resnets.1.conv1.bias",
+Строка  440: "decoder.up.0.block.1.conv1.weight": "decoder.up_blocks.3.resnets.1.conv1.weight",
+Строка  441: "decoder.up.0.block.1.conv2.bias": "decoder.up_blocks.3.resnets.1.conv2.bias",
+Строка  442: "decoder.up.0.block.1.conv2.weight": "decoder.up_blocks.3.resnets.1.conv2.weight",
+Строка  443: "decoder.up.0.block.1.norm1.bias": "decoder.up_blocks.3.resnets.1.norm1.bias",
+Строка  444: "decoder.up.0.block.1.norm1.weight": "decoder.up_blocks.3.resnets.1.norm1.weight",
+Строка  445: "decoder.up.0.block.1.norm2.bias": "decoder.up_blocks.3.resnets.1.norm2.bias",
+Строка  446: "decoder.up.0.block.1.norm2.weight": "decoder.up_blocks.3.resnets.1.norm2.weight",
+Строка  447: "decoder.up.0.block.2.conv1.bias": "decoder.up_blocks.3.resnets.2.conv1.bias",
+Строка  448: "decoder.up.0.block.2.conv1.weight": "decoder.up_blocks.3.resnets.2.conv1.weight",
+Строка  449: "decoder.up.0.block.2.conv2.bias": "decoder.up_blocks.3.resnets.2.conv2.bias",
+Строка  450: "decoder.up.0.block.2.conv2.weight": "decoder.up_blocks.3.resnets.2.conv2.weight",
+Строка  451: "decoder.up.0.block.2.norm1.bias": "decoder.up_blocks.3.resnets.2.norm1.bias",
+Строка  452: "decoder.up.0.block.2.norm1.weight": "decoder.up_blocks.3.resnets.2.norm1.weight",
+Строка  453: "decoder.up.0.block.2.norm2.bias": "decoder.up_blocks.3.resnets.2.norm2.bias",
+Строка  454: "decoder.up.0.block.2.norm2.weight": "decoder.up_blocks.3.resnets.2.norm2.weight",
+Строка  455: "decoder.up.1.block.0.conv1.bias": "decoder.up_blocks.2.resnets.0.conv1.bias",
+Строка  456: "decoder.up.1.block.0.conv1.weight": "decoder.up_blocks.2.resnets.0.conv1.weight",
+Строка  457: "decoder.up.1.block.0.conv2.bias": "decoder.up_blocks.2.resnets.0.conv2.bias",
+Строка  458: "decoder.up.1.block.0.conv2.weight": "decoder.up_blocks.2.resnets.0.conv2.weight",
+Строка  459: "decoder.up.1.block.0.nin_shortcut.bias": "decoder.up_blocks.2.resnets.0.conv_shortcut.bias",
+Строка  460: "decoder.up.1.block.0.nin_shortcut.weight": "decoder.up_blocks.2.resnets.0.conv_shortcut.weight",
+Строка  461: "decoder.up.1.block.0.norm1.bias": "decoder.up_blocks.2.resnets.0.norm1.bias",
+Строка  462: "decoder.up.1.block.0.norm1.weight": "decoder.up_blocks.2.resnets.0.norm1.weight",
+Строка  463: "decoder.up.1.block.0.norm2.bias": "decoder.up_blocks.2.resnets.0.norm2.bias",
+Строка  464: "decoder.up.1.block.0.norm2.weight": "decoder.up_blocks.2.resnets.0.norm2.weight",
+Строка  465: "decoder.up.1.block.1.conv1.bias": "decoder.up_blocks.2.resnets.1.conv1.bias",
+Строка  466: "decoder.up.1.block.1.conv1.weight": "decoder.up_blocks.2.resnets.1.conv1.weight",
+Строка  467: "decoder.up.1.block.1.conv2.bias": "decoder.up_blocks.2.resnets.1.conv2.bias",
+Строка  468: "decoder.up.1.block.1.conv2.weight": "decoder.up_blocks.2.resnets.1.conv2.weight",
+Строка  469: "decoder.up.1.block.1.norm1.bias": "decoder.up_blocks.2.resnets.1.norm1.bias",
+Строка  470: "decoder.up.1.block.1.norm1.weight": "decoder.up_blocks.2.resnets.1.norm1.weight",
+Строка  471: "decoder.up.1.block.1.norm2.bias": "decoder.up_blocks.2.resnets.1.norm2.bias",
+Строка  472: "decoder.up.1.block.1.norm2.weight": "decoder.up_blocks.2.resnets.1.norm2.weight",
+Строка  473: "decoder.up.1.block.2.conv1.bias": "decoder.up_blocks.2.resnets.2.conv1.bias",
+Строка  474: "decoder.up.1.block.2.conv1.weight": "decoder.up_blocks.2.resnets.2.conv1.weight",
+Строка  475: "decoder.up.1.block.2.conv2.bias": "decoder.up_blocks.2.resnets.2.conv2.bias",
+Строка  476: "decoder.up.1.block.2.conv2.weight": "decoder.up_blocks.2.resnets.2.conv2.weight",
+Строка  477: "decoder.up.1.block.2.norm1.bias": "decoder.up_blocks.2.resnets.2.norm1.bias",
+Строка  478: "decoder.up.1.block.2.norm1.weight": "decoder.up_blocks.2.resnets.2.norm1.weight",
+Строка  479: "decoder.up.1.block.2.norm2.bias": "decoder.up_blocks.2.resnets.2.norm2.bias",
+Строка  480: "decoder.up.1.block.2.norm2.weight": "decoder.up_blocks.2.resnets.2.norm2.weight",
+Строка  481: "decoder.up.1.upsample.conv.bias": "decoder.up_blocks.2.upsamplers.0.conv.bias",
+Строка  482: "decoder.up.1.upsample.conv.weight": "decoder.up_blocks.2.upsamplers.0.conv.weight",
+Строка  483: "decoder.up.2.block.0.conv1.bias": "decoder.up_blocks.1.resnets.0.conv1.bias",
+Строка  484: "decoder.up.2.block.0.conv1.weight": "decoder.up_blocks.1.resnets.0.conv1.weight",
+Строка  485: "decoder.up.2.block.0.conv2.bias": "decoder.up_blocks.1.resnets.0.conv2.bias",
+Строка  486: "decoder.up.2.block.0.conv2.weight": "decoder.up_blocks.1.resnets.0.conv2.weight",
+Строка  487: "decoder.up.2.block.0.norm1.bias": "decoder.up_blocks.1.resnets.0.norm1.bias",
+Строка  488: "decoder.up.2.block.0.norm1.weight": "decoder.up_blocks.1.resnets.0.norm1.weight",
+Строка  489: "decoder.up.2.block.0.norm2.bias": "decoder.up_blocks.1.resnets.0.norm2.bias",
+Строка  490: "decoder.up.2.block.0.norm2.weight": "decoder.up_blocks.1.resnets.0.norm2.weight",
+Строка  491: "decoder.up.2.block.1.conv1.bias": "decoder.up_blocks.1.resnets.1.conv1.bias",
+Строка  492: "decoder.up.2.block.1.conv1.weight": "decoder.up_blocks.1.resnets.1.conv1.weight",
+Строка  493: "decoder.up.2.block.1.conv2.bias": "decoder.up_blocks.1.resnets.1.conv2.bias",
+Строка  494: "decoder.up.2.block.1.conv2.weight": "decoder.up_blocks.1.resnets.1.conv2.weight",
+Строка  495: "decoder.up.2.block.1.norm1.bias": "decoder.up_blocks.1.resnets.1.norm1.bias",
+Строка  496: "decoder.up.2.block.1.norm1.weight": "decoder.up_blocks.1.resnets.1.norm1.weight",
+Строка  497: "decoder.up.2.block.1.norm2.bias": "decoder.up_blocks.1.resnets.1.norm2.bias",
+Строка  498: "decoder.up.2.block.1.norm2.weight": "decoder.up_blocks.1.resnets.1.norm2.weight",
+Строка  499: "decoder.up.2.block.2.conv1.bias": "decoder.up_blocks.1.resnets.2.conv1.bias",
+Строка  500: "decoder.up.2.block.2.conv1.weight": "decoder.up_blocks.1.resnets.2.conv1.weight",
+Строка  501: "decoder.up.2.block.2.conv2.bias": "decoder.up_blocks.1.resnets.2.conv2.bias",
+Строка  502: "decoder.up.2.block.2.conv2.weight": "decoder.up_blocks.1.resnets.2.conv2.weight",
+Строка  503: "decoder.up.2.block.2.norm1.bias": "decoder.up_blocks.1.resnets.2.norm1.bias",
+Строка  504: "decoder.up.2.block.2.norm1.weight": "decoder.up_blocks.1.resnets.2.norm1.weight",
+Строка  505: "decoder.up.2.block.2.norm2.bias": "decoder.up_blocks.1.resnets.2.norm2.bias",
+Строка  506: "decoder.up.2.block.2.norm2.weight": "decoder.up_blocks.1.resnets.2.norm2.weight",
+Строка  507: "decoder.up.2.upsample.conv.bias": "decoder.up_blocks.1.upsamplers.0.conv.bias",
+Строка  508: "decoder.up.2.upsample.conv.weight": "decoder.up_blocks.1.upsamplers.0.conv.weight",
+Строка  509: "decoder.up.3.block.0.conv1.bias": "decoder.up_blocks.0.resnets.0.conv1.bias",
+Строка  510: "decoder.up.3.block.0.conv1.weight": "decoder.up_blocks.0.resnets.0.conv1.weight",
+Строка  511: "decoder.up.3.block.0.conv2.bias": "decoder.up_blocks.0.resnets.0.conv2.bias",
+Строка  512: "decoder.up.3.block.0.conv2.weight": "decoder.up_blocks.0.resnets.0.conv2.weight",
+Строка  513: "decoder.up.3.block.0.norm1.bias": "decoder.up_blocks.0.resnets.0.norm1.bias",
+Строка  514: "decoder.up.3.block.0.norm1.weight": "decoder.up_blocks.0.resnets.0.norm1.weight",
+Строка  515: "decoder.up.3.block.0.norm2.bias": "decoder.up_blocks.0.resnets.0.norm2.bias",
+Строка  516: "decoder.up.3.block.0.norm2.weight": "decoder.up_blocks.0.resnets.0.norm2.weight",
+Строка  517: "decoder.up.3.block.1.conv1.bias": "decoder.up_blocks.0.resnets.1.conv1.bias",
+Строка  518: "decoder.up.3.block.1.conv1.weight": "decoder.up_blocks.0.resnets.1.conv1.weight",
+Строка  519: "decoder.up.3.block.1.conv2.bias": "decoder.up_blocks.0.resnets.1.conv2.bias",
+Строка  520: "decoder.up.3.block.1.conv2.weight": "decoder.up_blocks.0.resnets.1.conv2.weight",
+Строка  521: "decoder.up.3.block.1.norm1.bias": "decoder.up_blocks.0.resnets.1.norm1.bias",
+Строка  522: "decoder.up.3.block.1.norm1.weight": "decoder.up_blocks.0.resnets.1.norm1.weight",
+Строка  523: "decoder.up.3.block.1.norm2.bias": "decoder.up_blocks.0.resnets.1.norm2.bias",
+Строка  524: "decoder.up.3.block.1.norm2.weight": "decoder.up_blocks.0.resnets.1.norm2.weight",
+Строка  525: "decoder.up.3.block.2.conv1.bias": "decoder.up_blocks.0.resnets.2.conv1.bias",
+Строка  526: "decoder.up.3.block.2.conv1.weight": "decoder.up_blocks.0.resnets.2.conv1.weight",
+Строка  527: "decoder.up.3.block.2.conv2.bias": "decoder.up_blocks.0.resnets.2.conv2.bias",
+Строка  528: "decoder.up.3.block.2.conv2.weight": "decoder.up_blocks.0.resnets.2.conv2.weight",
+Строка  529: "decoder.up.3.block.2.norm1.bias": "decoder.up_blocks.0.resnets.2.norm1.bias",
+Строка  530: "decoder.up.3.block.2.norm1.weight": "decoder.up_blocks.0.resnets.2.norm1.weight",
+Строка  531: "decoder.up.3.block.2.norm2.bias": "decoder.up_blocks.0.resnets.2.norm2.bias",
+Строка  532: "decoder.up.3.block.2.norm2.weight": "decoder.up_blocks.0.resnets.2.norm2.weight",
+Строка  533: "decoder.up.3.upsample.conv.bias": "decoder.up_blocks.0.upsamplers.0.conv.bias",
+Строка  534: "decoder.up.3.upsample.conv.weight": "decoder.up_blocks.0.upsamplers.0.conv.weight",
+Строка  641: "post_quant_conv.bias": "post_quant_conv.bias",
+Строка  642: "post_quant_conv.weight": "post_quant_conv.weight",
+Строка  648: def get_diffusers_vae_key_from_ldm_key(target_ldm_key, i=None):
+Строка  649: for ldm_key, diffusers_key in vae_ldm_to_diffusers_dict.items():
+Строка  656: if ldm_key in vae_ldm_to_diffusers_dict:
+Строка  657: return vae_ldm_to_diffusers_dict[ldm_key]
+Строка  661: # def get_ldm_vae_key_from_diffusers_key(target_diffusers_key):
+Строка  662: #     for ldm_key, diffusers_key in vae_ldm_to_diffusers_dict.items():
+Строка  667: def get_ldm_vae_key_from_diffusers_key(target_diffusers_key):
+Строка  668: for ldm_key, diffusers_key in vae_ldm_to_diffusers_dict.items():
+Строка  680: vae_keys_squished_on_diffusers = [
+Строка  681: "decoder.mid_block.attentions.0.to_k.weight",
+Строка  682: "decoder.mid_block.attentions.0.to_out.0.weight",
+Строка  683: "decoder.mid_block.attentions.0.to_q.weight",
+Строка  684: "decoder.mid_block.attentions.0.to_v.weight",
+Строка  691: def convert_diffusers_back_to_ldm(diffusers_vae):
+Строка  693: diffusers_state_dict = diffusers_vae.state_dict()
+Строка  696: if key in vae_keys_squished_on_diffusers:
+Строка  700: ldm_key = get_ldm_vae_key_from_diffusers_key(key)
+Строка  709: def convert_ldm_vae_checkpoint(checkpoint, config):
+Строка  711: # extract state dict for VAE
+Строка  712: vae_state_dict = {}
+Строка  713: vae_key = "first_stage_model."
+Строка  716: if key.startswith(vae_key):
+Строка  717: vae_state_dict[key.replace(vae_key, "")] = checkpoint.get(key)
+Строка  718: # if len(vae_state_dict) == 0:
+Строка  719: #   # 渡されたcheckpointは.ckptから読み込んだcheckpointではなくvaeのstate_dict
+Строка  720: #   vae_state_dict = checkpoint
+Строка  724: # for key in list(vae_state_dict.keys()):
+Строка  725: #     diffusers_key = get_diffusers_vae_key_from_ldm_key(key)
+Строка  727: #         new_checkpoint[diffusers_key] = vae_state_dict[key]
+Строка  729: new_checkpoint["encoder.conv_in.weight"] = vae_state_dict["encoder.conv_in.weight"]
+Строка  730: new_checkpoint["encoder.conv_in.bias"] = vae_state_dict["encoder.conv_in.bias"]
+Строка  731: new_checkpoint["encoder.conv_out.weight"] = vae_state_dict["encoder.conv_out.weight"]
+Строка  732: new_checkpoint["encoder.conv_out.bias"] = vae_state_dict["encoder.conv_out.bias"]
+Строка  733: new_checkpoint["encoder.conv_norm_out.weight"] = vae_state_dict["encoder.norm_out.weight"]
+Строка  734: new_checkpoint["encoder.conv_norm_out.bias"] = vae_state_dict["encoder.norm_out.bias"]
+Строка  736: new_checkpoint["decoder.conv_in.weight"] = vae_state_dict["decoder.conv_in.weight"]
+Строка  737: new_checkpoint["decoder.conv_in.bias"] = vae_state_dict["decoder.conv_in.bias"]
+Строка  738: new_checkpoint["decoder.conv_out.weight"] = vae_state_dict["decoder.conv_out.weight"]
+Строка  739: new_checkpoint["decoder.conv_out.bias"] = vae_state_dict["decoder.conv_out.bias"]
+Строка  740: new_checkpoint["decoder.conv_norm_out.weight"] = vae_state_dict["decoder.norm_out.weight"]
+Строка  741: new_checkpoint["decoder.conv_norm_out.bias"] = vae_state_dict["decoder.norm_out.bias"]
+Строка  743: new_checkpoint["quant_conv.weight"] = vae_state_dict["quant_conv.weight"]
+Строка  744: new_checkpoint["quant_conv.bias"] = vae_state_dict["quant_conv.bias"]
+Строка  745: new_checkpoint["post_quant_conv.weight"] = vae_state_dict["post_quant_conv.weight"]
+Строка  746: new_checkpoint["post_quant_conv.bias"] = vae_state_dict["post_quant_conv.bias"]
+Строка  749: num_down_blocks = len({".".join(layer.split(".")[:3]) for layer in vae_state_dict if "encoder.down" in layer})
+Строка  750: down_blocks = {layer_id: [key for key in vae_state_dict if f"down.{layer_id}" in key] for layer_id in
+Строка  753: # Retrieves the keys for the decoder up blocks only
+Строка  754: num_up_blocks = len({".".join(layer.split(".")[:3]) for layer in vae_state_dict if "decoder.up" in layer})
+Строка  755: up_blocks = {layer_id: [key for key in vae_state_dict if f"up.{layer_id}" in key] for layer_id in
+Строка  761: if f"encoder.down.{i}.downsample.conv.weight" in vae_state_dict:
+Строка  762: new_checkpoint[f"encoder.down_blocks.{i}.downsamplers.0.conv.weight"] = vae_state_dict.pop(
+Строка  766: new_checkpoint[f"encoder.down_blocks.{i}.downsamplers.0.conv.bias"] = vae_state_dict.pop(
+Строка  771: paths = renew_vae_resnet_paths(resnets)
+Строка  773: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  775: mid_resnets = [key for key in vae_state_dict if "encoder.mid.block" in key]
+Строка  780: paths = renew_vae_resnet_paths(resnets)
+Строка  782: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  784: mid_attentions = [key for key in vae_state_dict if "encoder.mid.attn" in key]
+Строка  785: paths = renew_vae_attention_paths(mid_attentions)
+Строка  787: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  795: if f"decoder.up.{block_id}.upsample.conv.weight" in vae_state_dict:
+Строка  796: new_checkpoint[f"decoder.up_blocks.{i}.upsamplers.0.conv.weight"] = vae_state_dict[
+Строка  797: f"decoder.up.{block_id}.upsample.conv.weight"
+Строка  799: mapping[f"decoder.up.{block_id}.upsample.conv.weight"] = f"decoder.up_blocks.{i}.upsamplers.0.conv.weight"
+Строка  800: new_checkpoint[f"decoder.up_blocks.{i}.upsamplers.0.conv.bias"] = vae_state_dict[
+Строка  801: f"decoder.up.{block_id}.upsample.conv.bias"
+Строка  803: mapping[f"decoder.up.{block_id}.upsample.conv.bias"] = f"decoder.up_blocks.{i}.upsamplers.0.conv.bias"
+Строка  805: paths = renew_vae_resnet_paths(resnets)
+Строка  807: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  809: mid_resnets = [key for key in vae_state_dict if "decoder.mid.block" in key]
+Строка  812: resnets = [key for key in mid_resnets if f"decoder.mid.block_{i}" in key]
+Строка  814: paths = renew_vae_resnet_paths(resnets)
+Строка  816: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  818: mid_attentions = [key for key in vae_state_dict if "decoder.mid.attn" in key]
+Строка  819: paths = renew_vae_attention_paths(mid_attentions)
+Строка  821: assign_to_checkpoint(paths, new_checkpoint, vae_state_dict, additional_replacements=[meta_path], config=config)
+Строка  832: block_out_channels = [UNET_PARAMS_MODEL_CHANNELS * mult for mult in UNET_PARAMS_CHANNEL_MULT]
+Строка  836: for i in range(len(block_out_channels)):
+Строка  839: if i != len(block_out_channels) - 1:
+Строка  843: for i in range(len(block_out_channels)):
+Строка  850: in_channels=UNET_PARAMS_IN_CHANNELS,
+Строка  851: out_channels=UNET_PARAMS_OUT_CHANNELS,
+Строка  854: block_out_channels=tuple(block_out_channels),
+Строка  866: def create_vae_diffusers_config():
+Строка  870: # vae_params = original_config.model.params.first_stage_config.params.ddconfig
+Строка  872: block_out_channels = [VAE_PARAMS_CH * mult for mult in VAE_PARAMS_CH_MULT]
+Строка  873: down_block_types = ["DownEncoderBlock2D"] * len(block_out_channels)
+Строка  874: up_block_types = ["UpDecoderBlock2D"] * len(block_out_channels)
+Строка  877: sample_size=VAE_PARAMS_RESOLUTION,
+Строка  878: in_channels=VAE_PARAMS_IN_CHANNELS,
+Строка  879: out_channels=VAE_PARAMS_OUT_CH,
+Строка  882: block_out_channels=tuple(block_out_channels),
+Строка  883: latent_channels=VAE_PARAMS_Z_CHANNELS,
+Строка  884: layers_per_block=VAE_PARAMS_NUM_RES_BLOCKS,
+Строка 1091: # VAE Conversion #
+Строка 1100: def convert_vae_state_dict(vae_state_dict):
+Строка 1101: vae_conversion_map = [
+Строка 1113: vae_conversion_map.append((sd_down_prefix, hf_down_prefix))
+Строка 1118: vae_conversion_map.append((sd_downsample_prefix, hf_downsample_prefix))
+Строка 1122: vae_conversion_map.append((sd_upsample_prefix, hf_upsample_prefix))
+Строка 1127: hf_up_prefix = f"decoder.up_blocks.{i}.resnets.{j}."
+Строка 1128: sd_up_prefix = f"decoder.up.{3 - i}.block.{j}."
+Строка 1129: vae_conversion_map.append((sd_up_prefix, hf_up_prefix))
+Строка 1131: # this part accounts for mid blocks in both the encoder and the decoder
+Строка 1135: vae_conversion_map.append((sd_mid_res_prefix, hf_mid_res_prefix))
+Строка 1137: vae_conversion_map_attn = [
+Строка 1146: mapping = {k: k for k in vae_state_dict.keys()}
+Строка 1148: for sd_part, hf_part in vae_conversion_map:
+Строка 1153: for sd_part, hf_part in vae_conversion_map_attn:
+Строка 1156: new_state_dict = {v: vae_state_dict[k] for k, v in mapping.items()}
+Строка 1222: # Convert the VAE model.
+Строка 1223: vae_config = create_vae_diffusers_config()
+Строка 1224: converted_vae_checkpoint = convert_ldm_vae_checkpoint(state_dict, vae_config)
+Строка 1226: vae = AutoencoderKL(**vae_config).to(device)
+Строка 1227: info = vae.load_state_dict(converted_vae_checkpoint)
+Строка 1228: print("loading vae:", info)
+Строка 1270: return text_model, vae, unet
+Строка 1345: vae=None):
+Строка 1347: # epoch/stepを参照する。またVAEがメモリ上にないときなど、もう一度VAEを含めて読み込む
+Строка 1358: assert vae is not None, "VAE is required to save a checkpoint without a given checkpoint"
+Строка 1384: # Convert the VAE
+Строка 1385: if vae is not None:
+Строка 1386: vae_dict = convert_vae_state_dict(vae.state_dict())
+Строка 1387: update_sd("first_stage_model.", vae_dict)
+Строка 1414: def save_diffusers_checkpoint(v2, output_dir, text_encoder, unet, pretrained_model_name_or_path, vae=None,
+Строка 1425: if vae is None:
+Строка 1426: vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae")
+Строка 1431: vae=vae,
+Строка 1441: VAE_PREFIX = "first_stage_model."
+Строка 1444: def load_vae(vae_id, dtype):
+Строка 1445: print(f"load VAE: {vae_id}")
+Строка 1446: if os.path.isdir(vae_id) or not os.path.isfile(vae_id):
+Строка 1449: vae = AutoencoderKL.from_pretrained(vae_id, subfolder=None, torch_dtype=dtype)
+Строка 1451: print(f"exception occurs in loading vae: {e}")
+Строка 1452: print("retry with subfolder='vae'")
+Строка 1453: vae = AutoencoderKL.from_pretrained(vae_id, subfolder="vae", torch_dtype=dtype)
+Строка 1454: return vae
+Строка 1457: vae_config = create_vae_diffusers_config()
+Строка 1459: if vae_id.endswith(".bin"):
+Строка 1460: # SD 1.5 VAE on Huggingface
+Строка 1461: converted_vae_checkpoint = torch.load(vae_id, map_location="cpu")
+Строка 1464: vae_model = load_file(vae_id, "cpu") if is_safetensors(vae_id) else torch.load(vae_id, map_location="cpu")
+Строка 1465: vae_sd = vae_model["state_dict"] if "state_dict" in vae_model else vae_model
+Строка 1467: # vae only or full model
+Строка 1469: for vae_key in vae_sd:
+Строка 1470: if vae_key.startswith(VAE_PREFIX):
+Строка 1475: for key, value in vae_sd.items():
+Строка 1476: sd[VAE_PREFIX + key] = value
+Строка 1477: vae_sd = sd
+Строка 1480: # Convert the VAE model.
+Строка 1481: converted_vae_checkpoint = convert_ldm_vae_checkpoint(vae_sd, vae_config)
+Строка 1483: vae = AutoencoderKL(**vae_config)
+Строка 1484: vae.load_state_dict(converted_vae_checkpoint)
+Строка 1485: return vae
+
+📁 ФАЙЛ: toolkit\layers.py
+------------------------------------------------------------
+Строка    9: def __init__(self, in_channels, kernel_size=2, dtype=torch.float32, device=None):
+Строка   14: self.in_channels = in_channels
+Строка   19: # tensorflow kernel is  (height, width, in_channels, out_channels)
+Строка   20: # pytorch kernel is     (out_channels, in_channels, height, width)
+Строка   22: channels = self.in_channels
+Строка   23: kernel_shape = [channels, channels, kernel_size, kernel_size]
+Строка   27: for i in range(0, channels):
+
+📁 ФАЙЛ: toolkit\llvae.py
+------------------------------------------------------------
+Строка    7: class LosslessLatentDecoder(nn.Module):
+Строка    8: def __init__(self, in_channels, latent_depth, dtype=torch.float32, trainable=False):
+Строка    9: super(LosslessLatentDecoder, self).__init__()
+Строка   12: self.in_channels = in_channels
+Строка   13: self.out_channels = int(in_channels // (latent_depth * latent_depth))
+Строка   14: numpy_kernel = self.build_kernel(in_channels, latent_depth)
+Строка   21: def build_kernel(self, in_channels, latent_depth):
+Строка   23: # tensorflow kernel is  (height, width, out_channels, in_channels)
+Строка   24: # pytorch kernel is     (in_channels, out_channels, height, width)
+Строка   25: out_channels = self.out_channels
+Строка   27: # kernel_shape = [kernel_filter_size, kernel_filter_size, out_channels, in_channels] # tensorflow
+Строка   28: kernel_shape = [in_channels, out_channels, latent_depth, latent_depth]  # pytorch
+Строка   32: for c in range(0, out_channels):
+Строка   51: def __init__(self, in_channels, latent_depth, dtype=torch.float32, trainable=False):
+Строка   55: self.in_channels = in_channels
+Строка   56: self.out_channels = int(in_channels * (latent_depth * latent_depth))
+Строка   57: numpy_kernel = self.build_kernel(in_channels, latent_depth)
+Строка   65: def build_kernel(self, in_channels, latent_depth):
+Строка   67: # tensorflow kernel is  (height, width, in_channels, out_channels)
+Строка   68: # pytorch kernel is     (out_channels, in_channels, height, width)
+Строка   69: out_channels = self.out_channels
+Строка   71: # kernel_shape = [latent_depth, latent_depth, in_channels, out_channels] # tensorflow
+Строка   72: kernel_shape = [out_channels, in_channels, latent_depth, latent_depth]  # pytorch
+Строка   76: for c in range(0, in_channels):
+Строка   92: class LosslessLatentVAE(nn.Module):
+Строка   93: def __init__(self, in_channels, latent_depth, dtype=torch.float32, trainable=False):
+Строка   94: super(LosslessLatentVAE, self).__init__()
+Строка   96: self.in_channels = in_channels
+Строка   97: self.encoder = LosslessLatentEncoder(in_channels, latent_depth, dtype=dtype, trainable=trainable)
+Строка   98: encoder_out_channels = self.encoder.out_channels
+Строка   99: self.decoder = LosslessLatentDecoder(encoder_out_channels, latent_depth, dtype=dtype, trainable=trainable)
+Строка  103: out = self.latent_decoder(latent)
+Строка  109: def decode(self, x):
+Строка  110: return self.decoder(x)
+Строка  123: output_path = os.path.join(user_path, "Pictures/sample_2_512_llvae.png")
+Строка  128: vae = LosslessLatentVAE(in_channels=3, latent_depth=8, dtype=dtype).to(device=device, dtype=dtype)
+Строка  129: latent = vae.encode(img_tensor)
+Строка  131: out_tensor = vae.decode(latent)
+
+📁 ФАЙЛ: toolkit\lora_special.py
+------------------------------------------------------------
+Строка   82: in_dim = org_module.in_channels
+Строка   83: out_dim = org_module.out_channels
+Строка  713: # we are going to retrain the main in out layers for VAE change usually
+
+📁 ФАЙЛ: toolkit\lorm.py
+------------------------------------------------------------
+Строка   56: in_channels: int,
+Строка   57: lorm_channels: int,
+Строка   58: out_channels: int,
+Строка   70: self.in_channels = in_channels
+Строка   71: self.lorm_channels = lorm_channels
+Строка   72: self.out_channels = out_channels
+Строка   81: in_channels=in_channels,
+Строка   82: out_channels=lorm_channels,
+Строка   98: in_channels=lorm_channels,
+Строка   99: out_channels=out_channels,
+Строка  417: in_channels=down_weight.shape[1],
+Строка  418: lorm_channels=lora_dim,
+Строка  419: out_channels=up_weight.shape[0],
+
+📁 ФАЙЛ: toolkit\losses.py
+------------------------------------------------------------
+Строка    2: from .llvae import LosslessLatentEncoder
+Строка   80: self.llvae_encoder = LosslessLatentEncoder(3, pattern_size, dtype=dtype)
+Строка   83: pred_latents = self.llvae_encoder(pred)
+Строка   84: target_latents = self.llvae_encoder(target)
+
+📁 ФАЙЛ: toolkit\lycoris_special.py
+------------------------------------------------------------
+Строка   52: in_dim = org_module.in_channels
+Строка   56: out_dim = org_module.out_channels
+Строка   72: in_dim = org_module.num_channels
+Строка   73: out_dim = org_module.num_channels
+
+📁 ФАЙЛ: toolkit\metadata.py
+------------------------------------------------------------
+Строка   76: except json.decoder.JSONDecodeError:
+
+📁 ФАЙЛ: toolkit\models\FakeVAE.py
+------------------------------------------------------------
+Строка    7: from diffusers.models.autoencoders.vae import DecoderOutput
+Строка   11: in_channels = 3
+Строка   12: out_channels = 3
+Строка   15: block_out_channels = (1,)
+Строка   16: latent_channels = 3  # usually 4
+Строка   27: class FakeVAE(nn.Module):
+Строка   84: def _decode(
+Строка   86: ) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка   92: return DecoderOutput(sample=dec)
+Строка   95: def decode(
+Строка   97: ) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка   98: decoded = self._decode(z).sample
+Строка  101: return (decoded,)
+Строка  103: return DecoderOutput(sample=decoded)
+Строка  129: ) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка  135: return DecoderOutput(sample=dec)
+
+📁 ФАЙЛ: toolkit\models\auraflow.py
+------------------------------------------------------------
+Строка   14: in_channels=3,
+Строка   23: self.proj = nn.Linear(patch_size * patch_size * in_channels, embed_dim)
+Строка   31: batch_size, num_channels, height, width = latent.size()
+Строка   34: num_channels,
+Строка   90: batch_size, num_channels, height, width = latent.size()
+Строка   93: latent_size = height * width * num_channels / 16  # todo check where 16 comes from?
+Строка  107: batch_size, num_channels, height, width = latent.size()
+Строка  111: num_channels,
+
+📁 ФАЙЛ: toolkit\models\autoencoder_tiny_with_pooled_exits.py
+------------------------------------------------------------
+Строка    3: from diffusers.models.autoencoders.vae import (
+Строка    7: DecoderOutput
+Строка   14: class DecoderTinyWithPooledExits(nn.Module):
+Строка   17: in_channels: int,
+Строка   18: out_channels: int,
+Строка   20: block_out_channels: Tuple[int, ...],
+Строка   28: l = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding=1)
+Строка   40: num_channels = block_out_channels[i]
+Строка   43: l = AutoencoderTinyBlock(num_channels, num_channels, act_fn)
+Строка   54: conv_out_channel = num_channels if not is_final_block else out_channels
+Строка   56: num_channels,
+Строка   68: out_channels=3,
+Строка   82: r"""The forward method of the `DecoderTiny` class."""
+Строка  115: in_channels: int = 3,
+Строка  116: out_channels: int = 3,
+Строка  117: encoder_block_out_channels: Tuple[int, ...] = (64, 64, 64, 64),
+Строка  118: decoder_block_out_channels: Tuple[int, ...] = (64, 64, 64, 64),
+Строка  121: latent_channels: int = 4,
+Строка  124: num_decoder_blocks: Tuple[int, ...] = (3, 3, 3, 1),
+Строка  133: if len(encoder_block_out_channels) != len(num_encoder_blocks):
+Строка  135: "`encoder_block_out_channels` should have the same length as `num_encoder_blocks`."
+Строка  137: if len(decoder_block_out_channels) != len(num_decoder_blocks):
+Строка  139: "`decoder_block_out_channels` should have the same length as `num_decoder_blocks`."
+Строка  143: in_channels=in_channels,
+Строка  144: out_channels=latent_channels,
+Строка  146: block_out_channels=encoder_block_out_channels,
+Строка  150: self.decoder = DecoderTinyWithPooledExits(
+Строка  151: in_channels=latent_channels,
+Строка  152: out_channels=out_channels,
+Строка  153: num_blocks=num_decoder_blocks,
+Строка  154: block_out_channels=decoder_block_out_channels,
+Строка  167: # only relevant if vae tiling is enabled
+Строка  168: self.spatial_scale_factor = 2**out_channels
+Строка  175: self.register_to_config(block_out_channels=decoder_block_out_channels)
+Строка  179: def decode_with_pooled_exits(
+Строка  181: ) -> Union[DecoderOutput, Tuple[torch.Tensor]]:
+Строка  182: output, pooled_outputs = self.decoder(x, pooled_outputs=True)
+Строка  187: return DecoderOutput(sample=output)
+
+📁 ФАЙЛ: toolkit\models\base_model.py
+------------------------------------------------------------
+Строка   53: SD_PREFIX_VAE = "vae"
+Строка   94: UNET_IN_CHANNELS = 4  # Stable Diffusion の in_channels は 4 で固定。XLも同じ。
+Строка   95: # VAE_SCALE_FACTOR = 8  # 2 ** (len(vae.config.block_out_channels) - 1) = 8
+Строка  118: self.vae_device_torch = torch.device(device)
+Строка  119: self.vae_torch_dtype = get_torch_dtype(model_config.vae_dtype)
+Строка  131: self.vae: Union[None, 'AutoencoderKL']
+Строка  267: if self.vae is None:
+Строка  270: divisibility = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка  272: # if we have a custom vae, it might not have this
+Строка  722: VAE_SCALE_FACTOR = 2 ** (
+Строка  723: len(self.vae.config['block_out_channels']) - 1)
+Строка  729: height = pixel_height // VAE_SCALE_FACTOR
+Строка  731: width = pixel_width // VAE_SCALE_FACTOR
+Строка  733: num_channels = self.unet_unwrapped.config['in_channels']
+Строка  735: # has 64 channels in for some reason
+Строка  736: num_channels = 16
+Строка  740: num_channels,
+Строка 1099: device = self.vae_device_torch
+Строка 1101: dtype = self.vae_torch_dtype
+Строка 1104: # Move to vae to device if on cpu
+Строка 1105: if self.vae.device == torch.device("cpu"):
+Строка 1106: self.vae.to(device)
+Строка 1107: self.vae.eval()
+Строка 1108: self.vae.requires_grad_(False)
+Строка 1112: VAE_SCALE_FACTOR = 2 ** (
+Строка 1113: len(self.vae.config['block_out_channels']) - 1)
+Строка 1118: if image.shape[1] % VAE_SCALE_FACTOR != 0 or image.shape[2] % VAE_SCALE_FACTOR != 0:
+Строка 1119: image_list[i] = Resize((image.shape[1] // VAE_SCALE_FACTOR * VAE_SCALE_FACTOR,
+Строка 1120: image.shape[2] // VAE_SCALE_FACTOR * VAE_SCALE_FACTOR))(image)
+Строка 1123: if isinstance(self.vae, AutoencoderTiny):
+Строка 1124: latents = self.vae.encode(images, return_dict=False)[0]
+Строка 1126: latents = self.vae.encode(images).latent_dist.sample()
+Строка 1127: shift = self.vae.config['shift_factor'] if self.vae.config['shift_factor'] is not None else 0
+Строка 1131: latents = self.vae.config['scaling_factor'] * (latents - shift)
+Строка 1140: def decode_latents(
+Строка 1151: # Move to vae to device if on cpu
+Строка 1152: if self.vae.device == torch.device('cpu'):
+Строка 1153: self.vae.to(self.device)
+Строка 1156: latents / self.vae.config['scaling_factor']) + self.vae.config['shift_factor']
+Строка 1157: images = self.vae.decode(latents).sample
+Строка 1212: def state_dict(self, vae=True, text_encoder=True, unet=True):
+Строка 1214: if vae:
+Строка 1215: for k, v in self.vae.state_dict().items():
+Строка 1217: f"{SD_PREFIX_VAE}") else f"{SD_PREFIX_VAE}_{k}"
+Строка 1238: def named_parameters(self, vae=True, text_encoder=True, unet=True, refiner=False, state_dict_keys=False) -> \
+Строка 1242: if vae:
+Строка 1243: for name, param in self.vae.named_parameters(recurse=True, prefix=f"{SD_PREFIX_VAE}"):
+Строка 1331: vae=False, unet=unet, text_encoder=False, state_dict_keys=True)
+Строка 1344: vae=False, unet=False, text_encoder=text_encoder, state_dict_keys=True)
+Строка 1358: named_params = self.named_parameters(vae=False, unet=False, text_encoder=False, refiner=True,
+Строка 1381: 'vae': {
+Строка 1382: 'training': self.vae.training,
+Строка 1383: 'device': self.vae.device,
+Строка 1453: if state['vae']['training']:
+Строка 1454: self.vae.train()
+Строка 1456: self.vae.eval()
+Строка 1457: self.vae.to(state['vae']['device'])
+Строка 1521: active_modules = ['vae']
+Строка 1525: active_modules = ['vae', 'unet',
+Строка 1529: # vae
+Строка 1530: state['vae'] = {
+Строка 1531: 'training': 'vae' in training_modules,
+Строка 1532: 'device': self.vae_device_torch if 'vae' in active_modules else 'cpu',
+Строка 1533: 'requires_grad': 'vae' in training_modules,
+
+📁 ФАЙЛ: toolkit\models\block.py
+------------------------------------------------------------
+Строка  371: gc (int): Channels for each growth (num_grow_ch: growth channel,
+Строка  372: i.e. intermediate channels).
+
+📁 ФАЙЛ: toolkit\models\clip_pre_processor.py
+------------------------------------------------------------
+Строка    8: in_channels: int,
+Строка    9: out_channels: int,
+Строка   12: self.in_channels = in_channels
+Строка   13: self.out_channels = out_channels
+Строка   15: nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+Строка   19: nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+Строка   24: nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+Строка   44: in_channels = 3
+Строка   50: subpixel_channels = in_channels * downscale_factor ** 2  # 3 * 16 ** 2 = 768
+Строка   51: channels = subpixel_channels
+Строка   60: current_channels = channels
+Строка   65: out_channels = in_channels * output_downscale ** 2
+Строка   66: # out_channels = current_channels // 2
+Строка   67: self.upsample_blocks.append(UpsampleBlock(current_channels, out_channels))
+Строка   68: current_channels = out_channels
+Строка   76: current_channels,
+Строка   77: out_channels=3,
+Строка   97: subpixel_channels,
+Строка   98: channels,
+
+📁 ФАЙЛ: toolkit\models\cogview4.py
+------------------------------------------------------------
+Строка  181: self.print_and_status_update("Loading VAE")
+Строка  182: vae = AutoencoderKL.from_pretrained(
+Строка  183: base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  191: vae=vae,
+Строка  212: self.vae = vae
+Строка  219: vae=self.vae,
+Строка  323: # Decode latents to image space
+Строка  324: images = self.decode_latents(
+Строка  336: # Upsample back to original resolution to match expected VAE input dimensions
+
+📁 ФАЙЛ: toolkit\models\control_lora_adapter.py
+------------------------------------------------------------
+Строка   18: # the x_embedder has a full rank lora to handle the additional channels
+Строка   33: in_channels=64,
+Строка   34: out_channels=3072
+Строка   38: init = torch.randn(out_channels, in_channels, device=orig_layer.weight.device, dtype=orig_layer.weight.dtype) * 0.01
+Строка   53: num_adapter_in_channels = model.x_embedder.in_features * num_control_images
+Строка   58: # so we need to add 4 to the input channels
+Строка   59: num_adapter_in_channels += 4
+Строка   65: in_channels=num_adapter_in_channels,
+Строка   66: out_channels=x_embedder.out_features,
+Строка   74: model.config.in_channels = model.config.in_channels * (num_control_images + 1)
+Строка   75: model.config["in_channels"] = model.config.in_channels
+
+📁 ФАЙЛ: toolkit\models\diffusion_feature_extraction.py
+------------------------------------------------------------
+Строка   20: def __init__(self, in_channels, out_channels):
+Строка   22: self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+Строка   23: self.norm1 = nn.GroupNorm(8, out_channels)
+Строка   24: self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+Строка   25: self.norm2 = nn.GroupNorm(8, out_channels)
+Строка   26: self.skip = nn.Conv2d(in_channels, out_channels,
+Строка   27: 1) if in_channels != out_channels else nn.Identity()
+Строка   41: def __init__(self, in_channels=32):
+Строка   47: nn.Conv2d(in_channels, 64, 3, padding=1),
+Строка   59: nn.Conv2d(in_channels, 128, 3, padding=1),
+Строка   69: nn.Conv2d(in_channels, 256, 3, padding=1),
+Строка   77: nn.Conv2d(in_channels, 512, 3, padding=1),
+Строка   85: nn.Conv2d(in_channels, 512, 3, padding=1),
+Строка  129: def __init__(self, channels):
+Строка  131: self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+Строка  132: self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+Строка  134: self.proj = nn.Conv2d(channels, channels, 1)
+Строка  147: def __init__(self, in_channels=16, out_channels=512):
+Строка  151: self.conv_in = nn.Conv2d(in_channels, 512, 1)
+Строка  153: self.conv_out = nn.Conv2d(512, out_channels, 1)
+Строка  164: def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None):
+Строка  167: if vae is None:
+Строка  168: vae = AutoencoderTiny.from_pretrained(
+Строка  170: self.vae = vae
+Строка  191: device = self.vae.device
+Строка  218: device = self.vae.device
+Строка  263: device = self.vae.device
+Строка  290: latents = stepped_latents.to(self.vae.device, dtype=self.vae.dtype)
+Строка  292: scaling_factor = self.vae.config.scaling_factor if hasattr(self.vae.config, 'scaling_factor') else 1.0
+Строка  293: shift_factor = self.vae.config.shift_factor if hasattr(self.vae.config, 'shift_factor') else 0.0
+Строка  295: tensors_n1p1 = self.vae.decode(latents)  # -1 to 1
+Строка  365: def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None):
+Строка  368: if vae is None:
+Строка  369: raise ValueError("vae must be provided for DFE4")
+Строка  370: self.vae = vae
+Строка  459: device = self.vae.device
+Строка  519: device = self.vae.device
+Строка  542: latents = stepped_latents.to(self.vae.device, dtype=self.vae.dtype)
+Строка  544: scaling_factor = self.vae.config.scaling_factor if hasattr(self.vae.config, 'scaling_factor') else 1.0
+Строка  545: shift_factor = self.vae.config.shift_factor if hasattr(self.vae.config, 'shift_factor') else 0.0
+Строка  548: # if video, we need to unsqueeze the latents to match the vae input shape
+Строка  550: tensors_n1p1 = self.vae.decode(latents)  # -1 to 1
+Строка  606: def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None):
+Строка  607: super().__init__(device=device, dtype=dtype, vae=vae)
+Строка  653: def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None):
+Строка  656: if vae is None:
+Строка  657: raise ValueError("vae must be provided for DFE4")
+Строка  658: self.vae = vae
+Строка  728: device = self.vae.device
+Строка  759: latents = stepped_latents.to(self.vae.device, dtype=self.vae.dtype)
+Строка  761: scaling_factor = self.vae.config.scaling_factor if hasattr(self.vae.config, 'scaling_factor') else 1.0
+Строка  762: shift_factor = self.vae.config.shift_factor if hasattr(self.vae.config, 'shift_factor') else 0.0
+Строка  765: # if video, we need to unsqueeze the latents to match the vae input shape
+Строка  767: tensors_n1p1 = self.vae.decode(latents)  # -1 to 1
+Строка  825: vae=None,
+Строка  897: device = self.sd_ref().vae.device
+Строка  939: target_latents = batch.latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка  942: target_n1p1 = self.sd_ref().decode_latents(target_latents)
+Строка  945: latents = stepped_latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка  947: tensors_n1p1 = self.sd_ref().decode_latents(latents)
+Строка 1027: def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None, sd=None):
+Строка 1028: super().__init__(device=device, dtype=dtype, vae=vae, sd=sd, partial_step=True)
+Строка 1036: vae=None,
+Строка 1093: device = self.sd_ref().vae.device
+Строка 1135: target_latents = batch.latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка 1138: target_n1p1 = self.sd_ref().decode_latents(target_latents)
+Строка 1141: latents = stepped_latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка 1143: tensors_n1p1 = self.sd_ref().decode_latents(latents)
+Строка 1188: vae=None,
+Строка 1249: device = self.sd_ref().vae.device
+Строка 1291: target_latents = batch.latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка 1294: target_n1p1 = self.sd_ref().decode_latents(target_latents)
+Строка 1297: latents = stepped_latents.to(self.sd_ref().vae.device, dtype=self.sd_ref().vae.dtype)
+Строка 1299: tensors_n1p1 = self.sd_ref().decode_latents(latents)
+Строка 1315: # mean over channels/spatial per sample, keep batch dim to weight by timestep
+Строка 1340: def load_dfe(model_path, vae=None, sd: 'BaseModel' = None) -> DiffusionFeatureExtractor:
+Строка 1342: dfe = DiffusionFeatureExtractor3(vae=vae)
+Строка 1346: dfe = DiffusionFeatureExtractor4(vae=vae)
+Строка 1350: dfe = DiffusionFeatureExtractor5(vae=vae)
+Строка 1354: dfe = DiffusionFeatureExtractor6(vae=vae)
+Строка 1358: dfe = DiffusionFeatureExtractor7(vae=vae, sd=sd)
+Строка 1362: dfe = DiffusionFeatureExtractor8(vae=vae, sd=sd)
+Строка 1366: dfe = DiffusionFeatureExtractor9(vae=vae, sd=sd)
+Строка 1370: dfe = DiffusionFeatureExtractor10(vae=vae, sd=sd)
+Строка 1384: # determine num out channels
+Строка 1385: out_channels = state_dict['conv_out.weight'].shape[0]
+Строка 1386: dfe = DiffusionFeatureExtractor(out_channels=out_channels)
+
+📁 ФАЙЛ: toolkit\models\flux.py
+------------------------------------------------------------
+Строка  140: # text encoders, vae, and some non block layers will all be on gpu 0
+
+📁 ФАЙЛ: toolkit\models\i2v_adapter.py
+------------------------------------------------------------
+Строка   26: in_channels=20, # wan is 16 normally, and 36 with i2v so 20 new channels
+Строка   33: inner_dim = orig_layer.out_channels
+Строка   36: self.patch_embedding = torch.nn.Conv3d(in_channels, inner_dim, kernel_size=patch_size, stride=patch_size)
+Строка   48: new_channels = 20 # wan is 16 normally, and 36 with i2v so 20 new channels
+Строка   54: in_channels=new_channels,
+Строка   62: # model.config.in_channels = model.config.in_channels + new_channels
+Строка   63: # model.config["in_channels"] = model.config.in_channels + new_channels
+Строка   79: if x.shape[1] > self.orig_layer_ref().in_channels:
+Строка   80: # we have i2v, so we need to remove the extra channels
+Строка   81: x = x[:, :self.orig_layer_ref().in_channels, :, :, :]
+Строка   88: # x is arranged channels cat(orig_input = 16, temporal_conditioning_mask = 4, encoded_first_frame=16)
+Строка   89: # (16 + 4 + 16) = 36 channels
+Строка  278: # if doing a full denoise, the latent input may be full channels here, only get first 16
+Строка  286: vae=adapter.adapter_ref().sd_ref().vae,
+Строка  559: # videos come in (bs, num_frames, channels, height, width)
+
+📁 ФАЙЛ: toolkit\models\lokr.py
+------------------------------------------------------------
+Строка  109: in_dim = org_module.in_channels
+Строка  111: out_dim = org_module.out_channels
+
+📁 ФАЙЛ: toolkit\models\pixtral_vision.py
+------------------------------------------------------------
+Строка  172: num_channels: int
+Строка  233: num_channels: int = 3,
+Строка  246: num_channels=num_channels,
+Строка  257: in_channels=args.num_channels,
+Строка  258: out_channels=args.hidden_size,
+Строка  580: num_channels: int = 3,
+Строка  592: num_channels=num_channels,
+
+📁 ФАЙЛ: toolkit\models\sapiens2.py
+------------------------------------------------------------
+Строка  184: feedforward_channels=embed_dims * 4,  # standard FFN size
+Строка  404: feedforward_channels=None,
+Строка  429: feedforward_channels=feedforward_channels,
+Строка  455: "feedforward_channels": 768 * 4,
+Строка  465: "feedforward_channels": 1024 * 4,
+Строка  475: "feedforward_channels": 1280 * 4,
+Строка  485: "feedforward_channels": 1536 * 4,
+Строка  495: "feedforward_channels": 2432 * 4,
+Строка  510: in_channels=3,
+Строка  557: in_channels=in_channels,
+Строка  652: feedforward_channels=self.arch_settings["feedforward_channels"],
+Строка  805: data_format: str = "channels_last",
+Строка  810: "channels_last",
+Строка  811: "channels_first",
+Строка  812: ), "'data_format' could only be channels_last or channels_first."
+Строка  818: if self.data_format == "channels_first":
+Строка  832: in_channels=3,
+Строка  854: in_channels=in_channels,
+Строка  855: out_channels=embed_dims,
+Строка  893: feedforward_channels: Optional[int] = None,
+Строка  902: hidden_dims = feedforward_channels or embed_dims
+Строка  951: """Matting decode head from
+Строка  954: Predicts a 4-channel output: pre-multiplied foreground RGB (channels 0-2)
+Строка  960: in_channels: int = 1536,
+Строка  961: upsample_channels: Sequence[int] = (768, 512, 256, 128),
+Строка  962: conv_out_channels: Optional[Sequence[int]] = (64, 32, 16),
+Строка  964: out_channels: int = 4,
+Строка  967: self.in_channels = in_channels
+Строка  970: nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+Строка  971: nn.InstanceNorm2d(in_channels),
+Строка  976: cur_ch = in_channels
+Строка  977: for out_ch in upsample_channels:
+Строка  990: if conv_out_channels and conv_kernel_sizes:
+Строка  991: for out_ch, k in zip(conv_out_channels, conv_kernel_sizes):
+Строка 1002: self.conv_matting = nn.Conv2d(cur_ch, out_channels, kernel_size=1)
+Строка 1050: self.decode_head = MattingHead(
+Строка 1051: in_channels=self._ARCH_TO_EMBED_DIM[arch],
+Строка 1052: upsample_channels=(768, 512, 256, 128),
+Строка 1053: conv_out_channels=(64, 32, 16),
+Строка 1055: out_channels=4,
+Строка 1127: out = self.decode_head(feat)  # (1, 4, H, W) in [0, 1]
+
+📁 ФАЙЛ: toolkit\models\single_value_adapter.py
+------------------------------------------------------------
+Строка  111: The number of channels in the `encoder_hidden_states`.
+Строка  292: hidden_size = sd.unet.config['block_out_channels'][-1]
+Строка  295: hidden_size = list(reversed(sd.unet.config['block_out_channels']))[block_id]
+Строка  298: hidden_size = sd.unet.config['block_out_channels'][block_id]
+
+📁 ФАЙЛ: toolkit\models\size_agnostic_feature_encoder.py
+------------------------------------------------------------
+Строка   15: def __init__(self, channels=512):
+Строка   17: self.channels = channels
+Строка   22: nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+Строка   24: nn.BatchNorm2d(channels),
+Строка   25: nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+Строка   27: nn.BatchNorm2d(channels),
+Строка   41: in_channels=3,
+Строка   44: reducer_channels=512,
+Строка   45: channels=2048,
+Строка   51: self.channels = channels
+Строка   52: self.reducer_channels = reducer_channels
+Строка   57: subpixel_channels = in_channels * downscale_factor ** 2
+Строка   64: self.conv_in = nn.Conv2d(subpixel_channels, reducer_channels, kernel_size=3, padding=1)  # (bs, 192, 32, 32) -> (bs, 512, 32, 32)
+Строка   67: self.reducer = SAFEReducerBlock(reducer_channels)  # (bs, 512, 32, 32) -> (bs, 512, 8, 8)
+Строка   70: reducer_channels, self.channels, kernel_size=3, padding=1
+Строка   74: self.block1 = SAFEReducerBlock(self.channels)  # (bs, 2048, 8, 8) -> (bs, 2048, 4, 4)
+Строка   75: self.block2 = SAFEReducerBlock(self.channels)  # (bs, 2048, 8, 8) -> (bs, 2048, 2, 2)
+Строка   85: self.fc1 = nn.Linear(self.channels, self.num_vectors * self.num_tokens)
+Строка  160: # expand to 3 channels if we only have 1 channel
+Строка  216: in_channels=3,
+Строка  219: reducer_channels=512,
+Строка  220: channels=2048,
+Строка  224: self.in_channels = in_channels
+Строка  227: self.reducer_channels = reducer_channels
+Строка  228: self.channels = channels
+
+📁 ФАЙЛ: toolkit\models\subpixel_adapter.py
+------------------------------------------------------------
+Строка   23: in_channels=64,
+Строка   24: out_channels=3072
+Строка   29: in_channels,
+Строка   30: out_channels,
+Строка   35: out_channels,
+Строка   36: in_channels,
+Строка   54: num_channels: int = 768,
+Строка   64: in_channels=num_channels,
+Строка   65: out_channels=x_embedder.out_features,
+Строка   75: model.config.in_channels = num_channels
+Строка   76: model.config["in_channels"] = num_channels
+Строка   77: model.config.out_channels = num_channels
+Строка   78: model.config["out_channels"] = num_channels
+Строка   87: # replace the vae of the model
+Строка   89: sd.vae = AutoencoderPixelMixer(
+Строка   90: in_channels=3,
+Строка   94: sd.pipeline.vae = sd.vae
+Строка  225: num_channels = 768
+Строка  227: num_channels = 3072
+Строка  236: num_channels=num_channels, # packed channels
+
+📁 ФАЙЛ: toolkit\models\te_adapter.py
+------------------------------------------------------------
+Строка   21: def __init__(self, caption_channels, adapter: 'TEAdapter'):
+Строка   23: in_features = caption_channels
+Строка   86: The number of channels in the `encoder_hidden_states`.
+Строка  283: hidden_size = sd.unet.config['block_out_channels'][-1]
+Строка  286: hidden_size = list(reversed(sd.unet.config['block_out_channels']))[block_id]
+Строка  289: hidden_size = sd.unet.config['block_out_channels'][block_id]
+Строка  361: caption_channels=self.token_size,
+
+📁 ФАЙЛ: toolkit\models\tipsv2.py
+------------------------------------------------------------
+Строка  533: out_channels: Tuple[int, ...] = (128, 256, 512, 1024),
+Строка  539: [nn.Conv2d(input_embed_dim, ch, 1) for ch in out_channels]
+Строка  544: out_channels[0], out_channels[0], kernel_size=4, stride=4, padding=0
+Строка  547: out_channels[1], out_channels[1], kernel_size=2, stride=2, padding=0
+Строка  550: nn.Conv2d(out_channels[3], out_channels[3], 3, stride=2, padding=1),
+Строка  555: [nn.Linear(2 * input_embed_dim, input_embed_dim) for _ in out_channels]
+Строка  574: def _build_fusion_stack(channels: int) -> nn.ModuleList:
+Строка  577: FeatureFusionBlock(channels, has_residual=False),
+Строка  578: FeatureFusionBlock(channels, has_residual=True),
+Строка  579: FeatureFusionBlock(channels, has_residual=True),
+Строка  580: FeatureFusionBlock(channels, has_residual=True),
+Строка  591: channels: int,
+Строка  592: post_process_channels: Tuple[int, ...],
+Строка  598: out_channels=post_process_channels,
+Строка  603: nn.Conv2d(ch, channels, 3, padding=1, bias=False)
+Строка  604: for ch in post_process_channels
+Строка  607: self.fusion_blocks = _build_fusion_stack(channels)
+Строка  608: self.project = nn.Conv2d(channels, channels, 3, padding=1, bias=True)
+Строка  637: channels: int = 256,
+Строка  638: post_process_channels: Tuple[int, ...] = (128, 256, 512, 1024),
+Строка  644: super().__init__(input_embed_dim, channels, post_process_channels, readout_type)
+Строка  648: self.depth_head = nn.Linear(channels, num_depth_bins)
+Строка  675: channels: int = 256,
+Строка  676: post_process_channels: Tuple[int, ...] = (128, 256, 512, 1024),
+Строка  679: super().__init__(input_embed_dim, channels, post_process_channels, readout_type)
+Строка  680: self.normals_head = nn.Linear(channels, 3)
+Строка  699: channels: int = 256,
+Строка  700: post_process_channels: Tuple[int, ...] = (128, 256, 512, 1024),
+Строка  704: super().__init__(input_embed_dim, channels, post_process_channels, readout_type)
+Строка  705: self.segmentation_head = nn.Linear(channels, num_classes)
+Строка  733: channels=256,
+Строка  734: post_process_channels=(96, 192, 384, 768),
+Строка  777: ppc = tuple(cfg["post_process_channels"])
+Строка  780: channels=cfg["channels"],
+Строка  781: post_process_channels=ppc,
+Строка  789: channels=cfg["channels"],
+Строка  790: post_process_channels=ppc,
+Строка  795: channels=cfg["channels"],
+Строка  796: post_process_channels=ppc,
+
+📁 ФАЙЛ: toolkit\models\vd_adapter.py
+------------------------------------------------------------
+Строка   51: self.decoder = nn.Sequential(
+Строка   65: x = self.decoder(x)
+Строка   75: in_channels,
+Строка   77: out_channels,
+Строка   88: self.conv1 = nn.Conv1d(in_channels, out_channels, 1)
+Строка  193: The number of channels in the `encoder_hidden_states`.
+Строка  586: hidden_size = sd.unet.config['block_out_channels'][-1]
+Строка  589: hidden_size = list(reversed(sd.unet.config['block_out_channels']))[block_id]
+Строка  592: hidden_size = sd.unet.config['block_out_channels'][block_id]
+Строка  741: #     in_channels=max_seq_len,
+Строка  743: #     out_channels=self.config.num_tokens,
+
+📁 ФАЙЛ: toolkit\models\wan21\autoencoder_kl_wan.py
+------------------------------------------------------------
+Строка    4: # the encoder/decoder forwards are monkeypatched with copies of the upstream
+Строка   13: WanDecoder3d,
+Строка   67: # copied from diffusers WanDecoder3d.forward with gradient checkpointing added
+Строка   68: def _wan_decoder_forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
+Строка  115: WanDecoder3d.forward = _wan_decoder_forward
+
+📁 ФАЙЛ: toolkit\models\wan21\wan21.py
+------------------------------------------------------------
+Строка   93: vae: AutoencoderKLWan,
+Строка  107: vae=vae,
+Строка  144: # unload vae and transformer
+Строка  145: vae_device = self.vae.device
+Строка  150: print("Unloading vae")
+Строка  151: self.vae.to("cpu")
+Строка  207: num_channels_latents = self.transformer.config.in_channels
+Строка  210: num_channels_latents,
+Строка  280: # load vae
+Строка  281: print("Loading Vae")
+Строка  282: self.vae.to(vae_device)
+Строка  285: latents = latents.to(self.vae.dtype)
+Строка  287: torch.tensor(self.vae.config.latents_mean)
+Строка  288: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  291: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+Строка  295: video = self.vae.decode(latents, return_dict=False)[0]
+Строка  314: _wan_vae_path = None
+Строка  408: vae_path = self.model_config.extras_name_or_path
+Строка  409: if os.path.exists(os.path.join(model_path, 'vae')):
+Строка  410: vae_path = model_path
+Строка  451: self.print_and_status_update("Loading VAE")
+Строка  454: if self._wan_vae_path is not None:
+Строка  455: # load the vae from individual repo
+Строка  456: vae = AutoencoderKLWan.from_pretrained(
+Строка  457: self._wan_vae_path, torch_dtype=dtype).to(dtype=dtype)
+Строка  459: vae = AutoencoderKLWan.from_pretrained(
+Строка  460: vae_path, subfolder="vae", torch_dtype=dtype).to(dtype=dtype)
+Строка  468: vae=vae,
+Строка  489: self.vae = vae
+Строка  499: vae=self.vae,
+Строка  510: vae=self.vae,
+Строка  524: def use_vae_tiling(self):
+Строка  525: # tile the vae decode when sampling if in low vram or explicitly enabled
+Строка  527: "vae_tiling", False
+Строка  543: if self.use_vae_tiling:
+Строка  544: # set vae to tile decode
+Строка  545: pipeline.vae.enable_tiling()
+Строка  565: if self.use_vae_tiling:
+Строка  567: pipeline.vae.disable_tiling()
+Строка  569: # shape = [1, frames, channels, height, width]
+Строка  585: # vae_scale_factor_spatial = 8
+Строка  586: # vae_scale_factor_temporal = 4
+Строка  587: # num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
+Строка  590: #     num_channels_latents, # 16
+Строка  592: #     int(height) // self.vae_scale_factor_spatial,
+Строка  593: #     int(width) // self.vae_scale_factor_spatial,
+Строка  625: device = self.vae_device_torch
+Строка  627: dtype = self.vae_torch_dtype
+Строка  629: if self.vae.device == torch.device('cpu'):
+Строка  630: self.vae.to(device)
+Строка  631: self.vae.eval()
+Строка  632: self.vae.requires_grad_(False)
+Строка  660: latents = self.vae.encode(images).latent_dist.sample()
+Строка  663: torch.tensor(self.vae.config.latents_mean)
+Строка  664: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  667: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+Строка  674: def decode_latents(self, latents: torch.Tensor, device=None, dtype=None):
+Строка  676: device = self.vae_device_torch
+Строка  678: dtype = self.vae_torch_dtype
+Строка  680: if self.vae.device == torch.device('cpu'):
+Строка  681: self.vae.to(device)
+Строка  686: torch.tensor(self.vae.config.latents_mean)
+Строка  687: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  690: latents_std = torch.tensor(self.vae.config.latents_std).view(
+Строка  691: 1, self.vae.config.z_dim, 1, 1, 1
+Строка  695: images = self.vae.decode(latents).sample
+
+📁 ФАЙЛ: toolkit\models\wan21\wan21_i2v.py
+------------------------------------------------------------
+Строка   52: vae: AutoencoderKLWan,
+Строка   61: vae=vae,
+Строка  105: # unload vae and transformer
+Строка  111: self.vae.to('cpu')
+Строка  165: self.vae.to(device)
+Строка  175: num_channels_latents = self.vae.config.z_dim
+Строка  180: num_channels_latents,
+Строка  190: self.vae.to('cpu')
+Строка  247: self.vae.to(device)
+Строка  250: latents = latents.to(self.vae.dtype)
+Строка  252: torch.tensor(self.vae.config.latents_mean)
+Строка  253: .view(1, self.vae.config.z_dim, 1, 1, 1)
+Строка  256: latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+Строка  260: video = self.vae.decode(latents, return_dict=False)[0]
+Строка  355: self.vae.to("cpu")
+Строка  377: vae=self.vae,
+Строка  388: vae=self.vae,
+Строка  448: # shape = [1, frames, channels, height, width]
+Строка  489: # videos come in (bs, num_frames, channels, height, width)
+Строка  490: # images come in (bs, channels, height, width)
+Строка  500: # first_frames shape is (bs, channels, height, width), -1 to 1
+Строка  513: vae=self.vae
+
+📁 ФАЙЛ: toolkit\models\wan21\wan_utils.py
+------------------------------------------------------------
+Строка    8: vae
+Строка   14: latent_model_input: Original latent input (bs, channels, num_frames, height, width)
+Строка   15: first_frame: Tensor of first frame to condition on (bs, channels, height, width)
+Строка   16: vae: VAE model for encoding the conditioning
+Строка   23: vae_scale_factor_temporal = 2 ** sum(vae.temperal_downsample)
+Строка   42: vae_scale_factor = vae.config.scale_factor_spatial
+Строка   45: size=(latent_model_input.shape[3] * vae_scale_factor, latent_model_input.shape[4] * vae_scale_factor),
+Строка   60: # Prepare for VAE encoding (bs, channels, num_frames, height, width)
+Строка   63: # Encode with VAE
+Строка   64: latent_condition = vae.encode(
+Строка   70: torch.tensor(vae.config.latents_mean)
+Строка   71: .view(1, vae.config.z_dim, 1, 1, 1)
+Строка   74: latents_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(
+Строка   95: first_frame_mask, dim=2, repeats=vae_scale_factor_temporal)
+Строка  103: batch_size, -1, vae_scale_factor_temporal, latent_height, latent_width)
+Строка  119: vae=None,
+Строка  124: Overwrites first few time steps in latent_model_input with VAE-encoded first_frame,
+Строка  130: vae: VAE model with .encode() and .config.latents_mean/std
+Строка  132: shape (bs, 48, 1, H, W); skips the VAE encode when provided
+Строка  141: scale = vae.config.scale_factor_spatial
+Строка  145: mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(device, dtype)
+Строка  146: std = 1.0 / torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(device, dtype)
+Строка  165: encoded = vae.encode(first_frame_up).latent_dist.sample().to(dtype).to(device)
+Строка  182: last_encoded = vae.encode(last_frame_up).latent_dist.sample().to(dtype).to(device)
+
+📁 ФАЙЛ: toolkit\optimizers\automagic3.py
+------------------------------------------------------------
+Строка   67: channels fight per-channel ones. A Q/K pair is the canonical case --
+Строка  130: per tensor; each level let coupled units -- channels, then Q/K-style
+
+📁 ФАЙЛ: toolkit\photomaker_pipeline.py
+------------------------------------------------------------
+Строка  277: height = height or self.unet.config.sample_size * self.vae_scale_factor
+Строка  278: width = width or self.unet.config.sample_size * self.vae_scale_factor
+Строка  388: num_channels_latents = self.unet.config.in_channels
+Строка  391: num_channels_latents,
+Строка  467: # make sure the VAE is in float32 mode, as it overflows in float16
+Строка  468: if self.vae.dtype == torch.float16 and self.vae.config.force_upcast:
+Строка  469: self.upcast_vae()
+Строка  470: latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
+Строка  473: image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+
+📁 ФАЙЛ: toolkit\pipelines.py
+------------------------------------------------------------
+Строка   36: vae: 'AutoencoderKL',
+Строка   47: vae=vae,
+Строка  102: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  103: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  168: num_channels_latents = self.unet.config.in_channels
+Строка  171: num_channels_latents,
+Строка  223: num_channels_latents = self.unet.config.in_channels
+Строка  226: num_channels_latents,
+Строка  281: image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+Строка  337: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  339: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  465: height = self.default_sample_size * self.vae_scale_factor
+Строка  466: width = self.default_sample_size * self.vae_scale_factor
+Строка  514: num_channels_latents = self.unet.config.in_channels
+Строка  517: num_channels_latents,
+Строка  606: height = height or self.unet.config.sample_size * self.vae_scale_factor
+Строка  607: width = width or self.unet.config.sample_size * self.vae_scale_factor
+Строка  648: num_channels_latents = self.unet.config.in_channels
+Строка  651: num_channels_latents,
+Строка  711: image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+Строка  757: height = self.unet.config.sample_size * self.vae_scale_factor
+Строка  758: width = self.unet.config.sample_size * self.vae_scale_factor
+Строка  793: num_channels_latents = self.unet.config.in_channels
+Строка  796: num_channels_latents,
+Строка  877: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  882: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка 1002: height = height or self.default_sample_size * self.vae_scale_factor
+Строка 1003: width = width or self.default_sample_size * self.vae_scale_factor
+Строка 1068: num_channels_latents = self.unet.config.in_channels
+Строка 1071: num_channels_latents,
+Строка 1184: # make sure the VAE is in float32 mode, as it overflows in float16
+Строка 1185: needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
+Строка 1188: self.upcast_vae()
+Строка 1189: latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
+Строка 1191: image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+Строка 1195: self.vae.to(dtype=torch.float16)
+Строка 1247: height = height or self.default_sample_size * self.vae_scale_factor
+Строка 1248: width = width or self.default_sample_size * self.vae_scale_factor
+Строка 1310: num_channels_latents = self.transformer.config.in_channels // 4
+Строка 1313: num_channels_latents,
+Строка 1419: latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
+Строка 1420: latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+Строка 1421: image = self.vae.decode(latents, return_dict=False)[0]
+Строка 1438: vae,
+Строка 1449: super().__init__(scheduler, vae, text_encoder, tokenizer, text_encoder_2, tokenizer_2, transformer)
+Строка 1493: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка 1495: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка 1553: height = height or self.default_sample_size * self.vae_scale_factor
+Строка 1554: width = width or self.default_sample_size * self.vae_scale_factor
+Строка 1602: # num_channels_latents = self.transformer.config.in_channels // 8
+Строка 1603: num_channels_latents = 128 // 8
+Строка 1623: dtype=self.vae.dtype,
+Строка 1627: num_control_channels = num_channels_latents
+Строка 1628: control_image = self.vae.encode(control_image).latent_dist.sample(generator=generator)
+Строка 1629: control_image = (control_image - self.vae.config.shift_factor) * self.vae.config.scaling_factor
+Строка 1645: num_control_channels += 1
+Строка 1651: num_control_channels,
+Строка 1658: num_channels_latents,
+Строка 1757: latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
+Строка 1758: latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+Строка 1759: image = self.vae.decode(latents, return_dict=False)[0]
+
+📁 ФАЙЛ: toolkit\pixel_shuffle_encoder.py
+------------------------------------------------------------
+Строка    7: from diffusers.models.autoencoders.vae import DecoderOutput
+Строка   11: def __init__(self, in_channels, downscale_factor):
+Строка   14: self.in_channels = in_channels
+Строка   18: out = self.decode(latent)
+Строка   24: def decode(self, x):
+Строка   30: # none of this matters with llvae, but we need to match the interface (latent_channels might matter)
+Строка   33: in_channels = 3
+Строка   34: out_channels = 3
+Строка   39: block_out_channels = (1, 1, 1, 1)
+Строка   40: latent_channels = 192  # usually 4
+Строка   47: # VAE
+Строка   60: def __init__(self, in_channels=3, downscale_factor=8):
+Строка   62: self.mixer = PixelMixer(in_channels, downscale_factor)
+Строка   69: # we go by len of block out channels in code, so simulate it
+Строка   70: self.config.block_out_channels = (1, 1, 1, 1)
+Строка   71: self.config.latent_channels = 192
+Строка   74: # we go by len of block out channels in code, so simulate it
+Строка   75: self.config.block_out_channels = (1, 1, 1, 1, 1)
+Строка   76: self.config.latent_channels = 768
+Строка  129: def _decode(self, z: torch.FloatTensor, return_dict: bool = True) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка  130: dec = self.mixer.decode(z)
+Строка  135: return DecoderOutput(sample=dec)
+Строка  138: def decode(self, z: torch.FloatTensor, return_dict: bool = True) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка  139: decoded = self._decode(z).sample
+Строка  142: return (decoded,)
+Строка  144: return DecoderOutput(sample=decoded)
+Строка  170: ) -> Union[DecoderOutput, torch.FloatTensor]:
+Строка  178: dec = self.decode(z).sample
+Строка  183: return DecoderOutput(sample=dec)
+Строка  201: vae = PixelMixer(in_channels=3, downscale_factor=8)
+Строка  202: latent = vae.encode(img_tensor)
+Строка  204: out_tensor = vae.decode(latent)
+
+📁 ФАЙЛ: toolkit\reference_adapter.py
+------------------------------------------------------------
+Строка   45: The number of channels in the `encoder_hidden_states`.
+Строка  189: hidden_size = sd.unet.config['block_out_channels'][-1]
+Строка  192: hidden_size = list(reversed(sd.unet.config['block_out_channels']))[block_id]
+Строка  195: hidden_size = sd.unet.config['block_out_channels'][block_id]
+
+📁 ФАЙЛ: toolkit\samplers\custom_lcm_scheduler.py
+------------------------------------------------------------
+Строка   40: prev_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
+Строка   43: pred_original_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
+Строка  308: batch_size, channels, *remaining_dims = sample.shape
+Строка  314: sample = sample.reshape(batch_size, channels * np.prod(remaining_dims))
+Строка  325: sample = sample.reshape(batch_size, channels, *remaining_dims)
+
+📁 ФАЙЛ: toolkit\samplers\mean_flow_scheduler.py
+------------------------------------------------------------
+Строка   17: prev_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
+
+📁 ФАЙЛ: toolkit\sd_device_states_presets.py
+------------------------------------------------------------
+Строка    7: 'vae': {
+Строка   49: preset['vae']['device'] = device
+
+📁 ФАЙЛ: toolkit\stable_diffusion_model.py
+------------------------------------------------------------
+Строка   29: from toolkit.util.vae import load_vae
+Строка   81: SD_PREFIX_VAE = "vae"
+Строка  122: UNET_IN_CHANNELS = 4  # Stable Diffusion の in_channels は 4 で固定。XLも同じ。
+Строка  123: # VAE_SCALE_FACTOR = 8  # 2 ** (len(vae.config.block_out_channels) - 1) = 8
+Строка  147: self.vae_device_torch = torch.device(device)
+Строка  148: self.vae_torch_dtype = get_torch_dtype(model_config.vae_dtype)
+Строка  160: self.vae: Union[None, 'AutoencoderKL']
+Строка  284: if self.vae is None:
+Строка  286: divisibility = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка  314: if self.model_config.vae_path is not None:
+Строка  315: load_args['vae'] = load_vae(self.model_config.vae_path, dtype)
+Строка  341: if 'vae' in load_args and load_args['vae'] is not None:
+Строка  342: pipe.vae = load_args['vae']
+Строка  353: pipe.vae = pipe.vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  416: print_acc("Loading vae")
+Строка  417: vae = AutoencoderKL.from_pretrained(base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  498: main_model_path = "PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers"
+Строка  564: pipe.vae = pipe.vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка  717: vae=None,
+Строка  789: self.print_and_status_update("Loading VAE")
+Строка  790: if self.model_config.vae_path is not None:
+Строка  791: vae = load_vae(self.model_config.vae_path, dtype)
+Строка  793: vae = AutoencoderKL.from_pretrained(base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  824: vae=vae,
+Строка  896: self.print_and_status_update("Loading vae")
+Строка  897: vae = AutoencoderKL.from_pretrained(base_model_path, subfolder="vae", torch_dtype=dtype)
+Строка  923: vae=vae,
+Строка 1019: self.vae: 'AutoencoderKL' = pipe.vae.to(self.vae_device_torch, dtype=self.vae_torch_dtype)
+Строка 1020: self.vae.eval()
+Строка 1021: self.vae.requires_grad_(False)
+Строка 1022: VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка 1023: self.vae_scale_factor = VAE_SCALE_FACTOR
+Строка 1058: if self.is_pixart and self.vae_scale_factor == 16:
+Строка 1246: vae=self.vae,
+Строка 1259: vae=self.vae,
+Строка 1279: vae=self.vae,
+Строка 1292: vae=self.vae,
+Строка 1301: vae=self.vae,
+Строка 1314: vae=self.vae,
+Строка 1324: vae=self.vae,
+Строка 1334: vae=self.vae,
+Строка 1355: vae=pipeline.vae,
+Строка 1773: num_channels=None,
+Строка 1775: VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка 1781: height = pixel_height // VAE_SCALE_FACTOR
+Строка 1783: width = pixel_width // VAE_SCALE_FACTOR
+Строка 1785: if num_channels is None:
+Строка 1786: num_channels = self.unet_unwrapped.config['in_channels']
+Строка 1789: num_channels = num_channels // 4
+Строка 1793: num_channels,
+Строка 1812: VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка 1816: height = h * VAE_SCALE_FACTOR
+Строка 1817: width = w * VAE_SCALE_FACTOR
+Строка 2084: VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка 2087: height = h * VAE_SCALE_FACTOR
+Строка 2088: width = w * VAE_SCALE_FACTOR
+Строка 2106: self.vae_scale_factor == 16 and self.unet_unwrapped.config.sample_size == 64):
+Строка 2129: if self.unet_unwrapped.config.out_channels // 2 == self.unet_unwrapped.config.in_channels:
+Строка 2205: c=self.vae.config.latent_channels
+Строка 2528: device = self.vae_device_torch
+Строка 2530: dtype = self.vae_torch_dtype
+Строка 2533: # Move to vae to device if on cpu
+Строка 2534: if self.vae.device == torch.device("cpu"):
+Строка 2535: self.vae.to(device)
+Строка 2536: self.vae.eval()
+Строка 2537: self.vae.requires_grad_(False)
+Строка 2541: VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+Строка 2546: if image.shape[1] % VAE_SCALE_FACTOR != 0 or image.shape[2] % VAE_SCALE_FACTOR != 0:
+Строка 2547: image_list[i] = Resize((image.shape[1] // VAE_SCALE_FACTOR * VAE_SCALE_FACTOR,
+Строка 2548: image.shape[2] // VAE_SCALE_FACTOR * VAE_SCALE_FACTOR))(image)
+Строка 2551: if isinstance(self.vae, AutoencoderTiny):
+Строка 2552: latents = self.vae.encode(images, return_dict=False)[0]
+Строка 2554: latents = self.vae.encode(images).latent_dist.sample()
+Строка 2555: shift = self.vae.config['shift_factor'] if self.vae.config['shift_factor'] is not None else 0
+Строка 2559: latents = self.vae.config['scaling_factor'] * (latents - shift)
+Строка 2568: def decode_latents(
+Строка 2579: # Move to vae to device if on cpu
+Строка 2580: if self.vae.device == torch.device("cpu"):
+Строка 2581: self.vae.to(self.device_torch)
+Строка 2583: latents = (latents / self.vae.config['scaling_factor']) + self.vae.config['shift_factor']
+Строка 2584: images = self.vae.decode(latents).sample
+Строка 2638: def state_dict(self, vae=True, text_encoder=True, unet=True):
+Строка 2640: if vae:
+Строка 2641: for k, v in self.vae.state_dict().items():
+Строка 2642: new_key = k if k.startswith(f"{SD_PREFIX_VAE}") else f"{SD_PREFIX_VAE}_{k}"
+Строка 2661: def named_parameters(self, vae=True, text_encoder=True, unet=True, refiner=False, state_dict_keys=False) -> \
+Строка 2665: if vae:
+Строка 2666: for name, param in self.vae.named_parameters(recurse=True, prefix=f"{SD_PREFIX_VAE}"):
+Строка 2748: for k, v in refiner.vae.state_dict().items():
+Строка 2749: new_key = k if k.startswith(f"{SD_PREFIX_VAE}") else f"{SD_PREFIX_VAE}_{k}"
+Строка 2857: named_params = self.named_parameters(vae=False, unet=unet, text_encoder=False, state_dict_keys=True)
+Строка 2874: named_params = self.named_parameters(vae=False, unet=False, text_encoder=text_encoder, state_dict_keys=True)
+Строка 2887: named_params = self.named_parameters(vae=False, unet=False, text_encoder=False, refiner=True,
+Строка 2910: 'vae': {
+Строка 2911: 'training': self.vae.training,
+Строка 2912: 'device': self.vae.device,
+Строка 2997: if state['vae']['training']:
+Строка 2998: self.vae.train()
+Строка 3000: self.vae.eval()
+Строка 3001: self.vae.to(state['vae']['device'])
+Строка 3061: active_modules = ['vae']
+Строка 3069: active_modules = ['vae', 'unet', 'text_encoder', 'adapter', 'refiner_unet']
+Строка 3072: # vae
+Строка 3073: state['vae'] = {
+Строка 3074: 'training': 'vae' in training_modules,
+Строка 3075: 'device': self.vae_device_torch if 'vae' in active_modules else 'cpu',
+Строка 3076: 'requires_grad': 'vae' in training_modules,
+
+📁 ФАЙЛ: toolkit\style.py
+------------------------------------------------------------
+Строка   10: channels = tensor.shape[1]
+Строка   13: return channels * height * width
+Строка  123: # B is batch size. C is number of channels. H is height and W is width.
+
+📁 ФАЙЛ: toolkit\train_pipelines.py
+------------------------------------------------------------
+Строка   55: height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка   57: width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
+Строка  152: height = height or self.default_sample_size * self.vae_scale_factor
+Строка  153: width = width or self.default_sample_size * self.vae_scale_factor
+Строка  218: num_channels_latents = self.unet.config.in_channels
+Строка  221: num_channels_latents,
+
+📁 ФАЙЛ: toolkit\train_tools.py
+------------------------------------------------------------
+Строка  457: removed_text = tokenizer.batch_decode(untruncated_ids[:, max_length - 1: -1])
+Строка  501: removed_text = tokenizer.batch_decode(untruncated_ids[:, max_length - 1: -1])
+
+📁 ФАЙЛ: toolkit\util\ip_adapter_utils.py
+------------------------------------------------------------
+Строка   92: The number of channels in the `encoder_hidden_states`.
+Строка  305: The number of channels in the `encoder_hidden_states`.
+
+📁 ФАЙЛ: toolkit\util\mask.py
+------------------------------------------------------------
+Строка  204: mask (torch.Tensor): Input mask of shape [batch_size, channels, height, width]
+
+📁 ФАЙЛ: toolkit\util\vae.py
+------------------------------------------------------------
+Строка    4: def load_vae(vae_path, dtype):
+Строка    6: vae = AutoencoderKL.from_pretrained(
+Строка    7: vae_path,
+Строка   12: vae = AutoencoderKL.from_pretrained(
+Строка   13: vae_path,
+Строка   14: subfolder="vae",
+Строка   18: raise ValueError(f"Failed to load VAE from {vae_path}: {e}")
+Строка   19: vae.to(dtype)
+Строка   20: return vae
