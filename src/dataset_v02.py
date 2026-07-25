@@ -9,6 +9,25 @@ class CachedFluxDatasetV02(Dataset):
     def __init__(self):
         print("[ОБТ] Инициализация стерильного отсека данных: Dataset_V02")
         self.samples = []
+        # === ВРЕМЕННЫЙ СНАЙПЕРСКИЙ СКАНЕР ПЕЩЕРЫ V08 ===
+        try:
+            import glob
+            actual_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*"))
+            print("=" * 60)
+            print(f"[РАДАР] Зондирую реальное содержимое папки: {TrainConfig.CACHE_TEXT_DIR}")
+            if actual_files:
+                print(f" -> Всего файлов в папке: {len(actual_files)}")
+                print(f" -> Имена первых 3 снарядов на диске:")
+                for f in actual_files[:3]:
+                    print(f"    └─ {os.path.basename(f)}")
+            else:
+                print(" -> [КРИТ] Папка физически ПУСТА!")
+            print("=" * 60)
+        except Exception as e:
+            print(f"Ошибка радара папки: {e}")
+        # === КОНЕЦ СКАНЕРА ===
+
+
 
         if not os.path.exists(TrainConfig.METADATA_PATH):
             print(f"[КРИТ] Манифест не найден по пути: {TrainConfig.METADATA_PATH}")
