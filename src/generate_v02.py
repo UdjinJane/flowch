@@ -77,8 +77,13 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         latents_spatial = latents_patches.permute(0, 3, 1, 4, 2, 5)
         latents_unpacked = latents_spatial.reshape(1, 16, 64, 64).to(dtype=x_t.dtype, device=x_t.device)
 
-        # Подготовка масштаба латентов Flux
-        z = (latents_unpacked * 0.3611) + 0.1159
+        # === АДАПТИВНОЕ МАСШТАБИРОВАНИЕ ЛАТЕНТОВ ПО СПЕЦИФИКАЦИИ VAE ===
+        # Защита от фазового сдвига дисперсии: извлекаем scaling_factor и shift_factor 
+        # напрямую из конфига загруженного модуля VAE, блокируя искусственное раздувание мантиссы.
+        sf = getattr(vae.config, "scaling_factor", 0.3611)
+        shf = getattr(vae.config, "shift_factor", 0.1159)
+        z = (latents_unpacked * sf) + shf
+
         
         # 2. ПОСЛОЙНЫЙ РУЧНОЙ ПРОХОД ПО АМПУТИРОВАННОМУ ДЕКОДЕРУ (vae.decoder)
         z_conv = vae.post_quant_conv(z)
