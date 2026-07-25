@@ -3,7 +3,6 @@ import os
 import torch
 import time
 from PIL import Image
-from einops import rearrange  # ЖЕСТКИЙ ФИКС: спасаем Pixel Shuffle от NameError
 from config import TrainConfig
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from safetensors.torch import load_file
