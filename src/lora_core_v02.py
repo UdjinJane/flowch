@@ -71,10 +71,13 @@ class FluxLoraCoreV02:
         )
         model = get_peft_model(transformer, lora_config)
 
-        # 1. Кастинг LoRA-слоев в bfloat16 через _apply (ДО фиксации градиентов!)
+
+        # 1. СТЕРИЛЬНЫЙ КАС ТИНГ LORA В bfloat16 (Ликвидация воздушных копий)
+        # Переводим веса через канонический вызов module.to(), сохраняя граф Autograd монолитным
         for name, module in model.named_modules():
-            if "lora_" in name.lower():
-                module._apply(lambda t: t.to(dtype=torch.bfloat16) if t.is_floating_point() else t)
+            if "lora_" in name.lower() and hasattr(module, "to"):
+                module.to(dtype=torch.bfloat16)
+
 
         # 2. Жёсткое распределение флагов градиентов по тензорам параметров
         for name, param in model.named_parameters():
