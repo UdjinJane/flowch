@@ -9,23 +9,6 @@ class CachedFluxDatasetV02(Dataset):
     def __init__(self):
         print("[ОБТ] Инициализация стерильного отсека данных: Dataset_V02")
         self.samples = []
-        # === ВРЕМЕННЫЙ СНАЙПЕРСКИЙ СКАНЕР ПЕЩЕРЫ V08 ===
-        try:
-            import glob
-            actual_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*"))
-            print("=" * 60)
-            print(f"[РАДАР] Зондирую реальное содержимое папки: {TrainConfig.CACHE_TEXT_DIR}")
-            if actual_files:
-                print(f" -> Всего файлов в папке: {len(actual_files)}")
-                print(f" -> Имена первых 3 снарядов на диске:")
-                for f in actual_files[:3]:
-                    print(f"    └─ {os.path.basename(f)}")
-            else:
-                print(" -> [КРИТ] Папка физически ПУСТА!")
-            print("=" * 60)
-        except Exception as e:
-            print(f"Ошибка радара папки: {e}")
-        # === КОНЕЦ СКАНЕРА ===
 
 
 
@@ -44,16 +27,14 @@ class CachedFluxDatasetV02(Dataset):
                 # === СТВОР МОНОЛИТНОГО КЭША V08_LOCAL ===
                 # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
                 # === ФИКС СУФФИКСА МОНОЛИТА V08_LOCAL ===
-                # Привязываемся к реальному имени файла весом 2.1 МБ на диске Z
-                mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}_embeds.pt")
-
+                mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
 
                 # === ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ РАДАР V08 ===
                 # Выводим в лог первую строку, чтобы глазами увидеть, что и где ищет скрипт
-                if len(self.samples) == 0:
-                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
-                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
+                #if len(self.samples) == 0:
+                #    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
+                #    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
                 # === КОНЕЦ РАДАРА ===
 
                 
