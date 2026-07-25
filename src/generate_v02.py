@@ -75,51 +75,32 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # энкодер будет проигнорирован благодаря strict=False.
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
    
-  
-    #------------------ ОБРАБОТКА АНОМАЛИИ И ГИБРИДНЫЙ ДЕКОД V03 --------------------
+    #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05 --------------------
+    # [ВЫЖЖЕНО ПЛАЗМОЙ: Сборка V05 устраняет ручной обход и костыли каналов]
     with torch.no_grad():
-        # 1. Инверсный Pixel Shuffle Лодстона (Распаковываем 64 канала в истинные 16)
-        latents_packed = x_t.view(1, 32, 32, 64)
-        latents_patches = latents_packed.reshape(1, 32, 32, 16, 2, 2)
-        latents_spatial = latents_patches.permute(0, 3, 1, 4, 2, 5)
-        latents_unpacked = latents_spatial.reshape(1, 16, 64, 64).to(dtype=x_t.dtype, device=x_t.device)
+        # 1. Инверсный Pixel Shuffle (пересборка осей из V04)
+        latents_unpacked = rearrange(x_t, 'b (h w) (c p1 p2) -> b c (h p1) (w p2)', 
+                                    h=32, w=32, p1=2, p2=2)
 
-        # === АДАПТИВНОЕ МАСШТАБИРОВАНИЕ ЛАТЕНТОВ ПО СПЕЦИФИКАЦИИ VAE ===
-        # Защита от фазового сдвига дисперсии: извлекаем scaling_factor и shift_factor 
-        # напрямую из конфига загруженного модуля VAE, блокируя искусственное раздувание мантиссы.
+        # 2. АДАПТИВНОЕ ДЕНОРМИРОВАНИЕ
         sf = getattr(vae.config, "scaling_factor", 0.3611)
         shf = getattr(vae.config, "shift_factor", 0.1159)
-        z = (latents_unpacked * sf) + shf
+        
+        # ФИКС: Исправлено на каноническое деление
+        z_cleaned = (latents_unpacked / sf) + shf
 
-        
-        # 2. ПОСЛОЙНЫЙ РУЧНОЙ ПРОХОД ПО АМПУТИРОВАННОМУ ДЕКОДЕРУ (vae.decoder)
-        z_conv = vae.post_quant_conv(z)
-        sample = vae.decoder.conv_in(z_conv)
-        
-        if hasattr(vae.decoder, 'mid_block') and vae.decoder.mid_block is not None:
-            sample = vae.decoder.mid_block(sample)
-            
-        for block in vae.decoder.up_blocks:
-            sample = block(sample)
-            
-        # === ТАКТИЧЕСКИЙ СЖАТЕЛЬ СТАРПОМА ПОД СЕТКУ 128x128 (512 -> 128 КАНАЛОВ) ===
-        # Перехватываем 512 каналов на выходе up_blocks и схлопываем их в эталонные 128
-        out_cleaner = torch.nn.Conv2d(512, 128, kernel_size=1, bias=False).to(device=sample.device, dtype=sample.dtype)
-        out_cleaner.weight.data.zero_()
-        for idx in range(128):
-            out_cleaner.weight.data[idx, idx, 0, 0] = 1.0
-        sample_compressed = out_cleaner(sample)
-        
-        # 3. ФИНАЛЬНЫЙ СТВОР: Передаем выровненные 128 каналов в норму и выхлоп
-        sample_norm = vae.decoder.conv_norm_out(sample_compressed)
-        sample_act = vae.decoder.conv_act(sample_norm)
-        dec_out = vae.decoder.conv_out(sample_act)
+        # 3. ИСПОЛЬЗОВАНИЕ РОДНОГО VAE.DECODE
+        dec_out = vae.decode(z_cleaned, return_dict=False)[0]
 
-        # Отрезаем оси, переводим в пиксели и сохраняем снаряд
-        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+        # Конвертация в RGB [0, 255]
+        dec_out_clamped = ((dec_out + 1.0) / 2.0).clamp(0.0, 1.0)
+        img_array = (dec_out_clamped.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+
+        # Сохранение на SSD
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
+
    
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
 def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
