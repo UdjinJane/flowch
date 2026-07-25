@@ -39,29 +39,34 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     ).to(device=device, dtype=torch.bfloat16)
 
     # === ИНЖЕКЦИЯ CHROMA V08_FINAL: ЧАСТЬ 1 (Вскрытие Монолита) ===
+    # === ИНЖЕКЦИЯ CHROMA V09_FINAL: ЧАСТЬ 1 (Истинные Ключи) ===
     import glob
     
     try:
-        # Сканируем трюм на наличие оригинальных монолитных .pt словарей
         embed_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*.pt"))
         if not embed_files:
             raise FileNotFoundError(f"Каталог {TrainConfig.CACHE_TEXT_DIR} пуст!")
             
-        # Берем первый эталонный снаряд из text_cache
-        target_file = embed_files[0]
+        target_file = embed_files
         cached_dict = torch.load(target_file, map_location="cpu")
         
-        # Поатомно извлекаем все три ключа кузнецов с приведением типов к CUDA-портам
-        prompt_embeds = cached_dict["prompt_embeds"].to(device=device, dtype=torch.bfloat16)
-        prompt_attn_mask = cached_dict["prompt_attn_mask"].to(device=device)
-        pooled_projections = cached_dict["pooled_projections"].to(device=device, dtype=torch.bfloat16)
+        # Извлекаем скрытые состояния T5 и CLIP по результатам рентгена
+        prompt_embeds = cached_dict["t5_hidden"].to(device=device, dtype=torch.bfloat16)
+        clip_hidden = cached_dict["clip_hidden"].to(device=device, dtype=torch.bfloat16)
         
-        print(f"[УСПЕХ] Монолитный шлюз V08_FINAL открыт! Распакован кэш: {os.path.basename(target_file)}")
+        # Собираем каноническую маску внимания на 256 токенов
+        prompt_attn_mask = torch.ones((1, prompt_embeds.shape), device=device, dtype=torch.bool)
+        
+        # В качестве pooled_projections генерируем среднее по оси CLIP-эмбеддинга [1, 77, 768] -> [1, 768]
+        pooled_projections = clip_hidden.mean(dim=1)
+        
+        print(f"[УСПЕХ] Монолитный шлюз V09_FINAL открыт! Загружен T5 и CLIP: {os.path.basename(target_file)}")
     except Exception as e:
-        print(f"[КРАХ ТЕСТА] Сбой распаковки словаря V08: {e}. Переход на аварийные нули.")
+        print(f"[КРАХ ТЕСТА] Ошибка тракта V09: {e}. Аварийные заглушки.")
         prompt_embeds = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), device=device, dtype=torch.bfloat16)
         prompt_attn_mask = torch.ones((1, TrainConfig.MAX_SEQUENCE_LENGTH), device=device, dtype=torch.bool)
         pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
+
 
     # === ИНЖЕКЦИЯ CHROMA V08_FINAL: ЧАСТЬ 2 (Спектральный анализ) ===
     print("=" * 60)
