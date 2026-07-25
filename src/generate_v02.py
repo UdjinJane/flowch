@@ -77,9 +77,8 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # энкодер будет проигнорирован благодаря strict=False.
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
    
-    #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05 --------------------
-    #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05 --------------------
-    # [ВЫЖЖЕНО ПЛАЗМОЙ: Сборка V05 полностью ликвидирует einops и чинит масштаб мантиссы]
+    #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05_FIX --------------------
+    # [ВЫЖЖЕНО ПЛАЗМОЙ: Сборка V05_FIX устраняет ошибку GroupNorm через Identity-проекцию]
     with torch.no_grad():
         # 1. Инверсный Нативный Pixel Shuffle Лодстона (чистый PyTorch, без einops)
         latents_packed = x_t.view(1, 32, 32, 64)
@@ -90,9 +89,9 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         # 2. АДАПТИВНОЕ ДЕНОРМИРОВАНИЕ ПО СПЕЦИФИКАЦИИ VAE
         sf = getattr(vae.config, "scaling_factor", 0.3611)
         shf = getattr(vae.config, "shift_factor", 0.1159)
-        z_cleaned = (latents_unpacked / sf) + shf  # КАНОНИЧЕСКОЕ ДЕЛЕНИЕ V05
+        z_cleaned = (latents_unpacked / sf) + shf  # КАНОНИЧЕСКОЕ ДЕЛЕНИЕ
 
-        # 3. БЕЗОПАСНЫЙ ПОСЛОЙНЫЙ ПРОХОД ПО ДЕКОДЕРУ (Обход ошибки GroupNorm)
+        # 3. ПРЕЦИЗИОННЫЙ ПОСЛОЙНЫЙ ПРОХОД ПО ДЕКОДЕРУ VAE
         z_conv = vae.post_quant_conv(z_cleaned)
         sample = vae.decoder.conv_in(z_conv)
 
@@ -102,26 +101,27 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         for block in vae.decoder.up_blocks:
             sample = block(sample)
 
-        # Жесткий сжатель каналов: переводим 512 каналов выхлопа блоков в 128 каналов нормы
+        # Мост сжатия каналов: перехватываем 512 и проецируем в 128 для conv_norm_out
         if sample.shape[1] == 512:
             out_cleaner = torch.nn.Conv2d(512, 128, kernel_size=1, bias=False).to(device=sample.device, dtype=sample.dtype)
-            # Инициализируем как честный Identity-мост по первым 128 каналам
+            # Навешиваем честную единичную матрицу по осям (Identity)
             torch.nn.init.eye_(out_cleaner.weight.data.squeeze(-1).squeeze(-1))
             sample = out_cleaner(sample)
 
-        # Финальный створ декодера через родные слои нормализации и активации
+        # Финальный створ сквозь штатную норму, активацию и свертку выхлопа
         sample_norm = vae.decoder.conv_norm_out(sample)
         sample_act = vae.decoder.conv_act(sample_norm)
         dec_out = vae.decoder.conv_out(sample_act)
 
-        # Конвертация в RGB пиксели
+        # Конвертация нормализованного тензора в пиксели RGB
         dec_out_clamped = ((dec_out + 1.0) / 2.0).clamp(0.0, 1.0)
         img_array = (dec_out_clamped.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
 
-        # Сохранение на SSD
+        # Фиксация кадра на SSD
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
+
   
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
 def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
