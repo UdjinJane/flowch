@@ -112,16 +112,16 @@ def main_train_loop():
                 latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
             
-                # === ИНЖЕКЦИЯ ЛОССА V05: КАНОНИЧЕСКИЙ RECTIFIED FLOW ===
                 # Логит-нормальный замер времени и масштабирование под [0-1000]
+                # === ИНЖЕКЦИЯ CHROMA V05: ЧАСТЬ 1 (Подготовка и вызов) ===
                 t_attr = torch.sigmoid(torch.randn(1, device=device) * 1.0).to(dtype=torch.bfloat16)
                 noise = torch.randn_like(latents)
                 t_model_scale = (t_attr * 1000.0).to(device=device, dtype=torch.bfloat16)
 
-                # Линейное зашумление и подготовка
-                packed_noisy_latents = pack_latents_to_patches((1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise)
+                # Формирование зашумленных данных и сетки
+                noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
+                packed_noisy_latents = pack_latents_to_patches(noisy_latents)
                 img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
-                current_batch = {"latents": latents, "prompt_embeds": prompt_embeds}
 
                 # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 ===
                 # Передаем аргументы строго по каноническому порядку портов ядра runner_v02
@@ -135,6 +135,27 @@ def main_train_loop():
                     torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16),
                     img_ids
                 )
+                # === КОНЕЦ ЧАСТИ 1 ===
+                
+                # === ИНЖЕКЦИЯ CHROMA V05: ЧАСТЬ 2 (Синхронизация и лосс) ===
+                # 1. Расчет истинного направления потока Rectified Flow
+                raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+
+                # 2. Жесткий Chroma-сдвиг: проецируем 64 канала патча в 256 внутренних каналов
+                target_flow = raw_target_flow.repeat(1, 1, 4)
+
+                # 3. Активация защиты от Аномалии Песка (динамический вес по сигме)
+                weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
+
+                # 4. Прецизионный расчет лосса в float32 для защиты от Underflow
+                loss_active = (F.mse_loss(pred_tensor.float(), target_flow.float(), reduction="none") * weight_mask).mean()
+                loss = loss_active.detach().clone().to(torch.bfloat16)
+                telemetry.accumulate_step(t_attr, pred_tensor, target_flow, loss)
+
+                # 5. Обратная волна градиентов по каноническому шагу накопления
+                (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+
+                # === КОНЕЦ ИНЖЕКЦИИ CHROMA V05 ===
                 # === КОНЕЦ ПОЗИЦИОННОГО ВЫЗОВА ===
 
 
