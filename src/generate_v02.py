@@ -1,12 +1,15 @@
-# Финальная версия generate_v02.py (БЛОК 1 ИЗ 2: ОРИГИНАЛЬНЫЙ МАРШ)
+# === МАРКЕР НАЧАЛА: ИМПОРТЫ_ГЕНЕРАТОРА_V05 ===
 import os
 import torch
 import time
 from PIL import Image
+from einops import rearrange  # ЖЕСТКИЙ ФИКС: спасаем Pixel Shuffle от NameError
 from config import TrainConfig
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from safetensors.torch import load_file
 from model_runner_v02 import run_lora_model_step
+# === МАРКЕР КОНЦА: ИМПОРТЫ_ГЕНЕРАТОРА_V05 ===
+
 
 def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=None, steps=25, device='cuda'):
     """[МАРШРУТ V02] Изолированный рендеринг кадра."""
