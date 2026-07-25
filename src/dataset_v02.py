@@ -26,6 +26,14 @@ class CachedFluxDatasetV02(Dataset):
                 # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
                 mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}_latents.pt")
+
+                # === ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ РАДАР V08 ===
+                # Выводим в лог первую строку, чтобы глазами увидеть, что и где ищет скрипт
+                if len(self.samples) == 0:
+                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
+                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
+                # === КОНЕЦ РАДАРА ===
+
                 
                 if os.path.exists(mono_text_path) and os.path.exists(latent_path):
                     self.samples.append({
