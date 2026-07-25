@@ -67,7 +67,7 @@ class CachedFluxDatasetV02(Dataset):
         latents = torch.load(sample["latent_path"], map_location="cpu", weights_only=True).squeeze(0)
         
         # Жесткий контроль геометрии латентов перед отправкой в ядро
-        assert latents.shape == (16, 64, 64), f"Unexpected latent shape: {latents.shape}"
+        assert latents.shape == (16, 128, 128), f"Unexpected latent shape: {latents.shape}"
         
         return {
             "prompt_embeds": prompt_embeds,
