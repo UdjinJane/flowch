@@ -43,47 +43,43 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     import glob
     from PIL import Image
     
-    # 1. Штурм бортового кэша текста для извлечения триггера mng_oks_bl
+    # === ИНЖЕКЦИЯ CHROMA V08_LOCAL: МОНОЛИТНЫЙ КЭШ PYTORCH ===
+    import glob
+    from PIL import Image
+
+    # 1. Загрузка кэша, извлечение эмбеддингов, маски и пулинга [1.10]
     try:
-        embed_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*.safetensors"))
-        if not embed_files:
-            raise FileNotFoundError("Кэш текста абсолютно пуст!")
-            
-        cached_embeds = load_file(embed_files[0], device="cpu")
-        prompt_embeds = cached_embeds.get("prompt_embeds", list(cached_embeds.values())[0]).to(device=device, dtype=torch.bfloat16)
+        embed_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*.pt"))
+        target_file = embed_files[0]
+        cached_dict = torch.load(target_file, map_location="cpu")
         
-        # Честное восстановление пулинга CLIP (не нули!) для глобального проектора Chroma
-        pooled_projections = cached_embeds.get("pooled_projections", torch.zeros((1, 768), device=device, dtype=torch.bfloat16)).to(device=device, dtype=torch.bfloat16)
-        
-        print(f"[УСПЕХ] Текстовый шлюз Chroma V07 открыт! Перехвачен живой кэш: {os.path.basename(embed_files[0])}")
+        # Получение данных с приведением типов
+        prompt_embeds = cached_dict["prompt_embeds"].to(device=device, dtype=torch.bfloat16)
+        prompt_attn_mask = cached_dict["prompt_attn_mask"].to(device=device)
+        pooled_projections = cached_dict["pooled_projections"].to(device=device, dtype=torch.bfloat16)
     except Exception as e:
-        print(f"[КРАХ ТЕСТА] Ошибка текстового тракта V07: {e}. Аварийная генерация заглушек.")
-        prompt_embeds = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), device=device, dtype=torch.bfloat16)
-        pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
+        print(f"Ошибка загрузки кэша: {e}")
 
-    # 2. СПЕКТРАЛЬНЫЙ АНАЛИЗ МАНТИССЫ CHROMA V07 ПЕРЕД ЗАПУСКОМ СЭМПЛЕРА
-    print("=" * 60)
-    print("[СПЕКТРАЛЬНЫЙ АНАЛИЗ МАНТИССЫ CHROMA V07]")
-    print(f" -> prompt_embeds shape: {prompt_embeds.shape} | mean: {prompt_embeds.mean().item():.6f} | std: {prompt_embeds.std().item():.6f}")
-    print(f" -> pooled_projections shape: {pooled_projections.shape} | mean: {pooled_projections.mean().item():.6f} | std: {pooled_projections.std().item():.6f}")
-    print(f" -> Target Resolution: {TrainConfig.RESOLUTION}x{TrainConfig.RESOLUTION}")
-    print(f" -> Scheduler Config: {pipe.scheduler.config}")
-    print("=" * 60)
+    # 2. Спектральный анализ [1.10]
+    print(f"[АНАЛИЗ] prompt_embeds: {prompt_embeds.shape}, pooled: {pooled_projections.shape}")
 
-    # 3. БОЕВОЙ ЗАПУСК ОРИГИНАЛЬНОГО ПАЙПЛАЙНА
+    # 3. Запуск пайплайна (синхронизировано) [1.10]
     with torch.inference_mode():
-        # Убираем pooled_projections, используем только канонические параметры
         pipeline_output = pipe(
             prompt_embeds=prompt_embeds,
             height=TrainConfig.RESOLUTION,
             width=TrainConfig.RESOLUTION,
             num_inference_steps=25,
-            output_type="pil",
-            return_dict=True
+            output_type="pil"
         )
-        
-        # Забираем готовое изображение
         final_image = pipeline_output.images[0]
+
+    # 4. Сохранение
+    final_image.save(os.path.join(TrainConfig.OUTPUT_DIR, "images", f"render_{current_step}.png"))
+
+# ... остальной код (заглушки) ...
+# === КОНЕЦ: CHROMA_PIPELINE_MONOLITH_V08 ===
+
 
     # 4. ФИКСАЦИЯ И СБРОС СНАРЯДА НА SSD
     output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
