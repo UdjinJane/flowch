@@ -16,10 +16,14 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # Фазы инициализации, рандома и 2D сетки
     loaded_transformer.eval()
     x_t = torch.randn(1, 32*32, 64, device=device, dtype=torch.bfloat16)
-    grid_h = torch.arange(32, device=device, dtype=torch.bfloat16)[:, None].repeat(1, 32)
-    grid_w = torch.arange(32, device=device, dtype=torch.bfloat16)[None, :].repeat(32, 1)
-    img_ids = torch.zeros((32*32, 3), device=device, dtype=torch.bfloat16)
-    img_ids[:, 1], img_ids[:, 2] = grid_h.flatten(), grid_w.flatten()
+    # === МОНТАЖ КАНОНИЧЕСКОЙ ROPE СЕТКИ LOODSTONE (V04) ===
+    # Выстраиваем 2D позиционные эмбеддинги corner-based типа, 
+    # в точности повторяя функцию prepare_latent_image_ids из chroma_pipeline
+    img_ids = torch.zeros(32, 32, 3, device=device, dtype=torch.bfloat16)
+    img_ids[..., 1] = img_ids[..., 1] + torch.arange(32, device=device, dtype=torch.bfloat16)[:, None]
+    img_ids[..., 2] = img_ids[..., 2] + torch.arange(32, device=device, dtype=torch.bfloat16)[None, :]
+    img_ids = img_ids.reshape(32 * 32, 3)
+
     
     cond = text_embedding.to(device, dtype=torch.bfloat16) if text_embedding is not None else torch.zeros((1, 256, 4096), device=device, dtype=torch.bfloat16)
     pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
