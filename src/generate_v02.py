@@ -25,8 +25,8 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r", encoding="utf-8-sig") as f:
         vae_config = json.load(f)
 
-    
     vae_config["block_out_channels"] = [128, 256, 512, 512]
+
     vae = AutoencoderKL.from_config(vae_config).to(device=device, dtype=torch.bfloat16)
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
 
