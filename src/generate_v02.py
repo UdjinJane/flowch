@@ -78,20 +78,21 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
    
     #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05 --------------------
-    # [ВЫЖЖЕНО ПЛАЗМОЙ: Сборка V05 устраняет ручной обход и костыли каналов]
+    #------------------ ОБРАБОТКА АНОМАЛИИ И КАНОНИЧЕСКИЙ ДЕКОД V05 --------------------
+    # [ВЫЖЖЕНО ПЛАЗМОЙ: Сборка V05 полностью ликвидирует einops и чинит масштаб мантиссы]
     with torch.no_grad():
-        # 1. Инверсный Pixel Shuffle (пересборка осей из V04)
-        latents_unpacked = rearrange(x_t, 'b (h w) (c p1 p2) -> b c (h p1) (w p2)', 
-                                    h=32, w=32, p1=2, p2=2)
+        # 1. Инверсный Нативный Pixel Shuffle Лодстона (чистый PyTorch, без einops)
+        latents_packed = x_t.view(1, 32, 32, 64)
+        latents_patches = latents_packed.reshape(1, 32, 32, 16, 2, 2)
+        latents_spatial = latents_patches.permute(0, 3, 1, 4, 2, 5)
+        latents_unpacked = latents_spatial.reshape(1, 16, 64, 64).to(dtype=x_t.dtype, device=x_t.device)
 
-        # 2. АДАПТИВНОЕ ДЕНОРМИРОВАНИЕ
+        # 2. АДАПТИВНОЕ ДЕНОРМИРОВАНИЕ ПО СПЕЦИФИКАЦИИ VAE
         sf = getattr(vae.config, "scaling_factor", 0.3611)
         shf = getattr(vae.config, "shift_factor", 0.1159)
-        
-        # ФИКС: Исправлено на каноническое деление
-        z_cleaned = (latents_unpacked / sf) + shf
+        z_cleaned = (latents_unpacked / sf) + shf  # КАНОНИЧЕСКОЕ ДЕЛЕНИЕ V05
 
-        # 3. ИСПОЛЬЗОВАНИЕ РОДНОГО VAE.DECODE
+        # 3. ИСПОЛЬЗОВАНИЕ РОДНОГО VAE.DECODE (костыли демонтированы)
         dec_out = vae.decode(z_cleaned, return_dict=False)[0]
 
         # Конвертация в RGB [0, 255]
@@ -102,6 +103,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
+
 
    
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
