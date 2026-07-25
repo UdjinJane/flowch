@@ -70,14 +70,11 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     print(f" -> Scheduler Config: {pipe.scheduler.config}")
     print("=" * 60)
 
-
-
-    # 3. БОЕВОЙ ЗАПУСК ОРИГИНАЛЬНОГО ПАЙПЛАЙНА (Кустарщина полностью ликвидирована)
+    # 3. БОЕВОЙ ЗАПУСК ОРИГИНАЛЬНОГО ПАЙПЛАЙНА
     with torch.inference_mode():
-        # Сэмплируем через канонический __call__ оригинального ChromaPipeline
+        # Убираем pooled_projections, используем только канонические параметры
         pipeline_output = pipe(
             prompt_embeds=prompt_embeds,
-            pooled_projections=pooled_projections,
             height=TrainConfig.RESOLUTION,
             width=TrainConfig.RESOLUTION,
             num_inference_steps=25,
@@ -85,7 +82,7 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
             return_dict=True
         )
         
-        # Извлекаем первый запеченный кадр из возвращенного FluxPipelineOutput
+        # Забираем готовое изображение
         final_image = pipeline_output.images[0]
 
     # 4. ФИКСАЦИЯ И СБРОС СНАРЯДА НА SSD
