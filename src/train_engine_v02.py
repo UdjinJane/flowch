@@ -156,7 +156,6 @@ def main_train_loop():
                 (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
 
                 # === КОНЕЦ ИНЖЕКЦИИ CHROMA V05 ===
-                # === КОНЕЦ ИНЖЕКЦИИ CHROMA V05 ===
 
                 if global_step % TrainConfig. GRADIENT_ACCUMULATION_STEPS == 0:
                     torch. nn. utils. clip_grad_norm_( trainable_params, max_norm= 1.0)
