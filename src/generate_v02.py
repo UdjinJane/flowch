@@ -58,14 +58,16 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         prompt_embeds = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), device=device, dtype=torch.bfloat16)
         pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
 
-        # 2. ВИЗУАЛИЗАЦИЯ МАНТИССЫ И ГЕОМЕТРИИ ПЕРЕД ЗАПУСКОМ СЭМПЛЕРА
+    # 2. СПЕКТРАЛЬНЫЙ АНАЛИЗ МАНТИССЫ CHROMA V07 ПЕРЕД ЗАПУСКОМ СЭМПЛЕРА
     print("=" * 60)
-    print("[МОНИТОР МАНТИССЫ CHROMA PIPELINE V07]")
-    print(f" -> prompt_embeds shape: {prompt_embeds.shape} | dtype: {prompt_embeds.dtype}")
-    print(f" -> pooled_projections shape: {pooled_projections.shape} | dtype: {pooled_projections.dtype}")
+    print("[СПЕКТРАЛЬНЫЙ АНАЛИЗ МАНТИССЫ CHROMA V07]")
+    print(f" -> prompt_embeds shape: {prompt_embeds.shape} | mean: {prompt_embeds.mean().item():.6f} | std: {prompt_embeds.std().item():.6f}")
+    print(f" -> pooled_projections shape: {pooled_projections.shape} | mean: {pooled_projections.mean().item():.6f} | std: {pooled_projections.std().item():.6f}")
     print(f" -> Target Resolution: {TrainConfig.RESOLUTION}x{TrainConfig.RESOLUTION}")
     print(f" -> Scheduler Config: {pipe.scheduler.config}")
     print("=" * 60)
+
+
 
     # 3. БОЕВОЙ ЗАПУСК ОРИГИНАЛЬНОГО ПАЙПЛАЙНА (Кустарщина полностью ликвидирована)
     with torch.inference_mode():
