@@ -14,11 +14,15 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     """[МАРШРУТ V07] Валидация через оригинальный ChromaPipeline."""
     print(f"\n[ОБТ] >>> ИНИЦИАЛИЗАЦИЯ CHROMA V07 | ШАГ #{current_step} <<<")
 
-    # 1. Планировщик FlowMatch
+    # 1. Планировщик FlowMatch (Синхронизировано со сдвигом 1024px)
     scheduler = FlowMatchEulerDiscreteScheduler.from_config({
-        "base_image_seq_len": 256, "max_image_seq_len": 4096,
-        "base_shift": 0.5, "max_shift": 1.15, "shift": 3.0
+        "base_image_seq_len": 256, 
+        "max_image_seq_len": 4096,
+        "base_shift": 0.5, 
+        "max_shift": 1.15, 
+        "shift": 1.0  # Устанавливаем эталонный сдвиг под тяжелую Chroma-материю
     })
+
 
     # 2. VAE (Загрузка весов со стопроцентной дезинфекцией UTF-8 BOM)
     import json
