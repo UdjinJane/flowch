@@ -65,89 +65,6 @@
       └─ DSC_0570_latents.pt (129.20 KB)
       └─ DSC_0571_latents.pt (129.20 KB)
       └─ DSC_0572_latents.pt (129.20 KB)
-    [Папка] text_embeds
-      └─ DSC_0465_embeds.pt (2049.19 KB)
-      └─ DSC_0465_mask.pt (3.18 KB)
-      └─ DSC_0466_embeds.pt (2049.19 KB)
-      └─ DSC_0466_mask.pt (3.18 KB)
-      └─ DSC_0467_embeds.pt (2049.19 KB)
-      └─ DSC_0467_mask.pt (3.18 KB)
-      └─ DSC_0468_embeds.pt (2049.19 KB)
-      └─ DSC_0468_mask.pt (3.18 KB)
-      └─ DSC_0469_embeds.pt (2049.19 KB)
-      └─ DSC_0469_mask.pt (3.18 KB)
-      └─ DSC_0472_embeds.pt (2049.19 KB)
-      └─ DSC_0472_mask.pt (3.18 KB)
-      └─ DSC_0473_embeds.pt (2049.19 KB)
-      └─ DSC_0473_mask.pt (3.18 KB)
-      └─ DSC_0475_embeds.pt (2049.19 KB)
-      └─ DSC_0475_mask.pt (3.18 KB)
-      └─ DSC_0476_embeds.pt (2049.19 KB)
-      └─ DSC_0476_mask.pt (3.18 KB)
-      └─ DSC_0481_embeds.pt (2049.19 KB)
-      └─ DSC_0481_mask.pt (3.18 KB)
-      └─ DSC_0482_embeds.pt (2049.19 KB)
-      └─ DSC_0482_mask.pt (3.18 KB)
-      └─ DSC_0483_embeds.pt (2049.19 KB)
-      └─ DSC_0483_mask.pt (3.18 KB)
-      └─ DSC_0484_embeds.pt (2049.19 KB)
-      └─ DSC_0484_mask.pt (3.18 KB)
-      └─ DSC_0485_embeds.pt (2049.19 KB)
-      └─ DSC_0485_mask.pt (3.18 KB)
-      └─ DSC_0486_embeds.pt (2049.19 KB)
-      └─ DSC_0486_mask.pt (3.18 KB)
-      └─ DSC_0487_embeds.pt (2049.19 KB)
-      └─ DSC_0487_mask.pt (3.18 KB)
-      └─ DSC_0522_embeds.pt (2049.19 KB)
-      └─ DSC_0522_mask.pt (3.18 KB)
-      └─ DSC_0523_embeds.pt (2049.19 KB)
-      └─ DSC_0523_mask.pt (3.18 KB)
-      └─ DSC_0524_embeds.pt (2049.19 KB)
-      └─ DSC_0524_mask.pt (3.18 KB)
-      └─ DSC_0525_embeds.pt (2049.19 KB)
-      └─ DSC_0525_mask.pt (3.18 KB)
-      └─ DSC_0526_embeds.pt (2049.19 KB)
-      └─ DSC_0526_mask.pt (3.18 KB)
-      └─ DSC_0527_embeds.pt (2049.19 KB)
-      └─ DSC_0527_mask.pt (3.18 KB)
-      └─ DSC_0528_embeds.pt (2049.19 KB)
-      └─ DSC_0528_mask.pt (3.18 KB)
-      └─ DSC_0529_embeds.pt (2049.19 KB)
-      └─ DSC_0529_mask.pt (3.18 KB)
-      └─ DSC_0530_embeds.pt (2049.19 KB)
-      └─ DSC_0530_mask.pt (3.18 KB)
-      └─ DSC_0531_embeds.pt (2049.19 KB)
-      └─ DSC_0531_mask.pt (3.18 KB)
-      └─ DSC_0532_embeds.pt (2049.19 KB)
-      └─ DSC_0532_mask.pt (3.18 KB)
-      └─ DSC_0533_embeds.pt (2049.19 KB)
-      └─ DSC_0533_mask.pt (3.18 KB)
-      └─ DSC_0554_embeds.pt (2049.19 KB)
-      └─ DSC_0554_mask.pt (3.18 KB)
-      └─ DSC_0555_embeds.pt (2049.19 KB)
-      └─ DSC_0555_mask.pt (3.18 KB)
-      └─ DSC_0556_embeds.pt (2049.19 KB)
-      └─ DSC_0556_mask.pt (3.18 KB)
-      └─ DSC_0557_embeds.pt (2049.19 KB)
-      └─ DSC_0557_mask.pt (3.18 KB)
-      └─ DSC_0559_embeds.pt (2049.19 KB)
-      └─ DSC_0559_mask.pt (3.18 KB)
-      └─ DSC_0560_embeds.pt (2049.19 KB)
-      └─ DSC_0560_mask.pt (3.18 KB)
-      └─ DSC_0562_embeds.pt (2049.19 KB)
-      └─ DSC_0562_mask.pt (3.18 KB)
-      └─ DSC_0563_embeds.pt (2049.19 KB)
-      └─ DSC_0563_mask.pt (3.18 KB)
-      └─ DSC_0564_embeds.pt (2049.19 KB)
-      └─ DSC_0564_mask.pt (3.18 KB)
-      └─ DSC_0569_embeds.pt (2049.19 KB)
-      └─ DSC_0569_mask.pt (3.18 KB)
-      └─ DSC_0570_embeds.pt (2049.19 KB)
-      └─ DSC_0570_mask.pt (3.18 KB)
-      └─ DSC_0571_embeds.pt (2049.19 KB)
-      └─ DSC_0571_mask.pt (3.18 KB)
-      └─ DSC_0572_embeds.pt (2049.19 KB)
-      └─ DSC_0572_mask.pt (3.18 KB)
   [Папка] dataset
     [Папка] latent_cache
       └─ DSC_0465.pt (513.16 KB)
@@ -1796,23 +1713,7 @@
 
 
 [УЗЕЛ 2: СПЕКТРАЛЬНОЕ ВСКРЫТИЕ СТРУКТУРЫ PT-КЭША]: Z:\flowch\cache\text_embeds
-  -> Всего .pt файлов обнаружено в трюме: 82
-
-  [Зонд снаряда] -> DSC_0465_embeds.pt
-     └─ Тип контейнера: ИЗОЛИРОВАННЫЙ ТЕНЗОР (torch.Tensor)
-        └─ Shape: [1, 256, 4096] | dtype: torch.bfloat16
-
-  [Зонд снаряда] -> DSC_0465_mask.pt
-     └─ Тип контейнера: ИЗОЛИРОВАННЫЙ ТЕНЗОР (torch.Tensor)
-        └─ Shape: [1, 256] | dtype: torch.int64
-
-  [Зонд снаряда] -> DSC_0466_embeds.pt
-     └─ Тип контейнера: ИЗОЛИРОВАННЫЙ ТЕНЗОР (torch.Tensor)
-        └─ Shape: [1, 256, 4096] | dtype: torch.bfloat16
-
-  [Зонд снаряда] -> DSC_0466_mask.pt
-     └─ Тип контейнера: ИЗОЛИРОВАННЫЙ ТЕНЗОР (torch.Tensor)
-        └─ Shape: [1, 256] | dtype: torch.int64
+  [КРИТ] Путь cache\text_embeds физически не существует на диске!
 
 ================================================================================
 [КОНЕЦ СЛЕДСТВЕННОГО МАНИФЕСТА]
