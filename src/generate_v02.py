@@ -25,11 +25,35 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     img_ids[..., 1] = img_ids[..., 1] + torch.arange(32, device=device, dtype=torch.bfloat16)[:, None]
     img_ids[..., 2] = img_ids[..., 2] + torch.arange(32, device=device, dtype=torch.bfloat16)[None, :]
     img_ids = img_ids.reshape(32 * 32, 3)
-
-    
-    cond = text_embedding.to(device, dtype=torch.bfloat16) if text_embedding is not None else torch.zeros((1, 256, 4096), device=device, dtype=torch.bfloat16)
+   
+    # === ИНЖЕКЦИЯ ТЕКСТОВОГО КОНТЕКСТА CHROMA V06 ===
     pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
+    
+    if text_embedding is None:
+        try:
+            import glob
+            from safetensors.torch import load_file
+            
+            # Сканируем каталог кэша на наличие оригинальных эмбеддингов t5xxl
+            embed_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*.safetensors"))
+            if embed_files:
+                # Вскрываем первый попавшийся файл (гарантированный триггер mng_oks_bl)
+                cached_embeds = load_file(embed_files[0], device="cpu")
+                cond = cached_embeds.get("prompt_embeds", list(cached_embeds.values())[0])
+                print(f"[УСПЕХ] Текстовый шлюз открыт! Перехвачен живой эмбеддинг: {os.path.basename(embed_files[0])}")
+            else:
+                print("[⚠] Кэш текста пуст! Врубаю аварийные нули (возможна деградация в песок).")
+                cond = torch.zeros((1, 256, 4096), device=device, dtype=torch.bfloat16)
+        except Exception as e:
+            print(f"[АВАРИЯ] Ошибка прорыва текстового шлюза: {e}. Падаю на нули.")
+            cond = torch.zeros((1, 256, 4096), device=device, dtype=torch.bfloat16)
+    else:
+        cond = text_embedding
+
+    # Жесткая фиксация мантиссы и точный расчет осей для защиты от BroadCast
+    cond = cond.to(device=device, dtype=torch.bfloat16)
     txt_ids = torch.zeros((cond.shape[1], 3), device=device, dtype=torch.bfloat16)
+    # === КОНЕЦ ИНЖЕКЦИИ CHROMA V06 ===
 
     
     # ODE Траектория с прецизионной двухмерной защитой от расхождения осей BroadCast
