@@ -5,9 +5,10 @@ from safetensors.torch import load_file
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
-# Импорт эталона из learn/AIToolkit/core_extracts
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "learn", "AIToolkit", "core_extracts"))
+# === МАРКЕР СИНХРОНИЗАЦИИ CHROMA V07_LOCAL ===
+# Выжжены внешние пути, привязываемся строго к внутреннему контуру src/
 from chroma_pipeline import ChromaPipeline
+# === КОНЕЦ МАРКЕРА ===
 
 def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     """[МАРШРУТ V07] Валидация через оригинальный ChromaPipeline."""
