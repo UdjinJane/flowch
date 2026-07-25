@@ -29,7 +29,9 @@ class TrainConfig:
     # Принудительно переключаем генератор на реальный корневой монолитный кэш
     CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "text_cache")
 
-    CACHE_LATENT_DIR = os.path.join(CACHE_DIR, "latent_embeds")
+    # === ПОДКЛЮЧЕНИЕ ЧИСТОКРОВНОЙ МАТЕРИИ CHROMA V09 ===
+    CACHE_LATENT_DIR = os.path.join(ROOT_DIR, "dataset", "latent_cache")
+
 
     # --- СУНДУЧОК CORE-МОДЕЛЕЙ (МАРШРУТЫ К ВЕСАМ CHROMA1) ---
     MODELS_CORE_DIR = os.path.join(ROOT_DIR, "models_core")
