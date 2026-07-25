@@ -140,19 +140,40 @@ def main_train_loop():
                 # === ИНЖЕКЦИЯ CHROMA V05: ЧАСТЬ 2 (Синхронизация и лосс) ===
                 # === СИНХРОНИЗАЦИЯ КАНАЛОВ РАННЕРА CHROMA V10 ===
                 # 1. Расчет истинного направления потока Rectified Flow (64 канала)
-                raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+                # raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
                 
                 # 2. Повторяем только ось канаков (dim=2), чтобы идеально совпасть с 256-канальным выходом runner_v02 НО ЭТО НУЖНО ФИКСИТЬ! МЫ ОБМАНЫВАЕМ ЕНЖИН!
-                target_flow = raw_target_flow.repeat(1, 1, 4)
+                # target_flow = raw_target_flow.repeat(1, 1, 4)
 
 
 
                 # 3. Активация защиты от Аномалии Песка (динамический вес по сигме)
-                weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
+                # weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
 
                 # 4. Прецизионный расчет лосса в float32 для защиты от Underflow
-                loss_active = (F.mse_loss(pred_tensor.float(), target_flow.float(), reduction="none") * weight_mask).mean()
+                # loss_active = (F.mse_loss(pred_tensor.float(), target_flow.float(), reduction="none") * weight_mask).mean()
+                # loss = loss_active.detach().clone().to(torch.bfloat16)
+                
+                # === КАНbackgroundИЧЕСКОЕ ВЫРАВНИВАНИЕ МАНТИССЫ RECTIFIED FLOW V11 ===
+                # 1. Расчет истинного направления потока (честные 64 канала упакованных пикселей)
+                raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+                target_flow = raw_target_flow
+                
+                # 2. Безопасное сжатие выхлопа раннера из 256 внутренних каналов трансформера обратно в 64 канала кадра
+                # Мы прессуем тензор [1, 4096, 256] -> [1, 4096, 64, 4] и берем среднее по четверкам признаков
+                if pred_tensor.shape[-1] == 256:
+                    pred_tensor_64 = pred_tensor.view(pred_tensor.shape[0], pred_tensor.shape[1], 64, 4).mean(dim=-1)
+                else:
+                    pred_tensor_64 = pred_tensor
+                    
+                # 3. Активация защиты от Аномалии Песка (динамический вес по сигме)
+                weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
+                
+                # 4. Прецизионный расчет лосса строго на канонических 64 каналах Flux
+                loss_active = (F.mse_loss(pred_tensor_64.float(), target_flow.float(), reduction="none") * weight_mask).mean()
                 loss = loss_active.detach().clone().to(torch.bfloat16)
+
+                # ----------- ТЕЛЕМЕТРИЯ_НАШЕ ВСЁ-----------------------------               
                 telemetry.accumulate_step(t_attr, pred_tensor, target_flow, loss)
 
                 # 5. Обратная волна градиентов по каноническому шагу накопления
