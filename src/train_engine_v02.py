@@ -210,11 +210,14 @@ def main_train_loop():
                 # Врубаем тестовую генерацию кадра для Кэпа
                 lora_model.eval()
                 with torch.no_grad():
+                # === СТЫКОВКА ИНФЕРЕНСА CHROMA V07 ===
+                # Передаем только трансформер и шаг. Эмбеддинги и пулинг генератор заберет из кэша сам.
                     run_inference_v02(
-                        loaded_transformer=lora_model, 
-                        current_step=global_step, 
-                        text_embedding=prompt_embeds
-                    )
+                    loaded_transformer=lora_model,
+                    current_step=global_step
+                )
+                # === КОНЕЦ СТЫКОВКИ ===
+
                 lora_model.train()
 
     print("[УСПЕХ] Реактор завершил плавку всех эпох. Контур чист!")
