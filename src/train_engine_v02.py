@@ -123,15 +123,20 @@ def main_train_loop():
                 img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
                 current_batch = {"latents": latents, "prompt_embeds": prompt_embeds}
 
-                # Снайперский вызов модели с правильной шкалой времени
+                # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 ===
+                # Передаем аргументы строго по каноническому порядку портов ядра runner_v02
                 pred_tensor = run_lora_model_step(
-                    lora_model=lora_model,
-                    batch=current_batch,
-                    packed_noisy_latents=packed_noisy_latents,
-                    timesteps_attr=t_model_scale,
-                    prompt_embeds=prompt_embeds,
-                    img_ids=img_ids
+                    lora_model,
+                    {"text_ids_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bool)},
+                    packed_noisy_latents,
+                    t_model_scale,
+                    prompt_embeds,
+                    torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
+                    torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16),
+                    img_ids
                 )
+                # === КОНЕЦ ПОЗИЦИОННОГО ВЫЗОВА ===
+
 
                 # Расчет целевого потока и весовая маска (защита от затухания)
                 target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
