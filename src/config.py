@@ -25,7 +25,10 @@ class TrainConfig:
     # --- МАГИСТРАЛИ ДАННЫХ И КЭША (ДЛЯ DATASET_V02) ---
     METADATA_PATH = os.path.join(DATASET_DIR, "metadata.jsonl")
     CACHE_DIR = os.path.join(ROOT_DIR, "cache")
-    CACHE_TEXT_DIR = os.path.join(CACHE_DIR, "text_embeds")
+    # === ФИКС ТЕКСТОВОЙ МАГИСТРАЛИ CHROMA V08 ===
+    # Принудительно переключаем генератор на реальный корневой монолитный кэш
+    CACHE_TEXT_DIR = os.path.join(ROOT_DIR, "text_cache")
+
     CACHE_LATENT_DIR = os.path.join(CACHE_DIR, "latent_embeds")
 
     # --- СУНДУЧОК CORE-МОДЕЛЕЙ (МАРШРУТЫ К ВЕСАМ CHROMA1) ---
