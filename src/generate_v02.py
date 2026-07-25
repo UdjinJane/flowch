@@ -38,47 +38,57 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         text_encoder_2=None, tokenizer_2=None
     ).to(device=device, dtype=torch.bfloat16)
 
-    pipe.maybe_free_model_hooks = lambda: None # Удержание хуков
-    # === ИНЖЕКЦИЯ CHROMA V07: ЧАСТЬ 2 (Сборка кэша и боевой запуск) ===
+    # === ИНЖЕКЦИЯ CHROMA V08_FINAL: ЧАСТЬ 1 (Вскрытие Монолита) ===
     import glob
-    from PIL import Image
     
-    # === ИНЖЕКЦИЯ CHROMA V08_LOCAL: МОНОЛИТНЫЙ КЭШ PYTORCH ===
-    import glob
-    from PIL import Image
-
-    # 1. Загрузка кэша, извлечение эмбеддингов, маски и пулинга [1.10]
     try:
+        # Сканируем трюм на наличие оригинальных монолитных .pt словарей
         embed_files = glob.glob(os.path.join(TrainConfig.CACHE_TEXT_DIR, "*.pt"))
+        if not embed_files:
+            raise FileNotFoundError(f"Каталог {TrainConfig.CACHE_TEXT_DIR} пуст!")
+            
+        # Берем первый эталонный снаряд из text_cache
         target_file = embed_files[0]
         cached_dict = torch.load(target_file, map_location="cpu")
         
-        # Получение данных с приведением типов
+        # Поатомно извлекаем все три ключа кузнецов с приведением типов к CUDA-портам
         prompt_embeds = cached_dict["prompt_embeds"].to(device=device, dtype=torch.bfloat16)
         prompt_attn_mask = cached_dict["prompt_attn_mask"].to(device=device)
         pooled_projections = cached_dict["pooled_projections"].to(device=device, dtype=torch.bfloat16)
+        
+        print(f"[УСПЕХ] Монолитный шлюз V08_FINAL открыт! Распакован кэш: {os.path.basename(target_file)}")
     except Exception as e:
-        print(f"Ошибка загрузки кэша: {e}")
+        print(f"[КРАХ ТЕСТА] Сбой распаковки словаря V08: {e}. Переход на аварийные нули.")
+        prompt_embeds = torch.zeros((1, TrainConfig.MAX_SEQUENCE_LENGTH, 4096), device=device, dtype=torch.bfloat16)
+        prompt_attn_mask = torch.ones((1, TrainConfig.MAX_SEQUENCE_LENGTH), device=device, dtype=torch.bool)
+        pooled_projections = torch.zeros((1, 768), device=device, dtype=torch.bfloat16)
 
-    # 2. Спектральный анализ [1.10]
-    print(f"[АНАЛИЗ] prompt_embeds: {prompt_embeds.shape}, pooled: {pooled_projections.shape}")
+    # === ИНЖЕКЦИЯ CHROMA V08_FINAL: ЧАСТЬ 2 (Спектральный анализ) ===
+    print("=" * 60)
+    print("[СПЕКТРАЛЬНЫЙ АНАЛИЗ МАНТИССЫ CHROMA V08_FINAL]")
+    print(f" -> prompt_embeds shape: {prompt_embeds.shape} | mean: {prompt_embeds.mean().item():.6f} | std: {prompt_embeds.std().item():.6f}")
+    print(f" -> pooled_projections shape: {pooled_projections.shape} | mean: {pooled_projections.mean().item():.6f} | std: {pooled_projections.std().item():.6f}")
+    print("=" * 60)
 
-    # 3. Запуск пайплайна (синхронизировано) [1.10]
+    # === ИНЖЕКЦИЯ CHROMA V08_FINAL: ЧАСТЬ 3 (Боевой запуск пайплайна) ===
     with torch.inference_mode():
+        # Сэмплируем через канонический __call__ оригинального локального ChromaPipeline
+        # Передаем весь прецизионный триплет тензоров из text_cache
         pipeline_output = pipe(
             prompt_embeds=prompt_embeds,
+            prompt_attn_mask=prompt_attn_mask,
+            pooled_projections=pooled_projections,
             height=TrainConfig.RESOLUTION,
             width=TrainConfig.RESOLUTION,
             num_inference_steps=25,
-            output_type="pil"
+            output_type="pil",
+            return_dict=True
         )
+        
+        # Извлекаем чистокровный, очищенный от песка кадр
         final_image = pipeline_output.images[0]
-
-    # 4. Сохранение
-    final_image.save(os.path.join(TrainConfig.OUTPUT_DIR, "images", f"render_{current_step}.png"))
-
-# ... остальной код (заглушки) ...
-# === КОНЕЦ: CHROMA_PIPELINE_MONOLITH_V08 ===
+        
+    # === КОНЕЦ МОНОЛИТА CHROMA V08_FINAL ===
 
 
     # 4. ФИКСАЦИЯ И СБРОС СНАРЯДА НА SSD
