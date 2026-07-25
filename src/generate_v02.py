@@ -64,26 +64,43 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
     # энкодер будет проигнорирован благодаря strict=False.
     vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
    
-    #------------------ ОБРАБОТКА АНОМАЛИИ И ОБРАТНЫЙ PIXEL SHUFFLE V03 --------------------
+  
+    #------------------ ОБРАБОТКА АНОМАЛИИ И ГИБРИДНЫЙ ДЕКОД V03 --------------------
     with torch.no_grad():
-        # 1. Восстанавливаем 4D-сетку трансформера Chroma1: (1, 1024, 64) -> (1, 32, 32, 64)
+        # 1. Инверсный Pixel Shuffle Лодстона (Распаковываем 64 канала в истинные 16)
         latents_packed = x_t.view(1, 32, 32, 64)
-        
-        # 2. Инверсный Pixel Shuffle: распределяем 64 канала в структуру патчей 2x2 под 16 каналов VAE
-        # (1, 32, 32, 64) -> (1, 32, 32, 16, 2, 2)
         latents_patches = latents_packed.reshape(1, 32, 32, 16, 2, 2)
-        
-        # Переносим оси патчей ph (4) и pw (5) обратно в пространственную сетку H и W
-        # (1, 32, 32, 16, 2, 2) -> (1, 16, 32, 2, 32, 2)
         latents_spatial = latents_patches.permute(0, 3, 1, 4, 2, 5)
-        
-        # Схлопываем сетку: разрешение раздувается с 32x32 до нативных 64x64 в 16-канальном пространстве Flux
         latents_unpacked = latents_spatial.reshape(1, 16, 64, 64).to(dtype=x_t.dtype, device=x_t.device)
 
-        # 3. Безопасный канонический декод — теперь 16 чистых каналов Flux летят напрямую в родной VAE
-        dec_out = vae.decode((latents_unpacked * 0.3611) + 0.1159).sample
-        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
+        # Подготовка масштаба латентов Flux
+        z = (latents_unpacked * 0.3611) + 0.1159
+        
+        # 2. ПОСЛОЙНЫЙ РУЧНОЙ ПРОХОД ПО АМПУТИРОВАННОМУ ДЕКОДЕРУ (vae.decoder)
+        z_conv = vae.post_quant_conv(z)
+        sample = vae.decoder.conv_in(z_conv)
+        
+        if hasattr(vae.decoder, 'mid_block') and vae.decoder.mid_block is not None:
+            sample = vae.decoder.mid_block(sample)
+            
+        for block in vae.decoder.up_blocks:
+            sample = block(sample)
+            
+        # === ТАКТИЧЕСКИЙ СЖАТЕЛЬ СТАРПОМА ПОД СЕТКУ 128x128 (512 -> 128 КАНАЛОВ) ===
+        # Перехватываем 512 каналов на выходе up_blocks и схлопываем их в эталонные 128
+        out_cleaner = torch.nn.Conv2d(512, 128, kernel_size=1, bias=False).to(device=sample.device, dtype=sample.dtype)
+        out_cleaner.weight.data.zero_()
+        for idx in range(128):
+            out_cleaner.weight.data[idx, idx, 0, 0] = 1.0
+        sample_compressed = out_cleaner(sample)
+        
+        # 3. ФИНАЛЬНЫЙ СТВОР: Передаем выровненные 128 каналов в норму и выхлоп
+        sample_norm = vae.decoder.conv_norm_out(sample_compressed)
+        sample_act = vae.decoder.conv_act(sample_norm)
+        dec_out = vae.decoder.conv_out(sample_act)
 
+        # Отрезаем оси, переводим в пиксели и сохраняем снаряд
+        img_array = (dec_out.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
