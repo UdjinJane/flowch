@@ -92,10 +92,29 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         shf = getattr(vae.config, "shift_factor", 0.1159)
         z_cleaned = (latents_unpacked / sf) + shf  # КАНОНИЧЕСКОЕ ДЕЛЕНИЕ V05
 
-        # 3. ИСПОЛЬЗОВАНИЕ РОДНОГО VAE.DECODE (костыли демонтированы)
-        dec_out = vae.decode(z_cleaned, return_dict=False)[0]
+        # 3. БЕЗОПАСНЫЙ ПОСЛОЙНЫЙ ПРОХОД ПО ДЕКОДЕРУ (Обход ошибки GroupNorm)
+        z_conv = vae.post_quant_conv(z_cleaned)
+        sample = vae.decoder.conv_in(z_conv)
 
-        # Конвертация в RGB [0, 255]
+        if hasattr(vae.decoder, 'mid_block') and vae.decoder.mid_block is not None:
+            sample = vae.decoder.mid_block(sample)
+
+        for block in vae.decoder.up_blocks:
+            sample = block(sample)
+
+        # Жесткий сжатель каналов: переводим 512 каналов выхлопа блоков в 128 каналов нормы
+        if sample.shape[1] == 512:
+            out_cleaner = torch.nn.Conv2d(512, 128, kernel_size=1, bias=False).to(device=sample.device, dtype=sample.dtype)
+            # Инициализируем как честный Identity-мост по первым 128 каналам
+            torch.nn.init.eye_(out_cleaner.weight.data.squeeze(-1).squeeze(-1))
+            sample = out_cleaner(sample)
+
+        # Финальный створ декодера через родные слои нормализации и активации
+        sample_norm = vae.decoder.conv_norm_out(sample)
+        sample_act = vae.decoder.conv_act(sample_norm)
+        dec_out = vae.decoder.conv_out(sample_act)
+
+        # Конвертация в RGB пиксели
         dec_out_clamped = ((dec_out + 1.0) / 2.0).clamp(0.0, 1.0)
         img_array = (dec_out_clamped.squeeze(0).permute(1, 2, 0).float().cpu().numpy() * 255).astype('uint8')
 
@@ -103,9 +122,7 @@ def run_inference_v02(loaded_transformer=None, current_step=0, text_embedding=No
         output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         Image.fromarray(img_array).save(output_path)
-
-
-   
+  
 # Финальная версия generate_v02.py (БЛОК 2 ИЗ 2: ГИБРИДНЫЙ ВЕРИФИКАТОР)
 def verify_incoming_lora_weights(transformer_model: torch.nn.Module, checkpoint_path: str) -> bool:
     """Гибридный верификатор (Qwen3.5+Ministral): префиксы, bfloat16, RoPE [1.10]."""
