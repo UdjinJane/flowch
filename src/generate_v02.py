@@ -59,7 +59,9 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         clip_hidden = cached_dict["clip_hidden"].to(device=device, dtype=torch.bfloat16)
         
         # Собираем каноническую маску внимания на 256 токенов
-        prompt_attn_mask = torch.ones((1, prompt_embeds.shape), device=device, dtype=torch.bool)
+        # prompt_attn_mask = torch.ones((1, prompt_embeds.shape), device=device, dtype=torch.bool)
+        prompt_attn_mask = torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bool)
+
         
         # В качестве pooled_projections генерируем среднее по оси CLIP-эмбеддинга [1, 77, 768] -> [1, 768]
         pooled_projections = clip_hidden.mean(dim=1)
@@ -83,17 +85,17 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     with torch.inference_mode():
         # Сэмплируем через канонический __call__ оригинального локального ChromaPipeline
         # Передаем весь прецизионный триплет тензоров из text_cache
+
         pipeline_output = pipe(
             prompt_embeds=prompt_embeds,
             prompt_attn_mask=prompt_attn_mask,
-            pooled_projections=pooled_projections,
             height=TrainConfig.RESOLUTION,
             width=TrainConfig.RESOLUTION,
             num_inference_steps=25,
             output_type="pil",
             return_dict=True
-        )
-        
+    )
+
         # Извлекаем чистокровный, очищенный от песка кадр
         final_image = pipeline_output.images[0]
         
