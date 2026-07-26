@@ -24,14 +24,27 @@ os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 importlib.metadata.version = _fake_version_checker
 sys.modules["importlib.metadata"].version = _fake_version_checker
 
-# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Защита от прыти diffusers)
+# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Динамическая защита псевдо-пакета)
+# Создаем модули с поддержкой структуры пакета (__path__), чтобы Python не ругался
 fake_proto = ModuleType("torchao.prototype")
-fake_proto_safe = ModuleType("torchao.prototype.safetensors")
-fake_proto_support = ModuleType("torchao.prototype.safetensors._safetensors_support")
+fake_proto.__path__ = []  # Хак: прикидываемся папкой-пакетом!
 
+# Глушим вообще все известные и будущие точки входа diffusers
+for sub_mod in [
+    "torchao.prototype",
+    "torchao.prototype.custom_fp_utils",
+    "torchao.prototype.safetensors",
+    "torchao.prototype.safetensors._safetensors_support"
+]:
+    fake_sub = ModuleType(sub_mod)
+    if "custom_fp_utils" in sub_mod or "_safetensors_support" in sub_mod:
+        # Заглушаем функции, которые они могут импортировать
+        fake_sub.patch_linear_layers = lambda *args, **kwargs: None
+        fake_sub.register_custom_op = lambda *args, **kwargs: None
+    sys.modules[sub_mod] = fake_sub
+
+# Перезаписываем корень, взводя флаг пакета
 sys.modules["torchao.prototype"] = fake_proto
-sys.modules["torchao.prototype.safetensors"] = fake_proto_safe
-sys.modules["torchao.prototype.safetensors._safetensors_support"] = fake_proto_support
 # ============================================================================
 
 # Дальше идут оригинальные импорты управляющего дирижёра
