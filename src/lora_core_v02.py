@@ -18,9 +18,10 @@ from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
 
-# ХАК ДЛЯ WINDOWS RTX 3090: Обманываем кривую логику сравнения версий в PEFT (0.7.0 > 0.16.0)
-import peft.utils.import_utils
-peft.utils.import_utils.is_torchao_available = lambda: True
+# ХАК ДЛЯ WINDOWS RTX 3090: Обманываем кривую логику сравнения версий в корневом модуле утилит PEFT
+import peft.utils
+peft.utils.is_torchao_available = lambda: True
+
 from config import TrainConfig
 
 class FluxLoraCoreV02:
