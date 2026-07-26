@@ -25,6 +25,11 @@ diffusers.utils.import_utils._torch_rocm_available = False
 diffusers.utils.import_utils._rocm_available = False
 
 sys.modules["diffusers.utils.import_utils"] = diffusers.utils.import_utils
+# ЛАТКА СОВМЕСТИМОСТИ TRANSFORMERS: Скармливаем diffusers фантомную константу весов
+import transformers.utils
+if not hasattr(transformers.utils, "FLAX_WEIGHTS_NAME"):
+    transformers.utils.FLAX_WEIGHTS_NAME = "flax_model.msgpack"
+
 # ============================================================================
 
 # Дальше идут оригинальные импорты управляющего дирижёра
