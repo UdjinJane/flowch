@@ -4,20 +4,25 @@ import json
 import logging
 import gc
 import torch
-
-# ХАК ДЛЯ WINDOWS RTX 3090: Импортируем только корень PEFT и глушим флаг прямо в его утилитах
-import peft
-import peft.utils
-
-# Забиваем жесткое True в корень утилит — фабрика lora/torchao.py считает его отсюда!
-peft.utils.is_torchao_available = lambda *args, **kwargs: True
-
-# Теперь безопасно подтягиваем остальной канонический контур
-logging.getLogger("diffusers").setLevel(logging.ERROR)
 from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
 from config import TrainConfig
+
+# ============================================================================
+# ЯДЕРНЫЙ ХАК ДЛЯ WINDOWS: Ослепление валидатора версий PEFT (Капкан №3)
+# Перехватываем функцию проверки во всех критических подмодулях PEFT
+# ============================================================================
+import peft.utils
+import peft.utils.import_utils
+
+# Агрессивный перехват is_torchao_available во всех местах импорта
+peft.utils.is_torchao_available = lambda *args, **kwargs: True
+peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
+sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+sys.modules["peft.utils.import_utils"].is_torchao_available = lambda *args, **kwargs: True
+# ============================================================================
+
 
 class FluxLoraCoreV02:
 
