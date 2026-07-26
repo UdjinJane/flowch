@@ -16,6 +16,7 @@ import torch
 torch.version.hip = None
 torch.version.rocm = None
 
+# Снайперски выжигаем внутренний кэш HuggingFace ДО импорта маршевых скриптов
 import diffusers.utils.import_utils
 diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
 diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
