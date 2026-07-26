@@ -46,13 +46,23 @@ class FluxLoraCoreV02:
             if hasattr(transformer, attr):
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
         
-        # 2. ФИКС ADALAYERNORM: Принудительный перевод модулирующих linear слоев в bfloat16
-        # Проходим по всей топологии 57 блоков внимания в поисках слоев модуляции нормализации
+        # 2. ФИКС ADALAYERNORM И СВЕРХЛЕГКИЕ ХУКИ ДЕКВАНТОВАНИЯ ДЛЯ ЛИНЕЙНЫХ СЛОЕВ
+        # Навешиваем динамические хуки, которые на лету приводят fp8-веса к bfloat16 во время матричного умножения
+        def make_weight_bf16_hook(mod, inputs):
+            if hasattr(mod, "weight") and mod.weight is not None:
+                if mod.weight.dtype == torch.float8_e4m3fn:
+                    mod.weight.data = mod.weight.data.to(dtype=torch.bfloat16)
+
         for name, module in transformer.named_modules():
+            # Перевод управляющих слоев AdaLayerNorm в честный bfloat16
             if "norm" in name.lower() and hasattr(module, "linear") and module.linear is not None:
                 module.linear = module.linear.to(dtype=torch.bfloat16)
-            
-        print("[УСПЕХ] Базовая модель в FP8. Эмбеддеры и внутренние linear-модуляторы AdaLayerNorm переведены в bfloat16.")
+            # Навешиваем предохранительный хук на все линейные проекции внимания
+            elif isinstance(module, torch.nn.Linear):
+                module.register_forward_pre_hook(make_weight_bf16_hook)
+
+        print("[УСПЕХ] Базовая модель изолирована. Эмбеддеры в bf16, на линейные слои навешены хуки летучего деквантования весов.")
+
 # === КОНЕЦ БЛОКА 2 ===
 
 # === БЛОК 3: ИНЖЕКЦИЯ LORA (ФИКС ОТСТУПОВ И СИНТАКСИСА) ===
