@@ -179,34 +179,41 @@ def main_train_loop():
                 optimizer.zero_grad()
 
                 # ---- END ПРЕДОХРАНИТЕЛЬ ГРАДИЕНТОВ (STRICT VALIDATION)
-                # ТАКТ ПЛАНИРОВЩИКА: Безопасное увядание плазмы шага строго ПОСЛЕ step() [1.10]
-                scheduler.step()
             #
-            if global_step % 10 == 0:
-                current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
-                reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
-                
-                # Точный скользящий замер за 10 шагов
-                elapsed_time = time.time() - last_log_time
-                speed = 10.0 / elapsed_time if elapsed_time > 0 else 0.0
-                last_log_time = time.time() # Сброс строго в точке замера
+            # ТАКТ ПЛАНИРОВЩИКА: Безопасное увядание плазмы шага строго ПОСЛЕ step() [1.10]
+            scheduler.step()
 
-
-        
-                # Формируем расширенный рапорт для Мистральчика
-                console_msg = (
-                    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
-                    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
-                    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
-                )
-                file_msg = f"Шаг: {global_step} | Loss: {current_loss:.4f} | Speed: {speed:.2f}it/s | VRAM: {allocated_vram:.2f}GB\n"
-        
-                print(console_msg)  # В консоль летит красивый рапорт
-                telemetry.flush_aggregated_log(global_step, epoch)
-                with open(log_file_path, "a", encoding="utf-8") as lf:
-                    lf.write(file_msg)  # В файл пишется чистая строка без дублей
+            # ВЫПРЯМЛЕННЫЙ ВЫВОД ТЕЛЕМЕТРИИ ДЛЯ КЭПА НА КАЖДОМ ШАГУ
+            current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+            allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+            reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
             
+            # Замер скорости шага (теперь работает без задержек на каждой итерации)
+            elapsed_time = time.time() - last_log_time
+            speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+            last_log_time = time.time() # Сброс счетчика тахометра
+
+            # Формируем расширенный рапорт по приборам
+            console_msg = (
+                f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+                f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+                f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+            )
+            file_msg = f"Шаг: {global_step} | Loss: {current_loss:.4f} | Speed: {speed:.2f} it/s | VRAM: {allocated_vram:.2f} GB\n"
+            print(console_msg)
+
+            # Выдергиваем глубокую статистику памяти CUDA на первом шаге
+            if global_step == 1:
+                print("\n==================================================")
+                print("[ТЕЛЕМЕТРИЯ CUDA] Спектральный анализ аллокатора:")
+                print(f" -> Max Allocated: {torch.cuda.max_memory_allocated(device) / (1024 ** 3):.2f} GB")
+                print(f" -> Max Reserved: {torch.cuda.max_memory_reserved(device) / (1024 ** 3):.2f} GB")
+                print("==================================================\n")
+
+            telemetry.flush_aggregated_log(global_step, epoch)
+            with open(log_file_path, "a", encoding="utf-8") as lf:
+                lf.write(file_msg)
+                
             # --- РУБЕЖ СОХРАНЕНИЯ И ГЕНЕРАЦИИ СЭМПЛОВ ---
             # --- ИСПРАВЛЕННЫЙ РУБЕЖ СОХРАНЕНИЯ (СТРОГО ПО ШАГАМ) ---
             if global_step % TrainConfig.SAVE_STEPS == 0:
