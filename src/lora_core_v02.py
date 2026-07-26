@@ -34,7 +34,11 @@ class FluxLoraCoreV02:
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
         clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
         transformer.load_state_dict(clean_state_dict, strict=False)
-        transformer.config = FakeConfig() # Внедряем FakeConfig
+        
+        # Обходим С++ ограничение сеттера напрямую через внутренние структуры Питона
+        object.__setattr__(transformer, '_config', FakeConfig())
+        transformer.__dict__['config'] = FakeConfig()
+
 
         # Квантование и донастройка (TorchAO, int8_weight_only)
         quantize_(transformer, int8_weight_only())
