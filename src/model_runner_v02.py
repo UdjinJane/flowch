@@ -26,8 +26,7 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         print("="*50 + "\n")
         run_lora_model_step._telemetry_fired = True
 
-    # 4. Маршевый проход внутри системного автокаста типов
-    # 4. Синхронизация шины автокаста — защита FP8-весов Clybius от bfloat16-autocast!
+    # 4. Синхронизация шины автокаста — защита FP8-весов от bfloat16-autocast
     import contextlib
 
     # Фикс: отключаем autocast, передаем параметры с приведением типов
@@ -35,9 +34,13 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         out = lora_model(
             img=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
             txt=prompt_embeds.to(device=device, dtype=torch.bfloat16),
-            # ... остальные параметры ...
+            txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
+            img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
+            timestep=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
+            y=pooled_projections.to(device=device, dtype=torch.bfloat16),
             return_dict=False
         )
+
 
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
