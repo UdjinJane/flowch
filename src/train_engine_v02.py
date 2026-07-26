@@ -5,15 +5,15 @@ from types import ModuleType
 # ============================================================================
 # ЯДЕРНЫЙ БРОНЕЛИСТ КЭПА: ТОТАЛЬНЫЙ ОПЕРЕЖАЮЩИЙ ПЕРЕХВАТ ИМПОРТОВ СИСТЕМЫ
 # ============================================================================
-# 2. Выжигание PEFT-шизофрении на дальних подступах (ЯДЕРНЫЙ ПОДЛОГ МЕТАДАННЫХ)
+# 1. Выжигание PEFT-шизофрении на дальних подступах (ЯДЕРНЫЙ ПОДЛОГ МЕТАДАННЫХ)
 import importlib.metadata
-# Сохраняем канонический метод системы
 _orig_version = importlib.metadata.version
 
 def _fake_version_checker(package_name):
     if package_name.lower() == "torchao":
-        return "0.17.0"  # Идеальная версия, которая выше требуемой 0.16.0
+        return "0.17.0"
     return _orig_version(package_name)
+
 # Блокировка C++ компилятора ninja на Windows для quanto
 fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
 fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
@@ -21,12 +21,18 @@ fake_cpp_ext.load = lambda *args, **kwargs: None
 sys.modules["torch.utils.cpp_extension"] = fake_cpp_ext
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 
-# Намертво вшиваем подлог в системную библиотеку метаданных
 importlib.metadata.version = _fake_version_checker
 sys.modules["importlib.metadata"].version = _fake_version_checker
+
+# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Защита от прыти diffusers)
+fake_proto = ModuleType("torchao.prototype")
+fake_proto_safe = ModuleType("torchao.prototype.safetensors")
+fake_proto_support = ModuleType("torchao.prototype.safetensors._safetensors_support")
+
+sys.modules["torchao.prototype"] = fake_proto
+sys.modules["torchao.prototype.safetensors"] = fake_proto_safe
+sys.modules["torchao.prototype.safetensors._safetensors_support"] = fake_proto_support
 # ============================================================================
-
-
 
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
