@@ -49,17 +49,18 @@ class FluxLoraCoreV02:
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
         # Конфигурируем PEFT LoRA и внедряем в квантованное ядро [1.10]
         lora_config = LoraConfig(r=TrainConfig.LORA_RANK, lora_alpha=TrainConfig.LORA_ALPHA, target_modules=list(TrainConfig.TARGET_MODULES), bias="none")
+        # Оборачиваем трансформер в полноценную структуру PEFT
         model = get_peft_model(transformer, lora_config)
-
-        # Активируем градиенты только для LoRA-модулей в bfloat16 [1.10]
+        
+        # 7. Гарантированная блокировка базового ядра и активация автограда только для LoRA
+        model.base_model.mapping.requires_grad_(False)
         for name, param in model.named_parameters():
             if "lora_" in name:
-                param.data = param.data.to(dtype=torch.bfloat16)
                 param.requires_grad = True
             else:
                 param.requires_grad = False
-        # return model.to("cuda")
-        return transformer.to("cuda")
+
+        return model.to("cuda")
 
 # === БЛОК 4: ХОЛОДНЫЙ ТЕСТ И МОНИТОРИНГ VRAM ===
 if __name__ == "__main__":
