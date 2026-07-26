@@ -3,6 +3,15 @@
 # [Этот блок настраивает глушение отрыжки логгеров, импортирует монолитные]
 # [зависимости и объявляет каркас класса инжектора lora_core_v02]
 import os
+import sys
+
+# ХАК ДЛЯ WINDOWS RTX 3090: Вырезаем фантомные ROCm триггеры, чтобы PyTorch не падал при импорте quanto
+if "ROCM_HOME" in os.environ:
+    del os.environ["ROCM_HOME"]
+os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"  # Форсируем чистый нативный CUDA/Python рантайм
+
+# Дальше идут оригинальные импорты...
+
 import json
 import logging
 import torch
