@@ -16,22 +16,19 @@ import torch
 torch.version.hip = None
 torch.version.rocm = None
 
-if hasattr(torch, "_C"):
-    torch._C._cuda_is_rocm = lambda *args, **kwargs: False
+import diffusers.utils.import_utils
+diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
+diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
+diffusers.utils.import_utils.is_hip_available = lambda *args, **kwargs: False
+diffusers.utils.import_utils._torch_rocm_available = False
+diffusers.utils.import_utils._rocm_available = False
 
-try:
-    import diffusers.utils.import_utils
-    diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
-    diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
-    diffusers.utils.import_utils.is_hip_available = lambda *args, **kwargs: False
-except Exception:
-    pass
+sys.modules["diffusers.utils.import_utils"] = diffusers.utils.import_utils
 # ============================================================================
 
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
-
 import shutil
 import torch
 import torch.nn.functional as F
