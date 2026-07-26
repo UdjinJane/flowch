@@ -222,7 +222,7 @@ def main_train_loop():
                 print(f" -> Max Reserved: {torch.cuda.max_memory_reserved(device) / (1024 ** 3):.2f} GB")
                 print("==================================================\n")
 
-            1telemetry.flush_aggregated_log(global_step, epoch)
+            telemetry.flush_aggregated_log(global_step, epoch)
             with open(log_file_path, "a", encoding="utf-8") as lf:
                 lf.write(file_msg)
                 
