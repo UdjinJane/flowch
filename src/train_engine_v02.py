@@ -1,5 +1,13 @@
 import os
 import sys
+
+# ХАК ДЛЯ WINDOWS RTX 3090: Тотальное выжигание ROCm-триггеров на самом первом рубеже импорта пакетов PyTorch
+if "ROCM_HOME" in os.environ:
+    del os.environ["ROCM_HOME"]
+os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
+
+# Дальше идут оригинальные импорты управляющего дирижёра...
+
 import gc
 import time
 import shutil
