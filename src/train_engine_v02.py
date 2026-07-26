@@ -2,31 +2,36 @@ import os
 import sys
 
 # ============================================================================
-# УЛЬТИМАТИВНЫЙ ТОТАЛЬНЫЙ СУПЕР-ХАК: ПРИНУДИТЕЛЬНОЕ ОПЕРЕЖАЮЩЕЕ ОСЛЕПЛЕНИЕ
+# АБСОЛЮТНЫЙ СИ-ЩИТ КЭПА: ТОТАЛЬНАЯ АННИГИЛЯЦИЯ ТРИГГЕРОВ ROCM НА УРОВНЕ ЯДРА
 # ============================================================================
+os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
+os.environ["HF_DISABLE_COMPILING"] = "1"
 os.environ["FORCE_CUDA"] = "1"
 os.environ["USE_ROCM"] = "0"
-# Удаляем переменные окружения AMD
-for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "ROCM_PATH"]:
+
+for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HIP_DIR", "ROCM_PATH"]:
     os.environ.pop(amdbug, None)
 
 import torch
-# Кастрируем проверки ROCm/HIP на уровне ядра
 torch.version.hip = None
 torch.version.rocm = None
 
-# Ослепляем Diffusers еще до их импорта, насильно внедряя фейк
+if hasattr(torch, "_C"):
+    torch._C._cuda_is_rocm = lambda *args, **kwargs: False
+
 try:
-    from types import ModuleType
-    fake_utils = ModuleType("diffusers.utils.import_utils")
-    fake_utils.is_rocm_available = lambda: False
-    fake_utils.is_torch_rocm_available = lambda: False
-    sys.modules["diffusers.utils.import_utils"] = fake_utils
-except Exception: pass
+    import diffusers.utils.import_utils
+    diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
+    diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
+    diffusers.utils.import_utils.is_hip_available = lambda *args, **kwargs: False
+except Exception:
+    pass
 # ============================================================================
+
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
+
 import shutil
 import torch
 import torch.nn.functional as F
