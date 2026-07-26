@@ -132,7 +132,7 @@ def main_train_loop():
                 )
                 torch.cuda.synchronize()
                 t_fwd_end = time.time()
-                
+
                 # Фикс рассинхрона: выводим время чистого fwd-прохода на абсолютно каждом шагу обучения
                 print(f"[КОНТРОЛЬ] Время чистого прямого прохода ядра: {t_fwd_end - t_fwd_start:.4f} сек.")
 
@@ -212,8 +212,7 @@ def main_train_loop():
                 print(f" -> Max Reserved: {torch.cuda.max_memory_reserved(device) / (1024 ** 3):.2f} GB")
                 print("==================================================\n")
 
-            ######################
-            telemetry.flush_aggregated_log(global_step, epoch)
+            1telemetry.flush_aggregated_log(global_step, epoch)
             with open(log_file_path, "a", encoding="utf-8") as lf:
                 lf.write(file_msg)
                 
