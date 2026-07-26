@@ -27,7 +27,7 @@ subgraph HOST_GIPSY [Катер-Песочница GIPSY: General-Purpose Isolat
          
         subgraph G_ANABIOZ [Трюм Анабиоза Моделей]
             M_MINI[Ministral-3-14B-Reasoning в закачке]
-            M_QWEN[Qwen2.5 Coder/Math 7B на базе]
+            M_QWEN[Qwen2.5-3.6 Coder/Math 7B-8B на базе]
             M_HEAVY[Qwen 32B / DeepSeek v2 ползут в фоне]
         end
     end
@@ -97,7 +97,7 @@ class G_HW_GPU,U_CPU,U_RAM,U_GPU hwNode;
       "apex": {
         "role": "Flagship Workstation / Primary Development Core",
         "active_project_path": "Z:\\flowch",
-        "os_environment": "Windows 11 (WSL2 Engines Context, Subsystem Ubuntu: Stopped)",
+        "os_environment": "Windows 10 (WSL2 Engines Context, Subsystem Ubuntu: Stopped)",
         "network": {
           "primary_ip": "192.168.1.144",
           "interface_alias": "Ethernet 5",
