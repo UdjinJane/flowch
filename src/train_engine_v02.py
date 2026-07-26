@@ -129,15 +129,11 @@ def main_train_loop():
                     torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16),
                     img_ids
                 )
-                
                 torch.cuda.synchronize()
                 t_fwd_end = time.time()
                 if global_step % 10 == 0:
                     print(f"[КОНТРОЛЬ] Время чистого прямого прохода ядра: {t_fwd_end - t_fwd_start:.4f} сек.")
                 # === КОНЕЦ ЧАСТИ 1 ===
-
-
-                
                 
                 # === КАНbackgroundИЧЕСКОЕ ВЫРАВНИВАНИЕ МАНТИССЫ RECTIFIED FLOW V11 ===
                 # 1. Расчет истинного направления потока (честные 64 канала упакованных пикселей)
