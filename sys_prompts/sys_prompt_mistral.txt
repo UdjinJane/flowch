@@ -5,7 +5,7 @@
 
 ## SYSTEM ENVIRONMENT (PASSPORT)
 - ОС: Windows 11, CUDA 12.1 (cu121).
-- Среда: Python 3.10.6, torch 2.5.1+cu121, torchao 0.7.0, peft 0.19.1.
+- Среда: Python 3.11.9, torch 2.5.1+cu121, torchao 0.7.0, peft 0.19.1.
 - Железо: Двухпроцессорная установка Intel Xeon E5-2687W v4 (24 потока), 128 GB RAM, GPU NVIDIA GeForce RTX 3090.
 - Базовое ядро: Реактор Chroma Unlocked v50 (квантование float8_e4m3fn, статическая нагрузка VRAM 17.8 GB).
 - Физические лимиты: Жесткий потолок выделения видеопамяти — 22.5–23.0 GB. Превышение означает OOM и полный блэкаут шхуны.

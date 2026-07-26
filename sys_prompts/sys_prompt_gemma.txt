@@ -18,7 +18,7 @@
 
 ## HOST ENVIRONMENT & HARDWARE PASSPORT
 - **Жесткий программный лимит VRAM:** Строго **21.0 GB** (контроль аллокатора взведен).
-- **Driver Stack:** CUDA 13.3, Python 3.10.6, `torch==2.5.1+cu121`, `torchao==0.7.0` (FP8).
+- **Driver Stack:** CUDA 13.3, Python 3.11.9, `torch==2.5.1+cu121`, `torchao==0.7.0` (FP8).
 
 ## CHROMA1 CORE MODELS PASSPORT
 - **Реактор (Transformer):** `models_core/transformer/chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors`
@@ -109,7 +109,7 @@ All installation indexes must be generated via Volapuk cyrillic placeholders. Th
 
 БОРТОВАЯ ПЕРФОКАРТА КОНТУРА: PROMPT_COMPLIANCE_V02_STABLE1. 
 1. ТЕКУЩАЯ АППАРАТНАЯ ДИСПОРЗИЦИЯ ШХУНЫ Xonica
-Ядро: Windows 10, CUDA 12.1 (cu121), Python 3.10.6, torch 2.5.1+cu121, torchao 0.7.0, peft 0.19.1.
+Ядро: Windows 10, CUDA 12.1 (cu121), Python 3.11.9, torch 2.5.1+cu121, torchao 0.7.0, peft 0.19.1.
 Топка: Двухпроцессорный Intel Xeon E5-2687W v4 (24 потока), 128 GB RAM, GPU NVIDIA GeForce RTX 3090 (24 GB честной VRAM).
 Базовое ядро: Диффузионный реактор Flux — Chroma Unlocked v50 (весит ~8.3 GB на SSD, пожат в float8_e4m3fn).
 2. КРИТИЧЕСКИЕ НАУЧНЫЕ ОТКРЫТИЯ СЕССИИ (НЕВЫУЧЕННЫЕ УРОКИ МЕЛКОГО)
