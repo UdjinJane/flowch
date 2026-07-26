@@ -24,29 +24,31 @@ os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 importlib.metadata.version = _fake_version_checker
 sys.modules["importlib.metadata"].version = _fake_version_checker
 
-# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Бронированный интеллектуальный ослепитель)
+# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Ультимативный дуракоустойчивый ослепитель)
 class UniversalFakeModule(ModuleType):
     def __getattr__(self, name):
-        # Если Python ищет системные строки для inspect.py, отдаем валидные пустышки
+        # 1. Если Python ищет пути пакета, возвращаем легитимный пустой список
+        if name == "__path__":
+            return []
+        # 2. Если Python ищет системные строки для inspect.py, отдаем валидные пустышки
         if name in ["__file__", "__cached__", "__code__", "__source__"]:
             return f"Z:\\flowch\\src\\{self.__name__}\\fake.py"
-        # Для всего остального (функций, констант diffusers) скармливаем безопасную лямбду
+        # 3. Для всего остального (функций, констант diffusers) скармливаем безопасную лямбду
         return lambda *args, **kwargs: None
 
-fake_proto = UniversalFakeModule("torchao.prototype")
-fake_proto.__path__ = []  # Оставляем поддержку пакета
-
-# Забиваем во все критические точки импорта наш защищенный ослепитель
+# Обновляем инжекцию для всех критических точек
 for sub_mod in [
     "torchao.prototype",
     "torchao.prototype.custom_fp_utils",
     "torchao.prototype.safetensors",
+    "torchao.prototype.safetensors.safetensors_support",
     "torchao.prototype.safetensors._safetensors_support"
 ]:
-    sys.modules[sub_mod] = UniversalFakeModule(sub_mod)
-
-sys.modules["torchao.prototype"] = fake_proto
+    fake_sub = UniversalFakeModule(sub_mod)
+    fake_sub.__path__ = []  # Жестко взводим статус пакета
+    sys.modules[sub_mod] = fake_sub
 # ============================================================================
+
 
 
 # Дальше идут оригинальные импорты управляющего дирижёра
