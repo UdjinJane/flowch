@@ -5,25 +5,26 @@ from types import ModuleType
 # ============================================================================
 # ЯДЕРНЫЙ БРОНЕЛИСТ КЭПА: ТОТАЛЬНЫЙ ОПЕРЕЖАЮЩИЙ ПЕРЕХВАТ ИМПОРТОВ СИСТЕМЫ
 # ============================================================================
-# 1. Блокировка C++ компилятора ninja на Windows для quanto
-fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
-fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
-fake_cpp_ext.load = lambda *args, **kwargs: None
-sys.modules["torch.utils.cpp_extension"] = fake_cpp_ext
-
-if "ROCM_HOME" in os.environ:
-    del os.environ["ROCM_HOME"]
-os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
-
 # 2. Выжигание PEFT-шизофрении на дальних подступах (Капкан №3)
-fake_peft_utils = ModuleType("peft.utils")
-fake_peft_utils.is_torchao_available = lambda *args, **kwargs: True
-sys.modules["peft.utils"] = fake_peft_utils
-
-fake_peft_import_utils = ModuleType("peft.utils.import_utils")
-fake_peft_import_utils.is_torchao_available = lambda *args, **kwargs: True
-sys.modules["peft.utils.import_utils"] = fake_peft_import_utils
+# Принудительно загружаем оригинальный peft.utils со всеми константами (CONFIG_NAME и др.)
+try:
+    import peft.utils
+    import peft.utils.import_utils
+    
+    # Переписываем только проверку доступности torchao в оригинальных объектах
+    peft.utils.is_torchao_available = lambda *args, **kwargs: True
+    peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
+    
+    # Фиксируем в sys.modules для глубоких проверок фреймворков
+    sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+    sys.modules["peft.utils.import_utils"].is_torchao_available = lambda *args, **kwargs: True
+except (ImportError, AttributeError):
+    # Если import_utils физически отсутствует в этой версии PEFT, дублируем корень
+    if "peft.utils" in sys.modules:
+        sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+        sys.modules["peft.utils.import_utils"] = sys.modules["peft.utils"]
 # ============================================================================
+
 
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
