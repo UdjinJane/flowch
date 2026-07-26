@@ -4,13 +4,16 @@ import json
 import logging
 import gc
 import torch
-from types import ModuleType
 
-# АБСОЛЮТНЫЙ ЯДЕРНЫЙ ХАК: Создаем фейковый модуль-заглушку прямо в кэше Python,
-# полностью блокируя любые попытки PEFT искать файл import_utils на диске!
-fake_peft_utils = ModuleType("peft.utils.import_utils")
-fake_peft_utils.is_torchao_available = lambda: True
-sys.modules["peft.utils.import_utils"] = fake_peft_utils
+# ТОТАЛЬНЫЙ ОФИЦИАЛЬНЫЙ ХАК: Переписываем функцию проверки версий во всех шлюзах PEFT
+import peft
+import peft.utils
+import peft.utils.import_utils
+
+# Забиваем True во все возможные точки вызова, чтобы ослепить внутренние файлы lora/torchao.py
+peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
+peft.utils.is_torchao_available = lambda *args, **kwargs: True
+peft.is_torchao_available = lambda *args, **kwargs: True
 
 # Теперь безопасно подтягиваем остальной канонический контур
 logging.getLogger("diffusers").setLevel(logging.ERROR)
@@ -20,6 +23,7 @@ from peft import get_peft_model, LoraConfig
 from config import TrainConfig
 
 class FluxLoraCoreV02:
+
 
     @staticmethod
 
