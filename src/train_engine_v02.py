@@ -95,7 +95,10 @@ def main_train_loop():
 
 
     global_step = 0
-    last_log_time = time. time()
+    
+    # Локальная инжекция системного таймера для изоляции NameError
+    import time
+    last_log_time = time.time()
 
     # Вход в основной цикл
     for epoch in range(1, TrainConfig.NUM_EPOCHS + 1):
