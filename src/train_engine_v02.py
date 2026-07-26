@@ -2,22 +2,19 @@ import os
 import sys
 from types import ModuleType
 
-# ЯДЕРНЫЙ ХАК ДЛЯ WINDOWS RTX 3090: Полностью блокируем вызов cpp_extension на уровне импортов Python
-# Создаем пустой фейковый модуль-заглушку, чтобы обмануть optimum-quanto
+# [КОММЕНТАРИЙ УДАЛЕН]
 fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
 fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
 fake_cpp_ext.load = lambda *args, **kwargs: None
-# Запихиваем заглушку в глобальный кэш модулей Python
 sys.modules["torch.utils.cpp_extension"] = fake_cpp_ext
 
-# Вырезаем фантомные триггеры из сессии
 if "ROCM_HOME" in os.environ:
     del os.environ["ROCM_HOME"]
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 
 # Дальше идут оригинальные импорты управляющего дирижёра...
-
 import gc
+
 import time
 import shutil
 import torch
