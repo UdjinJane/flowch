@@ -19,6 +19,6 @@ tiktoken>=0.7.0
 torchao
 bitsandbytes
 # Нативный C++ бэкенд квантования для изоляции VRAM от оверсвапа активаций
-optimum-quanto==0.2.6
-ninja
+# optimum-quanto==0.2.6 НЕ ставить ни в коем случае. Реактор сожрет VRAM и уйдет в оверсвап
+# ninja 
 
