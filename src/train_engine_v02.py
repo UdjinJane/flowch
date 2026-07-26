@@ -89,13 +89,11 @@ def main_train_loop():
     # Инициализация телеметрии с локальным подтягиванием модуля
     os.makedirs(TrainConfig.LOGS_DIR, exist_ok=True)
     log_file_path = os.path.join(TrainConfig.LOGS_DIR, "train_logs.txt")
-    
     from telemetry_logger import FluxTelemetryTracker
     telemetry = FluxTelemetryTracker()
 
-
     global_step = 0
-    
+
     # Локальная инжекция системного таймера для изоляции NameError
     import time
     last_log_time = time.time()
