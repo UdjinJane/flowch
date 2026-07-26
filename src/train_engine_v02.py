@@ -110,9 +110,13 @@ def main_train_loop():
             all_embeds = mega_batch["prompt_embeds"]
             total_frames = all_latents.shape[0]
             
+            # Локальная инжекция шлюза исполнения для подавления NameError
+            from model_runner_v02 import run_lora_model_step
+            
             # Нарезка мега-батча на отдельные кадры
             for frame_idx in range(total_frames):
                 global_step += 1
+
                 latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
                 # Логит-нормальный замер времени и масштабирование под [0-1000]
