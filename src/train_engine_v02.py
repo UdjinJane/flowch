@@ -1,8 +1,9 @@
 import os
 import sys
+from types import ModuleType
 
 # ============================================================================
-# ЯДЕРНАЯ ЛАТКА КЭПА: ТОТАЛЬНАЯ БЛОКИРОВКА КЭША ROCM И С++ РАСШИРЕНИЙ
+# УЛЬТИМАТИВНЫЙ ТОТАЛЬНЫЙ СУПЕР-ХАК КЭПА: ПРИНУДИТЕЛЬНОЕ ОПЕРЕЖАЮЩЕЕ ОСЛЕПЛЕНИЕ
 # ============================================================================
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 os.environ["HF_DISABLE_COMPILING"] = "1"
@@ -15,14 +16,12 @@ for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HI
     if amdbug in os.environ:
         del os.environ[amdbug]
 
-try:
-    import diffusers.utils.import_utils
-    diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
-    diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
-    sys.modules["diffusers.utils.import_utils"].is_rocm_available = lambda *args, **kwargs: False
-    sys.modules["diffusers.utils.import_utils"].is_torch_rocm_available = lambda *args, **kwargs: False
-except Exception:
-    pass
+fake_import_utils = ModuleType("diffusers.utils.import_utils")
+fake_import_utils.is_rocm_available = lambda *args, **kwargs: False
+fake_import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
+fake_import_utils.is_hip_available = lambda *args, **kwargs: False
+
+sys.modules["diffusers.utils.import_utils"] = fake_import_utils
 # ============================================================================
 
 # Дальше идут оригинальные импорты управляющего дирижёра
