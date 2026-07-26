@@ -143,7 +143,11 @@ def main_train_loop():
                 # Формирование зашумленных данных и сетки
                 noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
                 packed_noisy_latents = pack_latents_to_patches(noisy_latents)
-                img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
+                    
+                # Фикс Кэпа: Нарезаем img_ids строго под длину последовательности токенов кадра Хромы
+                num_latent_tokens = packed_noisy_latents.shape[1]
+                img_ids = torch.zeros(num_latent_tokens, 3, device=device, dtype=torch.bfloat16)
+
 
 
                 # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 С ТАЙМЕРОМ ФАЗЫ ===
