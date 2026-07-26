@@ -30,51 +30,18 @@ class FluxLoraCoreV02:
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
         
-        # Разворачиваем каркас сразу в типе float8_e4m3fn для жесткой экономии VRAM
-        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
+        # Разворачиваем каркас в bfloat16 для корректной инжекции LoRA
+        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
         
-        # Холодная вычитка монолита весов с диска напрямую в память CPU
+        # Загрузка весов и приведение к bf16
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-        clean_state_dict = {
-            k.replace("model.diffusion_model.", "") if k.startswith("model.diffusion_model.") else k: v
-            for k, v in state_dict.items()
-        }
+        clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
         transformer.load_state_dict(clean_state_dict, strict=False)
-        
-        # 1. ЗАЩИТА СИГНАЛЬНЫХ ВХОДНЫХ ЭМБЕДДЕРОВ (bfloat16)
+
+        # Защита эмбеддеров
         for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
             if hasattr(transformer, attr):
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
-        
-        # 2. ФИКС ADALAYERNORM И ЧЕСТНЫЕ ХУКИ ТРАНЗИТА FP8 БЕЗ УТЕЧКИ ПАМЯТИ
-        # Импортируем функциональный контур PyTorch для прямой работы с матрицами умножения
-        import torch.nn.functional as F
-
-        # Вместо перезаписи данных мы подменяем forward линейных слоев, сохраняя оригинальный FP8 в VRAM
-
-        def make_weight_bf16_forward_wrapper(module_obj):
-            original_forward = module_obj.forward
-            def new_forward(input_tensor):
-                if hasattr(module_obj, "weight") and module_obj.weight is not None:
-                    # Если веса в FP8, кастуем их во временную переменную bfloat16 только для этой операции
-                    if module_obj.weight.dtype == torch.float8_e4m3fn:
-                        w_temp = module_obj.weight.to(dtype=input_tensor.dtype)
-                        bias_temp = module_obj.bias.to(dtype=input_tensor.dtype) if module_obj.bias is not None else None
-                        return F.linear(input_tensor, w_temp, bias_temp)
-                return original_forward(input_tensor)
-            return new_forward
-
-        for name, module in transformer.named_modules():
-            # Перевод управляющих слоев AdaLayerNorm в честный bfloat16
-            if "norm" in name.lower() and hasattr(module, "linear") and module.linear is not None:
-                module.linear = module.linear.to(dtype=torch.bfloat16)
-            # Оборачиваем forward всех линейных слоев внимания для летучего деквантования активаций
-            elif isinstance(module, torch.nn.Linear):
-                module.forward = make_weight_bf16_forward_wrapper(module)
-
-        print("[УСПЕХ] Базовая модель изолирована. Эмбеддеры в bf16, линейные слои обернуты во временной транзит типов.")
-
-
 # === КОНЕЦ БЛОКА 2 ===
 
 # === БЛОК 3: ИНЖЕКЦИЯ LORA (ФИКС ОТСТУПОВ И СИНТАКСИСА) ===
@@ -92,6 +59,12 @@ class FluxLoraCoreV02:
             bias="none"
         )
         model = get_peft_model(transformer, lora_config)
+
+        # === НАТИВНОЕ C++ КВАНТОВАНИЕ QUANTO ПОСЛЕ ИНЖЕКЦИИ PEFT ===
+        from optimum.quanto import quantize, freeze, qfloat8
+        # Квантуем и замораживаем только базовый трансформер, LoRA остается в bf16
+        quantize(model.get_base_model(), weights=qfloat8)
+        freeze(model.get_base_model())
 
 
         # 1. СТЕРИЛЬНЫЙ КАСТИНГ LORA В bfloat16 БЕЗ ОБРЫВА СВЯЗЕЙ AUTOGRAD
