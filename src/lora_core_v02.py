@@ -12,22 +12,25 @@ from config import TrainConfig
 # ============================================================================
 # СНАЙПЕРСКИЙ ХАК ДЛЯ WINDOWS: Динамическое ослепление PEFT без слепых импортов
 # ============================================================================
-import peft.utils
-
-# 1. Глушим коренную функцию в утилитах
-peft.utils.is_torchao_available = lambda *args, **kwargs: True
-
-# 2. Экранируем системный кэш модулей, чтобы предотвратить ModuleNotFoundError
-if "peft.utils" in sys.modules:
-    sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+# 2. Выжигание PEFT-шизофрении на дальних подступах (Капкан №3)
+# Принудительно загружаем оригинальный peft.utils со всеми его константами (CONFIG_NAME и др.)
+try:
+    import peft.utils
+    import peft.utils.import_utils
     
-# Обманываем внутренний импорт PEFT, подставляя корень вместо отсутствующего import_utils
-sys.modules["peft.utils.import_utils"] = sys.modules["peft.utils"]
+    # Лазерно переписываем только проверку доступности torchao
+    peft.utils.is_torchao_available = lambda *args, **kwargs: True
+    peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
+    
+    # Фиксируем в sys.modules для глубоких проверок
+    sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+    sys.modules["peft.utils.import_utils"].is_torchao_available = lambda *args, **kwargs: True
+except (ImportError, AttributeError):
+    # Если import_utils физически отсутствует в данной версии PEFT, подменяем ссылку на корень
+    if "peft.utils" in sys.modules:
+        sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+        sys.modules["peft.utils.import_utils"] = sys.modules["peft.utils"]
 # ============================================================================
-
-
-
-
 
 class FluxLoraCoreV02:
 
