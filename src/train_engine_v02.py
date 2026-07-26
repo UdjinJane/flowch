@@ -127,6 +127,7 @@ def main_train_loop():
                     prompt_embeds,
                     torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
                     torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16),
+
                     img_ids
                 )
                 torch.cuda.synchronize()
