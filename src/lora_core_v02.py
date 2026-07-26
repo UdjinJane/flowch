@@ -107,13 +107,25 @@ class FluxLoraCoreV02:
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
 
         # Системный хак: принудительный сквозной транзит вызова раннера напрямую к базовой модели в обход PEFT
+        # Системный хак + : динамическая адаптация аргументов раннера под строгую сигнатуру PEFT
         base_peft_forward = model.forward
         def custom_peft_forward(*args, **kwargs):
-            # Если вызов идет из нашего маршевого раннера, швыряем его напрямую в ядро трансформера
-            if "hidden_states" in kwargs or "img" in kwargs:
-                return model.get_base_model()(*args, **kwargs)
+            # Если раннер передал кастомные именованные порты, транслируем их в канонические для PEFT
+            if "img" in kwargs and "hidden_states" not in kwargs:
+                kwargs["hidden_states"] = kwargs.pop("img")
+            if "txt" in kwargs and "encoder_hidden_states" not in kwargs:
+                kwargs["encoder_hidden_states"] = kwargs.pop("txt")
+            if "txt_mask" in kwargs and "attention_mask" not in kwargs:
+                kwargs["attention_mask"] = kwargs.pop("txt_mask")
+            if "timesteps" in kwargs and "timestep" not in kwargs:
+                kwargs["timestep"] = kwargs.pop("timesteps")
+            if "guidance" in kwargs and "y" not in kwargs:
+                kwargs["y"] = kwargs.pop("guidance")
+                
+            # Сигнал летит внутрь PEFT, активируя LoRA веса, но уже с правильными именами портов!
             return base_peft_forward(*args, **kwargs)
         model.forward = custom_peft_forward
+
 
         return model.to("cuda")
 
