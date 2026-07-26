@@ -14,6 +14,12 @@ def _fake_version_checker(package_name):
     if package_name.lower() == "torchao":
         return "0.17.0"  # Идеальная версия, которая выше требуемой 0.16.0
     return _orig_version(package_name)
+# Блокировка C++ компилятора ninja на Windows для quanto
+fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
+fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
+fake_cpp_ext.load = lambda *args, **kwargs: None
+sys.modules["torch.utils.cpp_extension"] = fake_cpp_ext
+os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 
 # Намертво вшиваем подлог в системную библиотеку метаданных
 importlib.metadata.version = _fake_version_checker
