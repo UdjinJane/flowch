@@ -72,19 +72,15 @@ class FluxLoraCoreV02:
         model = get_peft_model(transformer, lora_config)
 
 
-        # 1. СТЕРИЛЬНЫЙ КАС ТИНГ LORA В bfloat16 (Ликвидация воздушных копий)
-        # Переводим веса через канонический вызов module.to(), сохраняя граф Autograd монолитным
-        for name, module in model.named_modules():
-            if "lora_" in name.lower() and hasattr(module, "to"):
-                module.to(dtype=torch.bfloat16)
-
-
-        # 2. Жёсткое распределение флагов градиентов по тензорам параметров
+        # 1. СТЕРИЛЬНЫЙ КАСТИНГ LORA В bfloat16 БЕЗ ОБРЫВА СВЯЗЕЙ AUTOGRAD
+        # Кастуем строго тензоры параметров lora-весов, сохраняя ссылки графа PEFT
         for name, param in model.named_parameters():
             if "lora_" in name:
+                param.data = param.data.to(dtype=torch.bfloat16)
                 param.requires_grad = True
             else:
                 param.requires_grad = False
+
 
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
         return model.to("cuda")
