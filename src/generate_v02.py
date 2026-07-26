@@ -29,9 +29,6 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     vae.to(device=device, dtype=torch.bfloat16)
 
     # 3. Сборка пайплайна
-
-
-    # 3. Сборка пайплайна
     pipe = ChromaPipeline(
         scheduler=scheduler, vae=vae,
         transformer=loaded_transformer,
