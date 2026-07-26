@@ -70,10 +70,9 @@ class FluxLoraCoreV02:
         model = get_peft_model(transformer, lora_config)
 
         # === НАТИВНОЕ C++ КВАНТОВАНИЕ QUANTO ПОСЛЕ ИНЖЕКЦИИ PEFT ===
-        from optimum.quanto import quantize, freeze, qfloat8
-        # Квантуем и замораживаем только базовый трансформер, LoRA остается в bf16
+        from optimum.quanto import quantize, qfloat8
+        # Квантуем базовый трансформер, на Windows оставляем динамический Python-рантайм без freeze()
         quantize(model.get_base_model(), weights=qfloat8)
-        freeze(model.get_base_model())
 
 
         # 1. СТЕРИЛЬНЫЙ КАСТИНГ LORA В bfloat16 БЕЗ ОБРЫВА СВЯЗЕЙ AUTOGRAD
