@@ -10,18 +10,23 @@ from peft import get_peft_model, LoraConfig
 from config import TrainConfig
 
 # ============================================================================
-# ЯДЕРНЫЙ ХАК ДЛЯ WINDOWS: Ослепление валидатора версий PEFT (Капкан №3)
-# Перехватываем функцию проверки во всех критических подмодулях PEFT
+# СНАЙПЕРСКИЙ ХАК ДЛЯ WINDOWS: Динамическое ослепление PEFT без слепых импортов
 # ============================================================================
 import peft.utils
-import peft.utils.import_utils
 
-# Агрессивный перехват is_torchao_available во всех местах импорта
+# 1. Глушим коренную функцию в утилитах
 peft.utils.is_torchao_available = lambda *args, **kwargs: True
-peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
-sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
-sys.modules["peft.utils.import_utils"].is_torchao_available = lambda *args, **kwargs: True
+
+# 2. Экранируем системный кэш модулей, чтобы предотвратить ModuleNotFoundError
+if "peft.utils" in sys.modules:
+    sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
+    
+# Обманываем внутренний импорт PEFT, подставляя корень вместо отсутствующего import_utils
+sys.modules["peft.utils.import_utils"] = sys.modules["peft.utils"]
 # ============================================================================
+
+
+
 
 
 class FluxLoraCoreV02:
