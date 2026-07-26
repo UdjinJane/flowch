@@ -121,7 +121,7 @@ def main_train_loop():
                 
                 pred_tensor = run_lora_model_step(
                     lora_model,
-                    {"text_ids_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bool)},
+                    {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)},
                     packed_noisy_latents,
                     t_model_scale,
                     prompt_embeds,
