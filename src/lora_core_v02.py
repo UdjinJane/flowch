@@ -30,27 +30,24 @@ class FluxLoraCoreV02:
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
 
-        # Каноническая сборка: разворачиваем каркас СРАЗУ в аппаратном bfloat16
-        print("[Т] Сборка каркаса модели в нативном bfloat16...")
-        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
+        # Сборка модели в bf16 с нативным int8_weight_only через torchao
+        from torchao.quantization import quantize_, int8_weight_only
+        import gc
 
-        # Безопасная вычитка весов с SSD
-        print("[Т] Загрузка safetensors-монолита в RAM...")
+        print("[Т] Загрузка и квантование модели (torchao)...")
+        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
         clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
-        
-        # Принудительное выпрямление входящих весов к bf16 перед посадкой в слои
-        for k in list(clean_state_dict.keys()):
-            if clean_state_dict[k].dtype != torch.bfloat16:
-                clean_state_dict[k] = clean_state_dict[k].to(dtype=torch.bfloat16)
-
-        print("[Т] Интеграция весов в ядро трансформера...")
         transformer.load_state_dict(clean_state_dict, strict=False)
 
-        # Аппаратная изоляция шлюзов эмбеддеров
-        for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
-            if hasattr(transformer, attr):
-                setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
+        # Накатка нативного int8 квантования для снижения VRAM [1.10]
+        quantize_(transformer, int8_weight_only())
+        
+        # Очистка памяти
+        torch.cuda.empty_cache()
+        gc.collect()
+        print("[УСПЕХ] Базовое ядро упаковано в нативный int8. Полка VRAM БАЗЫ успешно срезана.")
+
 
         # Блокировка torchao и инициализация LoRA
         import peft.tuners.lora.torchao
