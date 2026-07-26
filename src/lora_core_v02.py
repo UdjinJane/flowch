@@ -47,7 +47,11 @@ class FluxLoraCoreV02:
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
         
         # 2. ФИКС ADALAYERNORM И ЧЕСТНЫЕ ХУКИ ТРАНЗИТА FP8 БЕЗ УТЕЧКИ ПАМЯТИ
+        # Импортируем функциональный контур PyTorch для прямой работы с матрицами умножения
+        import torch.nn.functional as F
+
         # Вместо перезаписи данных мы подменяем forward линейных слоев, сохраняя оригинальный FP8 в VRAM
+
         def make_weight_bf16_forward_wrapper(module_obj):
             original_forward = module_obj.forward
             def new_forward(input_tensor):
