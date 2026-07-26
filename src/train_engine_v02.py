@@ -51,21 +51,11 @@ def main_train_loop():
     
     print("[Т] Прогрев и инжекция LoRA адаптеров...")
     lora_model = FluxLoraCoreV02.init_transformer_with_lora()
-        # Принудительная активация чекпоинтинга для полной разгрузки VRAM
-    if hasattr(lora_model, "enable_gradient_checkpointing"):
-        lora_model.enable_gradient_checkpointing()
-    elif hasattr(lora_model, "get_base_model") and hasattr(lora_model.get_base_model(), "enable_gradient_checkpointing"):
-        lora_model.get_base_model().enable_gradient_checkpointing()
 
-    trainable_params = []
-    for name, param in lora_model.named_parameters():
-        if "lora_" in name and any(t in name for t in TrainConfig.TARGET_MODULES):
-            param.requires_grad = True
-            trainable_params.append(param)
-        else:
-            param.requires_grad = False
-            
-    print(f"[УСПЕХ] Зафиксировано обучаемых тензоров: {len(trainable_params)}")
+    # Оптимизатор забирает параметры, чьи флаги requires_grad уже монолитно выставлены внутри lora_core
+    trainable_params = [p for p in lora_model.parameters() if p.requires_grad]
+    print(f"[УСПЕХ] Зафиксировано обучаемых тензоров адаптера: {len(trainable_params)}")
+
     
     # Автоматический селектор оптимизатора на основе защиты контура
     if USING_8BIT_OPTIM:
@@ -137,22 +127,6 @@ def main_train_loop():
                 )
                 # === КОНЕЦ ЧАСТИ 1 ===
                 
-                # === ИНЖЕКЦИЯ CHROMA V05: ЧАСТЬ 2 (Синхронизация и лосс) ===
-                # === СИНХРОНИЗАЦИЯ КАНАЛОВ РАННЕРА CHROMA V10 ===
-                # 1. Расчет истинного направления потока Rectified Flow (64 канала)
-                # raw_target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
-                
-                # 2. Повторяем только ось канаков (dim=2), чтобы идеально совпасть с 256-канальным выходом runner_v02 НО ЭТО НУЖНО ФИКСИТЬ! МЫ ОБМАНЫВАЕМ ЕНЖИН!
-                # target_flow = raw_target_flow.repeat(1, 1, 4)
-
-
-
-                # 3. Активация защиты от Аномалии Песка (динамический вес по сигме)
-                # weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
-
-                # 4. Прецизионный расчет лосса в float32 для защиты от Underflow
-                # loss_active = (F.mse_loss(pred_tensor.float(), target_flow.float(), reduction="none") * weight_mask).mean()
-                # loss = loss_active.detach().clone().to(torch.bfloat16)
                 
                 # === КАНbackgroundИЧЕСКОЕ ВЫРАВНИВАНИЕ МАНТИССЫ RECTIFIED FLOW V11 ===
                 # 1. Расчет истинного направления потока (честные 64 канала упакованных пикселей)
