@@ -2,7 +2,7 @@
 import os, sys, torch
 from config import TrainConfig
 from safetensors.torch import load_file
-from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+from fake_vae import FakeVAE
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
 # === МАРКЕР СИНХРОНИЗАЦИИ CHROMA V07_LOCAL ===
@@ -24,15 +24,12 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
     })
 
 
-    # 2. VAE (Загрузка весов со стопроцентной дезинфекцией UTF-8 BOM)
-    import json
-    with open(os.path.join(TrainConfig.SRC_DIR, "vae_config.json"), "r", encoding="utf-8-sig") as f:
-        vae_config = json.load(f)
+    # 2. VAE (Инжекция стерильного FakeVAE-щита кузнецов для экономии VRAM)
+    vae = FakeVAE(scaling_factor=0.3611)
+    vae.to(device=device, dtype=torch.bfloat16)
 
-    vae_config["block_out_channels"] = [128, 256, 512, 512]
+    # 3. Сборка пайплайна
 
-    vae = AutoencoderKL.from_config(vae_config).to(device=device, dtype=torch.bfloat16)
-    vae.load_state_dict({k.replace("vae.", ""): v for k, v in load_file(TrainConfig.VAE_PATH, device="cpu").items()}, strict=False)
 
     # 3. Сборка пайплайна
     pipe = ChromaPipeline(
