@@ -165,9 +165,10 @@ def main_train_loop():
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
                 
-                # Фикс Кэпа: Выравниваем размерность текстовых ID, добавляя измерение батча [1, N, 3]
-                txt_len = prompt_embeds.shape[1]
-                txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
+                # Фикс Кэпа: Добавляем ось батча [1, N, 3], чтобы склейка torch.cat в ядре не трещала!
+                num_latent_tokens = packed_noisy_latents.shape[1]
+                img_ids = torch.zeros(1, num_latent_tokens, 3, device=device, dtype=torch.bfloat16)
+
 
                 pred_tensor = run_lora_model_step(
                     lora_model,
