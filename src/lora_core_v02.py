@@ -1,15 +1,17 @@
 # =========================================================================
-# КРИСТАЛЬНО СТЕРИЛЬНОЕ bfloat16-ЯДРО ИНЖЕКТОРА LoRA (ВЕРСИЯ V02_STABLE)
+# ЧИСТОКРОВНОЕ НАТИВНОЕ TORCHAO-ЯДРО ИНЖЕКТОРА LoRA (ВЕРСИЯ V03_STABLE)
 # =========================================================================
-# [Этот блок импортирует чистый PyTorch и Diffusers, полностью исключая quanto]
+# [Этот модуль полностью исключает quanto и переводит реактор на официальную]
+# [броню квантования PyTorch-Labs, работающую на чистом Python/CUDA рантайме]
 
 import os
 import sys
 import json
 import logging
+import gc
 import torch
 
-# Полное глушение внутренних предупреждений Diffusers для чистоты логов
+# Тотальное глушение предупреждений Diffusers для идеальной чистоты консоли
 logging.getLogger("diffusers").setLevel(logging.ERROR)
 
 from safetensors.torch import load_file
@@ -20,50 +22,40 @@ from config import TrainConfig
 class FluxLoraCoreV02:
     @staticmethod
     def init_transformer_with_lora():
-        print("[ОБТ] Магистральный запуск инжектора: lora_core_v02 (Чистый bfloat16)")
+        print("[ОБТ] Магистральный запуск инжектора: lora_core_v02 (Нативный TorchAO)")
         
+        # Сброс пиковых счетчиков CUDA для прецизионного контроля памяти
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-
-        # Чтение конфигурации ядра с гарантированным подавлением UTF-8 BOM маркера
-        config_json_path = os.path.join(TrainConfig.SRC_DIR, "transformer_config.json")
-        with open(config_json_path, "r", encoding="utf-8-sig") as f:
-            config_dict = json.load(f)
-
-        # Сборка модели в bf16 с нативным int8_weight_only через torchao
+        # Используем torchao для int8 квантования
         from torchao.quantization import quantize_, int8_weight_only
-        import gc
 
-        print("[Т] Загрузка и квантование модели (torchao)...")
+        # Загрузка конфига и модели (bfloat16)
+        with open(os.path.join(TrainConfig.SRC_DIR, "transformer_config.json"), "r", encoding="utf-8-sig") as f:
+            config_dict = json.load(f)
         transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
+
+        # Вычитка весов и вставка
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
         clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
         transformer.load_state_dict(clean_state_dict, strict=False)
 
-        # Накатка нативного int8 квантования для снижения VRAM [1.10]
+        # Квантование (int8_weight_only)
         quantize_(transformer, int8_weight_only())
-        
-        # Очистка памяти
+
+        # Чистка VRAM
         torch.cuda.empty_cache()
         gc.collect()
-        print("[УСПЕХ] Базовое ядро упаковано в нативный int8. Полка VRAM БАЗЫ успешно срезана.")
 
-
-        # Блокировка torchao и инициализация LoRA
-        import peft.tuners.lora.torchao
-        import peft.tuners.tuners_utils
-        peft.tuners.lora.torchao.is_torchao_available = lambda: False
-        peft.tuners.tuners_utils.is_torchao_available = lambda: False
-
-        lora_config = LoraConfig(
-            r=TrainConfig.LORA_RANK,
-            lora_alpha=TrainConfig.LORA_ALPHA,
-            target_modules=list(TrainConfig.TARGET_MODULES),
-            bias="none"
-        )
+        # Изоляция эмбеддеров в bf16
+        for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
+            if hasattr(transformer, attr):
+                setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
+        # Конфигурируем PEFT LoRA и внедряем в квантованное ядро [1.10]
+        lora_config = LoraConfig(r=TrainConfig.LORA_RANK, lora_alpha=TrainConfig.LORA_ALPHA, target_modules=list(TrainConfig.TARGET_MODULES), bias="none")
         model = get_peft_model(transformer, lora_config)
 
-        # Обучение только LoRA весов в bfloat16
+        # Активируем градиенты только для LoRA-модулей в bfloat16 [1.10]
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.data = param.data.to(dtype=torch.bfloat16)
@@ -74,16 +66,8 @@ class FluxLoraCoreV02:
 
 # === БЛОК 4: ХОЛОДНЫЙ ТЕСТ И МОНИТОРИНГ VRAM ===
 if __name__ == "__main__":
-    try:
-        model = FluxLoraCoreV02.init_transformer_with_lora()
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        # Мониторинг VRAM
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / (1024 ** 3)
-            print(f"[ОТК] УСПЕХ | VRAM: {allocated:.2f} GB | LoRA params: {trainable_params:,}")
-        else:
-            print("[ОТК] Тест пройден, CUDA неактивна")
-    except Exception as e:
-        print(f"[АВАРИЯ] {str(e)}", file=sys.stderr)
-        sys.exit(1)
+    # Инициализация, проверка параметров и замер потребления VRAM [1.10]
+    tested_model = FluxLoraCoreV02.init_transformer_with_lora()
+    trainable_params = sum(p.numel() for p in tested_model.parameters() if p.requires_grad)
+    allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+    print(f"Активных LoRA мишеней: {trainable_params:,} | VRAM: {allocated:.2f} GB")
