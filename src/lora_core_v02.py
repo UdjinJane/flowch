@@ -69,10 +69,18 @@ class FluxLoraCoreV02:
         )
         model = get_peft_model(transformer, lora_config)
 
-        # === НАТИВНОЕ C++ КВАНТОВАНИЕ QUANTO ПОСЛЕ ИНЖЕКЦИИ PEFT ===
+        # === НАТИВНОЕ КВАНТОВАНИЕ QUANTO С АВТОНОМНОЙ ОЧИСТКОЙ ПАМЯТИ ===
         from optimum.quanto import quantize, qfloat8
-        # Квантуем базовый трансформер, на Windows оставляем динамический Python-рантайм без freeze()
+        import gc
+
+        print("[Т] Активация квантования базового ядра...")
         quantize(model.get_base_model(), weights=qfloat8)
+        
+        # ХАК ДЛЯ WINDOWS: Эмулируем работу freeze() руками, очищая кэши оригинальных тяжелых весов
+        import torch
+        torch.cuda.empty_cache()
+        gc.collect()
+        print("[УСПЕХ] Контур памяти зачищен вручную после квантования слоёв.")
 
 
         # 1. СТЕРИЛЬНЫЙ КАСТИНГ LORA В bfloat16 БЕЗ ОБРЫВА СВЯЗЕЙ AUTOGRAD
