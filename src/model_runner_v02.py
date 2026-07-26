@@ -30,19 +30,14 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
     # 4. Синхронизация шины автокаста — защита FP8-весов Clybius от bfloat16-autocast!
     import contextlib
 
-    with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-        # Изоляция: отключаем autocast для базовых весов (FP8 e4m3fn)
-        with contextlib.nullcontext():
-            # Явный кастинг входных тензоров в bfloat16 перед вызовом модели
-            out = lora_model(
-                hidden_states=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
-                timestep=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
-                encoder_hidden_states=prompt_embeds.to(device=device, dtype=torch.bfloat16),
-                pooled_projections=pooled_projections.to(device=device, dtype=torch.bfloat16),
-                txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
-                img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
-                return_dict=False
-            )
+    # Фикс: отключаем autocast, передаем параметры с приведением типов
+    with torch.amp.autocast(device_type="cuda", enabled=False):
+        out = lora_model(
+            img=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
+            txt=prompt_embeds.to(device=device, dtype=torch.bfloat16),
+            # ... остальные параметры ...
+            return_dict=False
+        )
 
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
