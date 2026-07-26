@@ -29,18 +29,16 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
     # 4. Синхронизация шины автокаста — защита FP8-весов от bfloat16-autocast
     import contextlib
 
-    # Фикс: отключаем autocast, передаем параметры с приведением типов
-    with torch.amp.autocast(device_type="cuda", enabled=False):
-        out = lora_model(
-            img=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
-            txt=prompt_embeds.to(device=device, dtype=torch.bfloat16),
-            txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
-            img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
-            timestep=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
-            y=pooled_projections.to(device=device, dtype=torch.bfloat16),
-            return_dict=False
-        )
-
+    # Фикс: Возвращаем канонические имена аргументов FluxTransformer2DModel
+    out = lora_model(
+        hidden_states=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
+        encoder_hidden_states=prompt_embeds.to(device=device, dtype=torch.bfloat16),
+        txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
+        img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
+        timestep=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
+        pooled_projections=pooled_projections.to(device=device, dtype=torch.bfloat16),
+        return_dict=False
+    )
 
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
