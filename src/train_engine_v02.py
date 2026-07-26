@@ -1,31 +1,28 @@
 import os
 import sys
-from types import ModuleType
 
 # ============================================================================
-# УЛЬТИМАТИВНЫЙ ТОТАЛЬНЫЙ СУПЕР-ХАК КЭПА: ПРИНУДИТЕЛЬНОЕ ОПЕРЕЖАЮЩЕЕ ОСЛЕПЛЕНИЕ
+# УЛЬТИМАТИВНЫЙ ТОТАЛЬНЫЙ СУПЕР-ХАК: ПРИНУДИТЕЛЬНОЕ ОПЕРЕЖАЮЩЕЕ ОСЛЕПЛЕНИЕ
 # ============================================================================
-os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
-os.environ["HF_DISABLE_COMPILING"] = "1"
-os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6"
 os.environ["FORCE_CUDA"] = "1"
 os.environ["USE_ROCM"] = "0"
+# Удаляем переменные окружения AMD
+for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "ROCM_PATH"]:
+    os.environ.pop(amdbug, None)
 
-for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HIP_DIR", "ROCM_PATH"]:
-    os.environ[amdbug] = ""
-    if amdbug in os.environ:
-        del os.environ[amdbug]
+import torch
+# Кастрируем проверки ROCm/HIP на уровне ядра
+torch.version.hip = None
+torch.version.rocm = None
 
-# Принудительно импортируем оригинальные утилиты, сохраняя все константы (ENV_VARS_TRUE_VALUES и др.)
-import diffusers.utils.import_utils
-
-# Лазерно переписываем только методы проверки ROCm/HIP на жесткое False
-diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
-diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
-diffusers.utils.import_utils.is_hip_available = lambda *args, **kwargs: False
-
-# Намертво фиксируем подмененный живой модуль в системном кэше Python
-sys.modules["diffusers.utils.import_utils"] = diffusers.utils.import_utils
+# Ослепляем Diffusers еще до их импорта, насильно внедряя фейк
+try:
+    from types import ModuleType
+    fake_utils = ModuleType("diffusers.utils.import_utils")
+    fake_utils.is_rocm_available = lambda: False
+    fake_utils.is_torch_rocm_available = lambda: False
+    sys.modules["diffusers.utils.import_utils"] = fake_utils
+except Exception: pass
 # ============================================================================
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
