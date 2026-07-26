@@ -18,9 +18,6 @@ from peft import get_peft_model, LoraConfig
 from config import TrainConfig
 
 class FluxLoraCoreV02:
-
-
-class FluxLoraCoreV02:
     @staticmethod
 
     def init_transformer_with_lora():
