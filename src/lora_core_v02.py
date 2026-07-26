@@ -83,8 +83,20 @@ class FluxLoraCoreV02:
 
 
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
+
+        # Системный хак: заставляем PEFT-обёртку безболезненно пропускать через себя кастомные порты img и txt
+        base_peft_forward = model.forward
+        def custom_peft_forward(*args, **kwargs):
+            if "img" in kwargs or "txt" in kwargs:
+                return model.get_base_model()(*args, **kwargs)
+            return base_peft_forward(*args, **kwargs)
+        model.forward = custom_peft_forward
+
         return model.to("cuda")
-# === КОНЕЦ БЛОКА 3 ===        
+
+        # === КОНЕЦ БЛОКА 3 ===   
+
+     
 # === БЛОК 4: РУЧНОЙ ЗАПУСК ХОЛОДНОГО ТЕСТА И ТЕРМОМЕТРЫ VRAM ===
 if __name__ == "__main__":
     import sys
