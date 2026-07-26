@@ -1,57 +1,5 @@
 import os
 import sys
-from types import ModuleType
-
-# ============================================================================
-# ЯДЕРНЫЙ БРОНЕЛИСТ КЭПА: ТОТАЛЬНЫЙ ОПЕРЕЖАЮЩИЙ ПЕРЕХВАТ ИМПОРТОВ СИСТЕМЫ
-# ============================================================================
-# 1. Выжигание PEFT-шизофрении на дальних подступах (ЯДЕРНЫЙ ПОДЛОГ МЕТАДАННЫХ)
-import importlib.metadata
-_orig_version = importlib.metadata.version
-
-def _fake_version_checker(package_name):
-    if package_name.lower() == "torchao":
-        return "0.17.0"
-    return _orig_version(package_name)
-
-# Блокировка C++ компилятора ninja на Windows для quanto
-fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
-fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
-fake_cpp_ext.load = lambda *args, **kwargs: None
-sys.modules["torch.utils.cpp_extension"] = fake_cpp_ext
-os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
-
-importlib.metadata.version = _fake_version_checker
-sys.modules["importlib.metadata"].version = _fake_version_checker
-
-# 2. ЭКРАНИРОВАНИЕ ПРОТОТИПОВ TORCHAO (Ультимативный дуракоустойчивый ослепитель)
-class UniversalFakeModule(ModuleType):
-    def __getattr__(self, name):
-        # 1. Если Python ищет пути пакета, возвращаем легитимный пустой список
-        if name == "__path__":
-            return []
-        # 2. Если Python ищет системные строки для inspect.py, отдаем валидные пустышки
-        if name in ["__file__", "__cached__", "__code__", "__source__"]:
-            return f"Z:\\flowch\\src\\{self.__name__}\\fake.py"
-        # 3. Для всего остального (функций, констант diffusers) скармливаем безопасную лямбду
-        return lambda *args, **kwargs: None
-
-# Обновляем инжекцию для всех критических точек
-for sub_mod in [
-    "torchao.prototype",
-    "torchao.prototype.custom_fp_utils",
-    "torchao.prototype.safetensors",
-    "torchao.prototype.safetensors.safetensors_support",
-    "torchao.prototype.safetensors._safetensors_support"
-]:
-    fake_sub = UniversalFakeModule(sub_mod)
-    fake_sub.__path__ = []  # Жестко взводим статус пакета
-    sys.modules[sub_mod] = fake_sub
-# ============================================================================
-
-
-
-# Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
 import shutil
