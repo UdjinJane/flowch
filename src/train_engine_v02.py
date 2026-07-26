@@ -239,14 +239,14 @@ def main_train_loop():
                 # Врубаем тестовую генерацию кадра для Кэпа
                 lora_model.eval()
                 with torch.no_grad():
-                # === СТЫКОВКА ИНФЕРЕНСА CHROMA V07 ===
-                # Стыковка инференса через легкий FakeVAE-щит кузнецов
-                f_vae = FakeVAE(scaling_factor=0.3611) # Подставляем канонический скейлинг Chroma
-                run_inference_v02(
-                    loaded_transformer=lora_model,
-                    current_step=global_step,
-                    vae=f_vae # Форсированно скармливаем пустышку в пайплайн инференса
-                )
+                    # === СТЫКОВКА ИНФЕРЕНСА CHROMA V07 ===
+                    # Стыковка инференса через легкий FakeVAE-щит кузнецов
+                    f_vae = FakeVAE(scaling_factor=0.3611) # Подставляем канонический скейлинг Chroma
+                    run_inference_v02(
+                        loaded_transformer=lora_model,
+                        current_step=global_step,
+                        vae=f_vae # Форсированно скармливаем пустышку в пайплайн инференса
+                    )
 
                 # === КОНЕЦ СТЫКОВКИ ===
 
