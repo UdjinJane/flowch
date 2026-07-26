@@ -1,21 +1,30 @@
-
 import os
 import sys
+
 # ============================================================================
 # ЯДЕРНАЯ ЛАТКА КЭПА: ТОТАЛЬНАЯ БЛОКИРОВКА КЭША ROCM И С++ РАСШИРЕНИЙ
 # ============================================================================
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 os.environ["HF_DISABLE_COMPILING"] = "1"
-os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6" # Форсируем архитектуру RTX 3090 Ampere
-os.environ["FORCE_CUDA"] = "1"             # Намертво запираем рантайм на CUDA ядрах
-os.environ["USE_ROCM"] = "0"               # Выкалываем глаза загрузчику ROCm фреймворка
+os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6"
+os.environ["FORCE_CUDA"] = "1"
+os.environ["USE_ROCM"] = "0"
 
-# Тотальная зачистка рантайма от скрытых системных хвостов AMD
 for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HIP_DIR", "ROCM_PATH"]:
     os.environ[amdbug] = ""
     if amdbug in os.environ:
         del os.environ[amdbug]
+
+try:
+    import diffusers.utils.import_utils
+    diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
+    diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
+    sys.modules["diffusers.utils.import_utils"].is_rocm_available = lambda *args, **kwargs: False
+    sys.modules["diffusers.utils.import_utils"].is_torch_rocm_available = lambda *args, **kwargs: False
+except Exception:
+    pass
 # ============================================================================
+
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
