@@ -106,10 +106,11 @@ class FluxLoraCoreV02:
 
         print("[УСПЕХ] Экономное ядро LoRA_Core_V02 герметизировано на GPU.")
 
-        # Системный хак: заставляем PEFT-обёртку безболезненно пропускать через себя кастомные порты img и txt
+        # Системный хак: принудительный сквозной транзит вызова раннера напрямую к базовой модели в обход PEFT
         base_peft_forward = model.forward
         def custom_peft_forward(*args, **kwargs):
-            if "img" in kwargs or "txt" in kwargs:
+            # Если вызов идет из нашего маршевого раннера, швыряем его напрямую в ядро трансформера
+            if "hidden_states" in kwargs or "img" in kwargs:
                 return model.get_base_model()(*args, **kwargs)
             return base_peft_forward(*args, **kwargs)
         model.forward = custom_peft_forward
