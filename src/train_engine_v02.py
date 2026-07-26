@@ -116,6 +116,16 @@ def main_train_loop():
 
                 # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 С ТАЙМЕРОМ ФАЗЫ ===
                 # --- Вскрываем обстановку! ----
+                # === ПРЕДПУСКОВОЙ РАДАР СТРУКТУРЫ ШАГА (АНТИ-ОВЕРСВАП АУДИТ) ===
+                if global_step == 1:
+                    print("\n🚨🚨🚨 [РАДАР] ВНИМАНИЕ! ПЕРЕХВАТ ТЕНЗОРОВ ПЕРЕД ВХОДОМ В ЯДРО: 🚨🚨🚨")
+                    print(f" -> [ВХОД] latents shape: {latents.shape} | dtype: {latents.dtype} | Device: {latents.device} | Эквивалент VRAM: {latents.element_size() * latents.nelement() / (1024**2):.4f} MB")
+                    print(f" -> [ВХОД] prompt_embeds shape: {prompt_embeds.shape} | dtype: {prompt_embeds.dtype} | Device: {prompt_embeds.device} | Эквивалент VRAM: {prompt_embeds.element_size() * prompt_embeds.nelement() / (1024**2):.4f} MB")
+                    print(f" -> [ВХОД] packed_noisy_latents shape: {packed_noisy_latents.shape} | dtype: {packed_noisy_latents.dtype} | Device: {packed_noisy_latents.device} | Эквивалент VRAM: {packed_noisy_latents.element_size() * packed_noisy_latents.nelement() / (1024**2):.4f} MB")
+                    print(f" -> [ВХОД] img_ids shape: {img_ids.shape} | dtype: {img_ids.dtype} | Device: {img_ids.device}")
+                    print(f" -> [VRAM БАЗА] Выделено CUDA перед forward: {torch.cuda.memory_allocated(device) / (1024**3):.2f} GB")
+                    print("=========================================================================\n")
+
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
                 
