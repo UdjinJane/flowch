@@ -39,13 +39,19 @@ class FluxLoraCoreV02:
         with open(config_json_path, "r", encoding="utf-8-sig") as f:
             config_dict = json.load(f)
         
-        # Разворачиваем каркас в bfloat16 для корректной инжекции LoRA
-        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
+        # Каноническая инжекция: разворачиваем каркас СРАЗУ в нативном FP8, экранируя VRAM
+        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.float8_e4m3fn)
         
-        # Загрузка весов и приведение к bf16
+        # Загрузка весов напрямую в FP8-контур
         state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
         clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
+        # Принудительно кастуем входящие веса к FP8 перед заливкой в тензоры
+        for k in list(clean_state_dict.keys()):
+            if clean_state_dict[k].dtype == torch.bfloat16:
+                clean_state_dict[k] = clean_state_dict[k].to(dtype=torch.float8_e4m3fn)
+                
         transformer.load_state_dict(clean_state_dict, strict=False)
+
 
         # Защита эмбеддеров
         for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
@@ -77,7 +83,7 @@ class FluxLoraCoreV02:
         quantize(model.get_base_model(), weights=qfloat8)
         
         # ХАК ДЛЯ WINDOWS: Эмулируем работу freeze() руками, очищая кэши оригинальных тяжелых весов
-        import torch
+
         torch.cuda.empty_cache()
         gc.collect()
         print("[УСПЕХ] Контур памяти зачищен вручную после квантования слоёв.")
