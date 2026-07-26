@@ -240,12 +240,10 @@ def main_train_loop():
                 lora_model.eval()
                 with torch.no_grad():
                     # === СТЫКОВКА ИНФЕРЕНСА CHROMA V07 ===
-                    # Стыковка инференса через легкий FakeVAE-щит кузнецов
-                    f_vae = FakeVAE(scaling_factor=0.3611) # Подставляем канонический скейлинг Chroma
+                    # Передаем только трансформер и шаг. Подмену VAE на FakeVAE сделаем внутри generate_v02!
                     run_inference_v02(
                         loaded_transformer=lora_model,
-                        current_step=global_step,
-                        vae=f_vae # Форсированно скармливаем пустышку в пайплайн инференса
+                        current_step=global_step
                     )
 
                 # === КОНЕЦ СТЫКОВКИ ===
