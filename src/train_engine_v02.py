@@ -11,6 +11,7 @@ from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
 from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
+from fake_vae import FakeVAE
 from telemetry_logger import FluxTelemetryTracker
 
 
@@ -239,11 +240,14 @@ def main_train_loop():
                 lora_model.eval()
                 with torch.no_grad():
                 # === СТЫКОВКА ИНФЕРЕНСА CHROMA V07 ===
-                # Передаем только трансформер и шаг. Эмбеддинги и пулинг генератор заберет из кэша сам.
-                    run_inference_v02(
+                # Стыковка инференса через легкий FakeVAE-щит кузнецов
+                f_vae = FakeVAE(scaling_factor=0.3611) # Подставляем канонический скейлинг Chroma
+                run_inference_v02(
                     loaded_transformer=lora_model,
-                    current_step=global_step
+                    current_step=global_step,
+                    vae=f_vae # Форсированно скармливаем пустышку в пайплайн инференса
                 )
+
                 # === КОНЕЦ СТЫКОВКИ ===
 
                 lora_model.train()
