@@ -53,13 +53,11 @@ class FluxLoraCoreV02:
         model = get_peft_model(transformer, lora_config)
         
         # 7. Гарантированная блокировка базового ядра и активация автограда только для LoRA
-        model.base_model.mapping.requires_grad_(False)
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
-
         return model.to("cuda")
 
 # === БЛОК 4: ХОЛОДНЫЙ ТЕСТ И МОНИТОРИНГ VRAM ===
