@@ -46,22 +46,30 @@ class FluxLoraCoreV02:
             if hasattr(transformer, attr):
                 setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
         
-        # 2. ФИКС ADALAYERNORM И СВЕРХЛЕГКИЕ ХУКИ ДЕКВАНТОВАНИЯ ДЛЯ ЛИНЕЙНЫХ СЛОЕВ
-        # Навешиваем динамические хуки, которые на лету приводят fp8-веса к bfloat16 во время матричного умножения
-        def make_weight_bf16_hook(mod, inputs):
-            if hasattr(mod, "weight") and mod.weight is not None:
-                if mod.weight.dtype == torch.float8_e4m3fn:
-                    mod.weight.data = mod.weight.data.to(dtype=torch.bfloat16)
+        # 2. ФИКС ADALAYERNORM И ЧЕСТНЫЕ ХУКИ ТРАНЗИТА FP8 БЕЗ УТЕЧКИ ПАМЯТИ
+        # Вместо перезаписи данных мы подменяем forward линейных слоев, сохраняя оригинальный FP8 в VRAM
+        def make_weight_bf16_forward_wrapper(module_obj):
+            original_forward = module_obj.forward
+            def new_forward(input_tensor):
+                if hasattr(module_obj, "weight") and module_obj.weight is not None:
+                    # Если веса в FP8, кастуем их во временную переменную bfloat16 только для этой операции
+                    if module_obj.weight.dtype == torch.float8_e4m3fn:
+                        w_temp = module_obj.weight.to(dtype=input_tensor.dtype)
+                        bias_temp = module_obj.bias.to(dtype=input_tensor.dtype) if module_obj.bias is not None else None
+                        return F.linear(input_tensor, w_temp, bias_temp)
+                return original_forward(input_tensor)
+            return new_forward
 
         for name, module in transformer.named_modules():
             # Перевод управляющих слоев AdaLayerNorm в честный bfloat16
             if "norm" in name.lower() and hasattr(module, "linear") and module.linear is not None:
                 module.linear = module.linear.to(dtype=torch.bfloat16)
-            # Навешиваем предохранительный хук на все линейные проекции внимания
+            # Оборачиваем forward всех линейных слоев внимания для летучего деквантования активаций
             elif isinstance(module, torch.nn.Linear):
-                module.register_forward_pre_hook(make_weight_bf16_hook)
+                module.forward = make_weight_bf16_forward_wrapper(module)
 
-        print("[УСПЕХ] Базовая модель изолирована. Эмбеддеры в bf16, на линейные слои навешены хуки летучего деквантования весов.")
+        print("[УСПЕХ] Базовая модель изолирована. Эмбеддеры в bf16, линейные слои обернуты во временной транзит типов.")
+
 
 # === КОНЕЦ БЛОКА 2 ===
 
