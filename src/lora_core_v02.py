@@ -5,15 +5,12 @@ import logging
 import gc
 import torch
 
-# ТОТАЛЬНЫЙ ОФИЦИАЛЬНЫЙ ХАК: Переписываем функцию проверки версий во всех шлюзах PEFT
+# ХАК ДЛЯ WINDOWS RTX 3090: Импортируем только корень PEFT и глушим флаг прямо в его утилитах
 import peft
 import peft.utils
-import peft.utils.import_utils
 
-# Забиваем True во все возможные точки вызова, чтобы ослепить внутренние файлы lora/torchao.py
-peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
+# Забиваем жесткое True в корень утилит — фабрика lora/torchao.py считает его отсюда!
 peft.utils.is_torchao_available = lambda *args, **kwargs: True
-peft.is_torchao_available = lambda *args, **kwargs: True
 
 # Теперь безопасно подтягиваем остальной канонический контур
 logging.getLogger("diffusers").setLevel(logging.ERROR)
@@ -23,7 +20,6 @@ from peft import get_peft_model, LoraConfig
 from config import TrainConfig
 
 class FluxLoraCoreV02:
-
 
     @staticmethod
 
