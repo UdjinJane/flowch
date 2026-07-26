@@ -113,8 +113,12 @@ def main_train_loop():
                 packed_noisy_latents = pack_latents_to_patches(noisy_latents)
                 img_ids = generate_flux_img_ids(latents.shape[2], latents.shape[3], device).to(torch.bfloat16)
 
-                # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 ===
-                # Передаем аргументы строго по каноническому порядку портов ядра runner_v02
+
+                # === СНАЙПЕРСКИЙ ПОЗИЦИОННЫЙ ВЫЗОВ РАННЕРА V05 С ТАЙМЕРОМ ФАЗЫ ===
+                # --- Вскрываем обстановку! ----
+                torch.cuda.synchronize()
+                t_fwd_start = time.time()
+                
                 pred_tensor = run_lora_model_step(
                     lora_model,
                     {"text_ids_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bool)},
@@ -125,7 +129,14 @@ def main_train_loop():
                     torch.zeros((prompt_embeds.shape[1], 3), device=device, dtype=torch.bfloat16),
                     img_ids
                 )
+                
+                torch.cuda.synchronize()
+                t_fwd_end = time.time()
+                if global_step % 10 == 0:
+                    print(f"[КОНТРОЛЬ] Время чистого прямого прохода ядра: {t_fwd_end - t_fwd_start:.4f} сек.")
                 # === КОНЕЦ ЧАСТИ 1 ===
+
+
                 
                 
                 # === КАНbackgroundИЧЕСКОЕ ВЫРАВНИВАНИЕ МАНТИССЫ RECTIFIED FLOW V11 ===
