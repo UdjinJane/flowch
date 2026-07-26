@@ -35,12 +35,19 @@ class FluxTelemetryTracker:
             self.target_buffer.append(target_stats)
             self.loss_buffer.append(current_loss.item() if hasattr(current_loss, "item") else float(current_loss))
             self.t_attr_buffer.append(t_attr.item() if hasattr(t_attr, "item") else float(t_attr))
+
+    
     def flush_aggregated_log(self, global_step, epoch):
-        """Рассчитывает скользящее среднее за 10 шагов и сбрасывает богатый лог на SSD."""
+        """Накапливает шаги и сбрасывает скользящее среднее на SSD строго раз в 10 шагов."""
         if not self.pred_buffer:
             return
-
+            
+        # Защита SSD и удержание скользящего тренда плавки за 10 шагов
+        if global_step % 10 != 0:
+            return
+            
         n = len(self.pred_buffer)
+
         
         # Расчет усредненных метрик
         avg_metrics = {
