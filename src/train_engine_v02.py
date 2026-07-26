@@ -5,25 +5,21 @@ from types import ModuleType
 # ============================================================================
 # ЯДЕРНЫЙ БРОНЕЛИСТ КЭПА: ТОТАЛЬНЫЙ ОПЕРЕЖАЮЩИЙ ПЕРЕХВАТ ИМПОРТОВ СИСТЕМЫ
 # ============================================================================
-# 2. Выжигание PEFT-шизофрении на дальних подступах (Капкан №3)
-# Принудительно загружаем оригинальный peft.utils со всеми константами (CONFIG_NAME и др.)
-try:
-    import peft.utils
-    import peft.utils.import_utils
-    
-    # Переписываем только проверку доступности torchao в оригинальных объектах
-    peft.utils.is_torchao_available = lambda *args, **kwargs: True
-    peft.utils.import_utils.is_torchao_available = lambda *args, **kwargs: True
-    
-    # Фиксируем в sys.modules для глубоких проверок фреймворков
-    sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
-    sys.modules["peft.utils.import_utils"].is_torchao_available = lambda *args, **kwargs: True
-except (ImportError, AttributeError):
-    # Если import_utils физически отсутствует в этой версии PEFT, дублируем корень
-    if "peft.utils" in sys.modules:
-        sys.modules["peft.utils"].is_torchao_available = lambda *args, **kwargs: True
-        sys.modules["peft.utils.import_utils"] = sys.modules["peft.utils"]
+# 2. Выжигание PEFT-шизофрении на дальних подступах (ЯДЕРНЫЙ ПОДЛОГ МЕТАДАННЫХ)
+import importlib.metadata
+# Сохраняем канонический метод системы
+_orig_version = importlib.metadata.version
+
+def _fake_version_checker(package_name):
+    if package_name.lower() == "torchao":
+        return "0.17.0"  # Идеальная версия, которая выше требуемой 0.16.0
+    return _orig_version(package_name)
+
+# Намертво вшиваем подлог в системную библиотеку метаданных
+importlib.metadata.version = _fake_version_checker
+sys.modules["importlib.metadata"].version = _fake_version_checker
 # ============================================================================
+
 
 
 # Дальше идут оригинальные импорты управляющего дирижёра
