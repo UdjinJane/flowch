@@ -1,31 +1,36 @@
 graph TD
-    %% Core Components
+    %% Основные компоненты системы
     A["train_engine_v02.py"] --> B["lora_core_v02.py"]
     A --> C["model_runner_v02.py"]
     A --> D["dataset_v02.py"]
     A --> E["generate_v02.py"]
 
-    %% Structure & Data Flow
+    %% Структура и потоки данных
     subgraph SRC_DIR ["/src/"]
-        A -->|Step| B
-        A -->|Pipeline| G1["chroma_pipeline.py"]
-        A -->|Render| G["generate_v02.py"]
+        A -->|Шаг обучения| B
+        A -->|Пайплайн| G1["chroma_pipeline.py"]
+        A -->|Рендеринг| E
     end
 
-    subgraph CACHE ["Storage (Z:\\flowch\\)"]
-        P["\\cache\\latent_embeds"]
-        P2["\\text_cache (Monolithic)"]
-        OUT["\\output\\images\\"]
+    subgraph CACHE ["Хранилище (Z:\\flowch\\)"]
+        P["\\cache\\latent_embeds"] -->|Загрузка| A
+        P2["\\text_cache (Monolithic)"] -->|T5+CLIP| E
+        OUT["\\output\\images\"] <--|PNG| E
     end
 
-    %% Flows
-    P -->|Load| A
-    B -->|LoRA| VRAM{VRAM: <21GB}
-    P2 -->|T5+CLIP| E
-    E -->|PNG| OUT
+    %% Ограничения и режимы
+    VRAM["VRAM: <21.0 GB"]
+    B --> VRAM
+    P2 -->|Текстовые монолиты| A
 
-    %% Styles
-    style A fill:#ff9,stroke:#333
-    style B fill:#9f6,stroke:#333
-    style C fill:#6f9,stroke:#333
-    style P2 fill:#f96,stroke:#333
+    %% Стили для визуализации
+    style A fill:#ff9,stroke:#333,color:black
+    style B fill:#9f6,stroke:#333,color:black
+    style C fill:#6f9,stroke:#333,color:black
+    style P2 fill:#f96,stroke:#333,color:black
+    style VRAM fill:#ff0,stroke:#333,color:black
+
+    %% Описание функциональности модулей
+    click A "train_engine_v02.py\nФункциональность:\n- Загрузка данных\n- Цикл обучения\n- Логирование\n- Контроль VRAM (<21.0 GB)\n- Отладка тахометра"
+    click B "lora_core_v02.py\nФункциональность:\n- 8-битная оптимизация AdamW (ao_optim_monolith_v02.py)\n- Динамический кастинг градиентов int8/float32\n- Контроль фрагментации VRAM"
+    click E "generate_v02.py\nФункциональность:\n- Decode latents (VAE)\n- Postprocessing PNG\n- Статистика скорости (it/s)"
