@@ -1,9 +1,3 @@
-# =========================================================================
-# ЧИСТОКРОВНОЕ НАТИВНОЕ TORCHAO-ЯДРО ИНЖЕКТОРА LoRA (ВЕРСИЯ V03_STABLE)
-# =========================================================================
-# [Этот модуль полностью исключает quanto и переводит реактор на официальную]
-# [броню квантования PyTorch-Labs, работающую на чистом Python/CUDA рантайме]
-
 import os
 import sys
 import json
@@ -11,18 +5,20 @@ import logging
 import gc
 import torch
 
-# Тотальное глушение предупреждений Diffusers для идеальной чистоты консоли
-logging.getLogger("diffusers").setLevel(logging.ERROR)
+# ЯДЕРНЫЙ ХАК ДЛЯ WINDOWS: Форсированно слепим валидатор версий внутри кэша модулей Python
+# Это гарантирует, что любая внутренняя функция PEFT получит True в обход кривой проверки (0.7.0 < 0.16.0)
+import peft.utils.import_utils
+peft.utils.import_utils.is_torchao_available = lambda: True
 
+# Теперь безопасно подтягиваем остальной канонический контур
+logging.getLogger("diffusers").setLevel(logging.ERROR)
 from safetensors.torch import load_file
 from diffusers import FluxTransformer2DModel
 from peft import get_peft_model, LoraConfig
-
-# ХАК ДЛЯ WINDOWS RTX 3090: Обманываем кривую логику сравнения версий в корневом модуле утилит PEFT
-import peft.utils
-peft.utils.is_torchao_available = lambda: True
-
 from config import TrainConfig
+
+class FluxLoraCoreV02:
+
 
 class FluxLoraCoreV02:
     @staticmethod
