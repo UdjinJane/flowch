@@ -29,8 +29,10 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
     # 4. Синхронизация шины автокаста — защита FP8-весов от bfloat16-autocast
     import contextlib
 
-    # Фикс: Возвращаем канонические имена аргументов FluxTransformer2DModel
-    out = lora_model(
+    # Фикс Кэпа: Стучимся напрямую в базовое ядро трансформера сквозь PEFT-обёртку
+    target_engine = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
+    
+    out = target_engine(
         hidden_states=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
         encoder_hidden_states=prompt_embeds.to(device=device, dtype=torch.bfloat16),
         txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
@@ -39,6 +41,7 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         pooled_projections=pooled_projections.to(device=device, dtype=torch.bfloat16),
         return_dict=False
     )
+
 
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
