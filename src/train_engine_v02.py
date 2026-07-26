@@ -2,17 +2,20 @@
 import os
 import sys
 # ============================================================================
-# АНТИ-РОКМ ЩИТ КЭПА: НАМЕРТВО БЛОКИРУЕМ КОМПИЛЯЦИЮ C++ РАСШИРЕНИЙ НА WINDOWS
+# ЯДЕРНАЯ ЛАТКА КЭПА: ТОТАЛЬНАЯ БЛОКИРОВКА КЭША ROCM И С++ РАСШИРЕНИЙ
 # ============================================================================
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 os.environ["HF_DISABLE_COMPILING"] = "1"
+os.environ["TORCH_CUDA_ARCH_LIST"] = "8.6" # Форсируем архитектуру RTX 3090 Ampere
+os.environ["FORCE_CUDA"] = "1"             # Намертво запираем рантайм на CUDA ядрах
+os.environ["USE_ROCM"] = "0"               # Выкалываем глаза загрузчику ROCm фреймворка
 
-# Если система передала остатки призраков в память, выжигаем их из рантайма Питона
-for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY"]:
+# Тотальная зачистка рантайма от скрытых системных хвостов AMD
+for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HIP_DIR", "ROCM_PATH"]:
+    os.environ[amdbug] = ""
     if amdbug in os.environ:
         del os.environ[amdbug]
 # ============================================================================
-
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
