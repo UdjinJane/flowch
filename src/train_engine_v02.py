@@ -16,14 +16,17 @@ for amdbug in ["ROCM_HOME", "HIP_PATH", "HIP_PATH_62", "OLLAMA_LLM_LIBRARY", "HI
     if amdbug in os.environ:
         del os.environ[amdbug]
 
-fake_import_utils = ModuleType("diffusers.utils.import_utils")
-fake_import_utils.is_rocm_available = lambda *args, **kwargs: False
-fake_import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
-fake_import_utils.is_hip_available = lambda *args, **kwargs: False
+# Принудительно импортируем оригинальные утилиты, сохраняя все константы (ENV_VARS_TRUE_VALUES и др.)
+import diffusers.utils.import_utils
 
-sys.modules["diffusers.utils.import_utils"] = fake_import_utils
+# Лазерно переписываем только методы проверки ROCm/HIP на жесткое False
+diffusers.utils.import_utils.is_rocm_available = lambda *args, **kwargs: False
+diffusers.utils.import_utils.is_torch_rocm_available = lambda *args, **kwargs: False
+diffusers.utils.import_utils.is_hip_available = lambda *args, **kwargs: False
+
+# Намертво фиксируем подмененный живой модуль в системном кэше Python
+sys.modules["diffusers.utils.import_utils"] = diffusers.utils.import_utils
 # ============================================================================
-
 # Дальше идут оригинальные импорты управляющего дирижёра
 import gc
 import time
