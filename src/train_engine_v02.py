@@ -11,7 +11,6 @@ from generate_v02 import run_inference_v02
 from dataset_v02 import get_dataloader_v02
 from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
-from fake_vae import FakeVAE
 from telemetry_logger import FluxTelemetryTracker
 
 
