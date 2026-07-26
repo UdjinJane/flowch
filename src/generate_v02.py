@@ -51,7 +51,7 @@ def run_inference_v02(loaded_transformer, current_step=0, device='cuda'):
         if not embed_files:
             raise FileNotFoundError(f"Каталог {TrainConfig.CACHE_TEXT_DIR} пуст!")
             
-        target_file = embed_files
+        target_file = embed_files[0]
         cached_dict = torch.load(target_file, map_location="cpu")
         
         # Извлекаем скрытые состояния T5 и CLIP по результатам рентгена
