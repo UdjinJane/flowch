@@ -2,7 +2,10 @@ import os
 import sys
 from types import ModuleType
 
-# [КОММЕНТАРИЙ УДАЛЕН]
+# ============================================================================
+# ЯДЕРНЫЙ БРОНЕЛИСТ КЭПА: ТОТАЛЬНЫЙ ОПЕРЕЖАЮЩИЙ ПЕРЕХВАТ ИМПОРТОВ СИСТЕМЫ
+# ============================================================================
+# 1. Блокировка C++ компилятора ninja на Windows для quanto
 fake_cpp_ext = ModuleType("torch.utils.cpp_extension")
 fake_cpp_ext.is_extension_available = lambda *args, **kwargs: False
 fake_cpp_ext.load = lambda *args, **kwargs: None
@@ -12,9 +15,18 @@ if "ROCM_HOME" in os.environ:
     del os.environ["ROCM_HOME"]
 os.environ["QUANTO_DISABLE_CPP_EXT"] = "1"
 
-# Дальше идут оригинальные импорты управляющего дирижёра...
-import gc
+# 2. Выжигание PEFT-шизофрении на дальних подступах (Капкан №3)
+fake_peft_utils = ModuleType("peft.utils")
+fake_peft_utils.is_torchao_available = lambda *args, **kwargs: True
+sys.modules["peft.utils"] = fake_peft_utils
 
+fake_peft_import_utils = ModuleType("peft.utils.import_utils")
+fake_peft_import_utils.is_torchao_available = lambda *args, **kwargs: True
+sys.modules["peft.utils.import_utils"] = fake_peft_import_utils
+# ============================================================================
+
+# Дальше идут оригинальные импорты управляющего дирижёра
+import gc
 import time
 import shutil
 import torch
@@ -27,6 +39,7 @@ from lora_core_v02 import FluxLoraCoreV02
 from model_runner_v02 import run_lora_model_step
 from fake_vae import FakeVAE
 from telemetry_logger import FluxTelemetryTracker
+
 
 
 # --- АВТОМАТИЗИРОВАННАЯ ЗАЩИТА ОТ КРИВЫХ РУК (ИНЖЕКЦИЯ ЗОЛОТА V02) ---
