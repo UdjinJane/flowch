@@ -6,53 +6,54 @@ from torch.utils.data import Dataset, DataLoader
 from config import TrainConfig
 
 class CachedFluxDatasetV02(Dataset):
+    """
+    Датасет с RAM-форсажем: загружает кэш в оперативную память при инициализации.
+    """
     def __init__(self):
-        print("[ОБТ] Инициализация стерильного отсека данных: Dataset_V02")
+        print("[RAM-ФОРСАЖ] Инициализация стерильного отсека данных: Dataset_V02")
         self.samples = []
-
-
-
+        
         if not os.path.exists(TrainConfig.METADATA_PATH):
-            print(f"[КРИТ] Манифест не найден по пути: {TrainConfig.METADATA_PATH}")
+            print(f"[КРИТ] Манифест не найден: {TrainConfig.METADATA_PATH}")
             return
 
+        # Загрузка кэша в RAM
         with open(TrainConfig.METADATA_PATH, "r", encoding="utf-8-sig") as f:
             for line in f:
-                if not line.strip():
-                    continue
+                if not line.strip(): continue
                 data = json.loads(line)
-                img_name = data["file_name"]
-                base_name = os.path.splitext(img_name)[0]
-
-                # === СТВОР МОНОЛИТНОГО КЭША V08_LOCAL ===
-                # Привязываемся строго к единому монолитному файлу .pt из папки text_cache
-                # === ФИКС СУФФИКСА МОНОЛИТА V08_LOCAL ===
+                base_name = os.path.splitext(data["file_name"])[0]
+                
                 mono_text_path = os.path.join(TrainConfig.CACHE_TEXT_DIR, f"{base_name}.pt")
                 latent_path = os.path.join(TrainConfig.CACHE_LATENT_DIR, f"{base_name}.pt")
-
-                # === ВРЕМЕННЫЙ ДИАГНОСТИЧЕСКИЙ РАДАР V08 ===
-                # Выводим в лог первую строку, чтобы глазами увидеть, что и где ищет скрипт
-                if len(self.samples) == 0:
-                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу текстовый монолит: {mono_text_path} -> Существует: {os.path.exists(mono_text_path)}")
-                    print(f"[ОТЛАДКА ПУТЕЙ] Ищу латенты кадра: {latent_path} -> Существует: {os.path.exists(latent_path)}")
-                # === КОНЕЦ РАДАРА ===
-
                 
                 if os.path.exists(mono_text_path) and os.path.exists(latent_path):
+                    # Загрузка и первичная обработка тензоров
+                    cached_dict = torch.load(mono_text_path, map_location="cpu", weights_only=False)
+                    prompt_embeds = cached_dict["t5_hidden"].squeeze(0)
+                    latents = torch.load(latent_path, map_location="cpu", weights_only=True).squeeze(0)
+                    
                     self.samples.append({
-                        "mono_text_path": mono_text_path,
-                        "latent_path": latent_path,
-                        "img_name": img_name
+                        "prompt_embeds": prompt_embeds,
+                        "latents": latents,
+                        "img_name": data["file_name"]
                     })
 
-
-        print(f"[УСПЕХ] Dataset_V02: Успешно состыковано {len(self.samples)} готовых к плавке кадров.")
+        print(f"[УСПЕХ] RAM-Форсаж завершен: {len(self.samples)} образцов в ОЗУ.")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
+        return self.samples[idx]
+
+def get_dataloader_v02():
+    dataset = CachedFluxDatasetV02()
+    if len(dataset) == 0:
+        raise ValueError("[КРИТ] Нулевой размер датасета V02!")
+    return DataLoader(dataset, batch_size=TrainConfig.BATCH_SIZE, shuffle=True, drop_last=True)
+# === БЛОК ДАННЫХ V02 ФИНАЛ ===
+
         
         # Вскрываем монолитный словарь T5+CLIP кузнецов V09_FINAL
         cached_dict = torch.load(sample["mono_text_path"], map_location="cpu")
