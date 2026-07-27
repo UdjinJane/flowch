@@ -211,10 +211,6 @@ def main_train_loop():
                     current_loss=loss.item()
                 )
 
-                # Выполнение обратного прохода с учетом шага накопления градиентов
-                (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
-
-
                 # Такт оптимизации и жесткий клиппинг аномальных градиентов
                 if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
                     torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
