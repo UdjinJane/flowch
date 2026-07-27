@@ -160,11 +160,13 @@ def main_train_loop():
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
 
-                # Подготовка словаря масок как позиционного аргумента для совместимости с checkpoint
+                # Подготовка словаря масок и каноничного тензора guidance кузнецов Chroma1
                 kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
-                default_vec = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
+                
+                # Ровно 1 элемент, расширенный под размерность батча B=1 согласно chroma_model.py
+                guidance_tensor = torch.full([1], 0, device=device, dtype=torch.bfloat16).expand(1)
 
-                # Каноничный вызов autocast с принудительной оберткой forward-прохода в checkpoint
+                # Вызов autocast с принудительной оберткой forward-прохода в checkpoint
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                     pred_tensor = checkpoint(
                         run_lora_model_step,
@@ -173,15 +175,16 @@ def main_train_loop():
                         packed_noisy_latents,
                         t_model_scale,
                         prompt_embeds,
-                        default_vec,
+                        guidance_tensor,
                         txt_ids_aligned,
                         img_ids,
-                        use_reentrant=False  # Безопасный современный режим отслеживания градиентов
+                        use_reentrant=False
                     )
 
-                # Завершение замера и расчет целевого потока
+                # Завершение замера
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
+
 
                 # --- ИЗОЛЯЦИЯ BACKWARD И РАСЧЕТА LOSS В BF16 ПОД КОНТРОЛЕМ AMP (src/train_engine_v02.py) ---
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
