@@ -7,7 +7,8 @@ def run_grep_scan():
     
     # Ключевые маркеры Лодстоновских диверсий
     #keywords = ["vae", "decode", "channels", "post_quant_conv", "fakevae", "block_out_channels"]
-    keywords =['optimizer', 'zero_grad', 'backward', 'step']
+    #keywords =['optimizer', 'zero_grad', 'backward', 'step']
+    keywords =['optimizer.step', 'zero_grad', 'backward', 'clip_grad_norm_']
     
     # Жесткий контур главных подозреваемых
     core_targets = [
