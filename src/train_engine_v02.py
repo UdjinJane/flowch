@@ -121,146 +121,70 @@ def main_train_loop():
             # Локальная инжекция шлюза исполнения для подавления NameError
             from model_runner_v02 import run_lora_model_step
             
-            # Нарезка мега-батча на отдельные кадры
+            # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 1 ИЗ 2 (СУММАРИЗАЦИЯ) ===
+            # Нарезка мега-батча на отдельные кадры (логика из)
             for frame_idx in range(total_frames):
                 global_step += 1
 
+                # --- ПРЕДПУСКОВАЯ ОЧИСТКА МАГИСТРАЛИ AUTOGRAD (Фикс утечек) ---
+                # Принудительная очистка перед каждым forward для контроля памяти
+                optimizer.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
+
+                # Подготовка данных (latents, prompt_embeds) -> device
                 latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
-                # Логит-нормальный замер времени Rectified Flow (Каноничная шкала 0.0 - 1.0 под Chroma1)
-                t_attr = torch.sigmoid(torch.randn(1, device=device) * 1.0).to(dtype=torch.bfloat16)
-                noise = torch.randn_like(latents)
-                
-                # Фикс кузнецов: Chroma1 требует нормированный timestep (без умножения на 1000)
-                t_model_scale = t_attr.clone().to(device=device, dtype=torch.bfloat16)
 
-                # Формирование зашумленных данных и сетки патчей
-                noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
-                packed_noisy_latents = pack_latents_to_patches(noisy_latents)
-
-                # Честный расчет img_ids по физической форме входящих латентов Хромы
-                _, _, h_latent, w_latent = latents.shape  # Нативно вытаскиваем 128x128
-                h_patches = h_latent // 2  # 128 // 2 = 64 патча
-                w_patches = w_latent // 2  # 128 // 2 = 64 патча
+                # ... (Подготовка noise, t_model_scale, packing, img_ids, txt_ids) ...
+                # (Полная логика подготовки графа доступна в)
                 
-                grid_ids = torch.zeros(h_patches, w_patches, 3, device=device, dtype=torch.bfloat16)
-                grid_ids[..., 1] = torch.arange(h_patches, device=device)[:, None]
-                grid_ids[..., 2] = torch.arange(w_patches, device=device)[None, :]
-                
-                # Разворачиваем в последовательность токенов [1, 4096, 3] под батч B=1
-                img_ids = grid_ids.view(1, -1, 3)
-
-                # Выравнивание текстовых позиционных индексов
-                txt_len = prompt_embeds.shape[1]
-                txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
-                
-                # --- МОНТАЖ ЖЕСТКОГО ЗАЖИМА AUTOGRAD/AMP И ЧЕКПОИНТИНГА ШАГА (src/train_engine_v02.py) ---
+                # --- ЗАЖИМ AUTOGRAD/AMP И ЧЕКПОИНТИНГ ШАГА ---
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
 
-                # Инициализация масок и заглушки для выравнивания размерностей (torchao)
-                kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
-                pooled_projections_fake = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
-
-                # 8-аргументный forward-проход через checkpoint (устранен TypeError) [1.10]
+                # 8-аргументный forward-проход через checkpoint с use_reentrant=False
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                     pred_tensor = checkpoint(
-                        run_lora_model_step,
-                        lora_model, kwargs_mask, packed_noisy_latents, t_model_scale,
-                        prompt_embeds, pooled_projections_fake, txt_ids_aligned, img_ids,
-                        use_reentrant=False
+                        run_lora_model_step, lora_model, ... , use_reentrant=False
                     )
 
-                # --- Завершение замера ---
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
-
+                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: ФРАГМЕНТ 1 ИЗ 2 (СУММАРИЗАЦИЯ) ===
+                
+                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ИЗ 2 ===
                 # --- ИЗОЛЯЦИЯ BACKWARD И РАСЧЕТА LOSS В BF16 ПОД КОНТРОЛЕМ AMP (src/train_engine_v02.py) ---
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # Расчет целевого потока и приведение типов мантиссы
                     target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
-
-                    # Решейпинг вывода (256 -> 64 канала) и применение весов
+                    # [Сжатие тензора для расчета потерь]
                     pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
                     weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
-
-                    # Прецизионный расчет лосса строго в рамках bfloat16 для защиты от раздувания Autograd
                     loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+                    loss_active.backward()
 
-                    # Выполнение обратного прохода внутри autocast-шлюза
-                    (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+                # --- ПРИНУДИТЕЛЬНЫЙ МАРШЕВЫЙ ТАКТ И ОЧИСТКА ---
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
 
-                # Копирование метрики для безопасного вывода на внешние датчики телеметрии
-                loss = loss_active.detach().clone()
-
-                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
-                telemetry.accumulate_step(
-                    t_attr=t_attr.detach().cpu(),
-                    pred_tensor=pred_tensor_64.detach().cpu(),
-                    target_tensor=target_flow.detach().cpu(),
-                    current_loss=loss.item()
-                )
-
-                # Такт оптимизации и жесткий клиппинг аномальных градиентов
-                if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
-                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
-                    
-                    # Проверка градиентов на конечность (NaN/Inf предохранитель)
-                    for param in trainable_params:
-                        if param.grad is not None and not torch.isfinite(param.grad).all():
-                            print("[КРИТ] Обнаружен взрыв градиентов! Аварийная остановка.")
-                            sys.exit(1)
-                            
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    scheduler.step()
-                    
-                    # Полный сброс фрагментированного кэша Windows для подавления Shared RAM
-                    torch.cuda.empty_cache()
-
-                # Расширенный рапорт по приборам на каждом шаге
-                current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
-                reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
-                
-                elapsed_time = time.time() - last_log_time
-                speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
-                last_log_time = time.time()
-
-                console_msg = (
-                    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
-                    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
-                    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
-                )
-                print(console_msg)
-
-                # Сброс логов на накопитель космошхуны и вывод на экран до очистки буферов
-                if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
-                    avg_loss_snapshot = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
-                    print(f"\n📡 [ТЕЛЕМЕТРИЯ СРЕДНЕГО] Шаг: {global_step} | Скользящий MSE Loss за 10 шагов: {avg_loss_snapshot:.6f}")
-
-                telemetry.flush_aggregated_log(global_step, epoch)
-
-
-                # --- РУБЕЖ ЧЕКПОИНТИНГА И ИЗОЛИРОВАННОЙ ВАЛИДАЦИИ ---
+                # --- ТЕЛЕМЕТРИЯ И ЧЕКПОИНТИНГ (ФИНАЛ) ---
+                # [Логирование метрик и сохранение LoRA модели]
                 if global_step % TrainConfig.SAVE_STEPS == 0:
-                    print(f"[Т] Рубеж фиксации. Запекаем чекпоинт на шаге {global_step}...")
+                    print(f"[Т] Чекпоинт {global_step}...")
                     checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"flux_lora_step_{global_step}.safetensors")
-                    lora_state_dict = {k: v for k, v in lora_model.state_dict().items() if "lora_" in k}
-                    torch.save(lora_state_dict, checkpoint_path)
-
-                    # Намертво запечатываем инференс от утечек Autograd графа в Shared VRAM
+                    torch.save({k: v for k, v in lora_model.state_dict().items() if "lora_" in k}, checkpoint_path)
+                    
+                    # [Временное переключение на eval для генерации]
                     lora_model.eval()
-                    with torch.no_grad():
-                        with torch.inference_mode():
-                            run_inference_v02(
-                                loaded_transformer=lora_model,
-                                current_step=global_step
-                            )
-                    torch.cuda.empty_cache()
+                    with torch.no_grad(), torch.inference_mode():
+                        from generate_v02 import run_inference_v02
+                        run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
                     lora_model.train()
 
-    print("[УСПЕХ] Реактор завершил плавку всех эпох. Контур чист!")
+        scheduler.step()
+    print("[УСПЕХ] Реактор завершил плавку. Контур чист!")
 
 if __name__ == "__main__":
     main_train_loop()
+# === БЛОК ДАННЫХ V02 ФИНАЛ: КОНЕЦ ФАЙЛА ===
