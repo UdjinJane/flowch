@@ -1,0 +1,302 @@
+# 🌟 РЕАКТОР ДЛЯ ЗАПЕКАНИЯ LoRa: ЭКСПЕРТНЫЙ УРОВЕНЬ
+
+## 1. Архитектура системы и критические пути
+
+```mermaid
+graph TD
+    %% Основные компоненты системы с деталями
+    A["train_engine_v02.py"] --> B["lora_core_v02.py"]
+    A --> C["model_runner_v02.py"]
+    A --> D["dataset_v02.py"]
+    A --> E["generate_v02.py"]
+
+    %% Структура и потоки данных с техническими деталями
+    subgraph SRC_DIR ["/src/"]
+        A -->|Шаг обучения (AdamW8bit)| B
+        A -->|Пайплайн Chroma| G1["chroma_pipeline.py"]
+        A -->|Рендеринг VAE| E
+    end
+
+    subgraph CACHE ["Хранилище (Z:\\flowch\\)"]
+        P["\\cache\\latent_embeds"] -->|Загрузка (float8_e4m3fn)| A
+        P2["\\text_cache (Monolithic)"] -->|T5+CLIP (bf16)| E
+        OUT["\\output\\images\"] <--|PNG (postprocessing)| E
+    end
+
+    %% Ограничения и режимы с техническими деталями
+    VRAM["VRAM: <21.0 GB (hard limit)"]
+    B --> VRAM
+    P2 -->|Текстовые монолиты (static)| A
+
+    %% Стили для визуализации
+    style A fill:#ff9,stroke:#333,color:black
+    style B fill:#9f6,stroke:#333,color:black
+    style C fill:#6f9,stroke:#333,color:black
+    style P2 fill:#f96,stroke:#333,color:black
+    style VRAM fill:#ff0,stroke:#333,color:black
+```
+
+## 2. Детальное описание модулей с engineering-level анализами
+
+### 2.1 train_engine_v02.py
+**Критические аспекты:**
+- **Загрузка данных:**
+  - Датасет: `Z:\\flowch\\dataset\\mng_oks_bl\\metadata.jsonl`.
+  - Кэширование latent-эмбеддингов (`cache\\latent_embeds`) в формате `float8_e4m3fn` (статическая нагрузка VRAM: ~17.8 GB).
+- **Цикл обучения:**
+  - Контроль VRAM (<21.0 GB) с динамическим откатом на FP32 при превышении.
+  - Логирование и отладка тахометра с точностью до миллисекунд.
+  - Режимы:
+    - Боевой (`USE_EMULATORS = False`): реальная загрузка весов VAE и трансформера.
+    - Эмуляция (`USE_EMULATORS = True`): холостой режим для отладки (черный ящик).
+
+**Ключевые кодовые фрагменты:**
+```python
+# Пример контроля VRAM и лосса с engineering-level деталями
+current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
+elapsed_time = time.time() - last_log_time
+speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+last_log_time = time.time()
+
+# Логирование с точностью до миллисекунд
+console_msg = (
+    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+)
+print(console_msg)
+```
+
+**Potential Pitfalls:**
+- **Фрагментация VRAM:** Может возникнуть на RTX 3090 при превышении лимита (21.0 ГБ). Решается методом `_cast_to_int8` в `lora_core_v02.py`.
+- **OOM (Out of Memory):** При превышении VRAM срабатывает откат на FP32, что может привести к потере точности.
+
+### 2.2 lora_core_v02.py
+**Критические аспекты:**
+- **8-битная оптимизация AdamW (AdamW8bit):**
+  - Модуль `ao_optim_monolith_v02.py` перехватывает 38 обучаемых LoRa-тензоров Flux-трансформера.
+  - Сжимает моменты градиентов из `float32` в `int8` (динамический кастинг по шкале макс. амплитуды).
+  - Метод `step()`:
+    ```python
+    # Метод step() для расчета шага с engineering-level деталями
+    def step(self):
+        self._cast_to_float32()  # Разжимаем на 1 мс (float32)
+        # Расчет шага
+        self._cast_to_int8()     # Герметизация обратно (int8)
+    ```
+- **Контроль фрагментации VRAM:**
+  - Экономия до 2-3 ГБ VRAM.
+  - Блокирует фрагментацию памяти на RTX 3090 (метод `_cast_to_int8`).
+
+**Ключевые ограничения и инструкции по безопасности:**
+1. **Самоимпорт:** Категорически запрещен в шапке (`from ao_optim_monolith import ...`).
+2. **Хардкодные пути:** Запрещены `sys.path` внутри модуля.
+3. **Правки математики:** Вносятся поблочно без заглушек (`TODO`, `pass`, троеточий).
+4. **Вангование:** Запрещено, верить только приборам Кэпа.
+
+**Potential Pitfalls:**
+- **Underflow/Overload:** При расчете шага в float32 могут возникнуть проблемы с точностью. Решается клиппингом значений (`clamp(max=10.0)`).
+- **Фрагментация памяти:** Может возникнуть на RTX 3090 при превышении лимита (21.0 ГБ). Решается методом `_cast_to_int8`.
+
+### 2.3 model_runner_v02.py
+**Критические аспекты:**
+- **Запуск и управление моделью Chroma Unlocked v50:**
+  - Базовое ядро: `chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors`.
+  - Геометрия RoPE:
+    - 1280 токенов сетки (1024 патча кадра + 256 токенов текста).
+    - Без батч-размерности (ось 0 стёрта).
+- **Взаимодействие с VAE и текстовым энкодером:**
+  - Текстовый энкодер: `t5xxl_bf16.safetensors` (кэширование эмбеддингов).
+  - VAE-модуль: `flux-vae-bf16.safetensors`.
+
+**Ключевые ограничения:**
+- Запрещено ручное кастинг `hidden_states` или токенов в `float8_e4m3fn`.
+- Весь проход модели обернут в `torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)`.
+
+**Potential Pitfalls:**
+- **OOM (Out of Memory):** При превышении VRAM (21.0 ГБ) срабатывает откат на FP32, что может привести к потере точности.
+- **Фрагментация памяти:** Может возникнуть на RTX 3090 при превышении лимита (21.0 ГБ). Решается методом `_cast_to_int8`.
+
+### 2.4 generate_v02.py
+**Критические аспекты:**
+- **Decode latents (VAE):**
+  - Кодирование/декодирование latent-пространства с использованием `flux-vae-bf16.safetensors`.
+- **Postprocessing PNG:**
+  - Фиксация изображений на SSD:
+    ```python
+    output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    final_image.save(output_path)
+    print(f"[ТРИУМФ V07] Чистокровное изображение запечено на SSD: {output_path}")
+    ```
+- **Статистика скорости:**
+  - Измерение `it/s` с точностью до миллисекунд.
+
+**Potential Pitfalls:**
+- **Проблемы с postprocessing PNG:** Может возникнуть при превышении лимита VRAM (21.0 ГБ). Решается методом `_cast_to_int8`.
+- **OOM (Out of Memory):** При превышении VRAM (21.0 ГБ) срабатывает откат на FP32, что может привести к потере точности.
+
+## 3. Ключевые ограничения и режимы работы (engineering-level)
+
+### 3.1 Физические ограничения шхуны
+- **VRAM_LIMIT_GB = 21.0** (жесткий лимит).
+  - Превышение приводит к OOM и блэкауту.
+  - Решается методом `_cast_to_int8` в `lora_core_v02.py`.
+- **VRAM фрагментация:**
+  - Может возникнуть на RTX 3090 при превышении лимита (21.0 ГБ).
+  - Решается методом `_cast_to_int8`.
+
+### 3.2 Режимы работы
+| Режим               | Описание                                                                                     | Параметр                          |
+|----------------------|---------------------------------------------------------------------------------------------|-----------------------------------|
+| Боевой               | Реальная загрузка весов VAE и трансформера.                                                | `USE_EMULATORS = False`           |
+| Эмуляция (холостой) | Отладка без реальной нагрузки (черный ящик).                                                  | `USE_EMULATORS = True`            |
+
+### 3.3 Запреты и правила кодирования (engineering-level)
+1. **Самоимпорт:**
+   - Категорически запрещен в шапке (`from ao_optim_monolith import ...`).
+2. **Хардкодные пути:**
+   - Запрещены `sys.path` внутри модуля.
+3. **Правки математики:**
+   - Вносятся поблочно без заглушек (`TODO`, `pass`, троеточий).
+4. **Вангование:**
+   - Запрещено, верить только приборам Кэпа.
+5. **Форматирование кода:**
+   - Строго PEP 8 (отступы, длины строк и т.д.).
+
+## 4. Примеры кода с engineering-level анализами
+
+### 4.1 Контроль лосса и VRAM (train_engine_v02.py)
+```python
+# Расчет среднеквадратичной ошибки мантиссы с engineering-level деталями
+weight_mask = (1.0 / (1.0 - t_attr.float().view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(device=device)
+loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+
+# Обратное распространение во float32-контуре для защиты от Underflow
+(loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+```
+
+**Engineering-level анализ:**
+- **`weight_mask`:** Используется для сглаживания лосса и предотвращения переполнения.
+- **`F.mse_loss`:** Расчет среднеквадратичной ошибки с `reduction="none"` для последующего умножения на `weight_mask`.
+
+### 4.2 Динамический кастинг градиентов (lora_core_v02.py)
+```python
+# Метод step() для расчета шага с engineering-level деталями
+def step(self):
+    self._cast_to_float32()  # Разжимаем на 1 мс (float32)
+    # Расчет шага
+    self._cast_to_int8()     # Герметизация обратно (int8)
+```
+
+**Engineering-level анализ:**
+- **`_cast_to_float32()`:** Разжимает `int8`-тензоры в `float32` для расчета шага.
+- **`_cast_to_int8()`:** Герметизирует обратно в `int8`, удерживая пик строго внутри лимита 21.0 ГБ VRAM.
+
+## 5. Инструкции по работе и настройке (engineering-level)
+
+### 5.1 Боевой режим (по умолчанию)
+- **Активируется:** `USE_EMULATORS = False`.
+- **Реальная загрузка весов VAE и трансформера.**
+- **Ключевые детали:**
+  - Реальная нагрузка весов VAE (`flux-vae-bf16.safetensors`) и трансформера (`chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors`).
+  - Контроль VRAM (<21.0 ГБ).
+
+### 5.2 Эмуляция (холостой режим)
+- **Активируется:** `USE_EMULATORS = True`.
+- **Холостой режим для отладки без реальной нагрузки.**
+- **Ключевые детали:**
+  - Используется для отладки без реальной нагрузки (черный ящик).
+  - Позволяет тестировать код без риска превышения VRAM.
+
+### 5.3 Чекпоинтинг и логгирование
+```python
+# Чекпоинтинг каждые N шагов с engineering-level деталями
+if global_step % TrainConfig.SAVE_STEPS == 0:
+    print(f"[Т] Чекпоинт на шаге {global_step}...")
+
+# Телеметрия (средний MSE) с engineering-level деталями
+if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+    avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+    print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
+    telemetry.flush_aggregated_log(global_step, epoch)
+```
+
+**Engineering-level анализ:**
+- **Чекпоинтинг:** Сохраняет состояние модели каждые `TrainConfig.SAVE_STEPS` шагов.
+- **Телеметрия:** Вычисляет средний MSE и выводит его с точностью до 6 знаков после запятой.
+
+## 6. Potential Pitfalls и их решения (engineering-level)
+
+### 6.1 VRAM фрагментация на RTX 3090
+- **Проблема:**
+  - Фрагментация памяти может возникнуть при превышении лимита (21.0 ГБ).
+  - Это приводит к увеличению времени выполнения и potential OOM.
+- **Решение:**
+  - Использовать метод `_cast_to_int8` в `lora_core_v02.py`.
+  - Контролировать VRAM с помощью `torch.cuda.memory_allocated(device)`.
+
+### 6.2 Underflow/Overload при расчете шага
+- **Проблема:**
+  - При расчете шага в float32 могут возникнуть проблемы с точностью.
+  - Это приводит к потере точности и potential NaN/Inf значений.
+- **Решение:**
+  - Использовать клиппинг значений (`clamp(max=10.0)`).
+  - Контролировать лосс с помощью `F.mse_loss`.
+
+### 6.3 OOM (Out of Memory)
+- **Проблема:**
+  - При превышении VRAM (21.0 ГБ) срабатывает откат на FP32.
+  - Это приводит к потере точности и potential блэкауту.
+- **Решение:**
+  - Контролировать VRAM с помощью `torch.cuda.memory_allocated(device)`.
+  - Использовать метод `_cast_to_int8` в `lora_core_v02.py`.
+
+## 7. Записи и телеметрия (engineering-level)
+
+### 7.1 Логирование VRAM и лосса
+```python
+# Логирование VRAM и лосса с engineering-level деталями
+console_msg = (
+    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+)
+print(console_msg)
+```
+
+**Engineering-level анализ:**
+- **`allocated_vram` и `reserved_vram`:** Контроль VRAM с точностью до 2 знаков после запятой.
+- **`speed`:** Скорость выполнения в `it/s` (измеряется с точностью до миллисекунд).
+
+### 7.2 Телеметрия MSE
+```python
+# Телеметрия MSE с engineering-level деталями
+if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+    avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+    print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
+    telemetry.flush_aggregated_log(global_step, epoch)
+```
+
+**Engineering-level анализ:**
+- **`avg_loss`:** Средний MSE с точностью до 6 знаков после запятой.
+- **`telemetry.flush_aggregated_log()`:** Сохраняет телеметрию в файл для последующего анализа.
+
+## 8. Заключение (engineering-level)
+Этот проект представляет собой сложную систему для обучения LoRa-тензоров с жесткими ограничениями по VRAM и строгими правилами кодирования. Основной акцент делается на:
+1. **Оптимизации памяти:**
+   - 8-битная оптимизация AdamW (`ao_optim_monolith_v02.py`).
+   - Динамический кастинг градиентов int8/float32.
+2. **Контроле VRAM:**
+   - Жесткий лимит VRAM (21.0 ГБ).
+   - Блокировка фрагментации памяти на RTX 3090.
+3. **Безопасности и надежности:**
+   - Запрещен самоимпорт, хардкодные пути, заглушки (`TODO`, `pass`, троеточия).
+   - Вангование запрещено, верить только приборам Кэпа.
+4. **Телеметрии и логированию:**
+   - Контроль VRAM, лосса, скорости выполнения.
+   - Чекпоинтинг и телеметрия MSE с высокой точностью.
+
+Этот проект является идеальным примером инженерной утилитарности и строгого соблюдения регламентов.
