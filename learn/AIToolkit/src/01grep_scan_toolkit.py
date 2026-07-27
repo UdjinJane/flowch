@@ -6,7 +6,8 @@ def run_grep_scan():
     map_file = r"Z:\flowch\learn\AIToolkit\toolkit_structure_map.txt"
     
     # Ключевые маркеры Лодстоновских диверсий
-    keywords = ["vae", "decode", "channels", "post_quant_conv", "fakevae", "block_out_channels"]
+    #keywords = ["vae", "decode", "channels", "post_quant_conv", "fakevae", "block_out_channels"]
+    keywords =['optimizer', 'zero_grad', 'backward', 'step']
     
     # Жесткий контур главных подозреваемых
     core_targets = [
