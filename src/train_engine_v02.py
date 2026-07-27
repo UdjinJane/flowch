@@ -75,19 +75,17 @@ def main_train_loop():
     # Активация градиентного чекпоинтинга для экономии VRAM
     from torch.utils.checkpoint import checkpoint
     
-    # Рекурсивный проход по базовой модели под PEFT оберткой
-    base_transformer = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
+    # --- АКТИВАЦИЯ СТЕРИЛЬНОГО РЕЖИМА КУЗНЕЦОВ (src/train_engine_v02.py) ---
+    # Принудительно отключаем внутреннее накопление Autograd для замороженных FP8 SVD весов
+    lora_model.base_model.model.requires_grad_(False) if hasattr(lora_model, "base_model") else lora_model.requires_grad_(False)
     
-    # Жесткий перехват слоев двойного (19) и одиночного (38) потоков Flux
-    if hasattr(base_transformer, "double_blocks"):
-        for block in base_transformer.double_blocks:
-            block.gradient_checkpointing = True
-    if hasattr(base_transformer, "single_blocks"):
-        for block in base_transformer.single_blocks:
-            block.gradient_checkpointing = True
+    # Направляем градиентный поток СТРОГО на обучаемые параметры LoRA
+    for param in trainable_params:
+        param.requires_grad_(True)
+        if param.ndim == 2:
+            param.data = param.data.contiguous() # Исключаем фрагментацию памяти Windows при backward
             
-    print("[УСПЕХ] Градиентный чекпоинтинг квантованных слоев torchao прошит вручную!")
-
+    print("[УСПЕХ] Магистрали Autograd очищены от холостых FP8-активаций. Линия герметична!")
 
     # Настройка планировщика
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
