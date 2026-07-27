@@ -129,22 +129,32 @@ def main_train_loop():
 
                 latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
-                # Логит-нормальный замер времени и масштабирование под [0-1000]
+                # Логит-нормальный замер времени Rectified Flow (Каноничная шкала 0.0 - 1.0 под Chroma1)
                 t_attr = torch.sigmoid(torch.randn(1, device=device) * 1.0).to(dtype=torch.bfloat16)
                 noise = torch.randn_like(latents)
-                t_model_scale = (t_attr * 1000.0).to(device=device, dtype=torch.bfloat16)
+                
+                # Фикс кузнецов: Chroma1 требует нормированный timestep (без умножения на 1000)
+                t_model_scale = t_attr.clone().to(device=device, dtype=torch.bfloat16)
 
                 # Формирование зашумленных данных и сетки патчей
                 noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
                 packed_noisy_latents = pack_latents_to_patches(noisy_latents)
 
-                # Прецизионное нарезание позиционных img_ids под длину токенов кадра Хромы
-                num_latent_tokens = packed_noisy_latents.shape[1]
-                img_ids = torch.zeros(1, num_latent_tokens, 3, device=device, dtype=torch.bfloat16)
+                # Честный расчет img_ids по геометрии кадра (Возврат пространственной топологии)
+                h_patches = TrainConfig.HEIGHT // 16  # 512 // 16 = 32
+                w_patches = TrainConfig.WIDTH // 16   # 512 // 16 = 32
                 
+                grid_ids = torch.zeros(h_patches, w_patches, 3, device=device, dtype=torch.bfloat16)
+                grid_ids[..., 1] = torch.arange(h_patches, device=device)[:, None]
+                grid_ids[..., 2] = torch.arange(w_patches, device=device)[None, :]
+                
+                # Разворачиваем в последовательность токенов [1, 1024, 3] под батч B=1
+                img_ids = grid_ids.view(1, -1, 3)
+
                 # Выравнивание текстовых позиционных индексов
                 txt_len = prompt_embeds.shape[1]
                 txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
+
                 
                 # Аварийная очистка кэша перед входом в тяжелое ядро для защиты от оверсвапа
                 torch.cuda.empty_cache()
