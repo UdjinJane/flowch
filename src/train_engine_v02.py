@@ -121,52 +121,65 @@ def main_train_loop():
             # Локальная инжекция шлюза исполнения для подавления NameError
             from model_runner_v02 import run_lora_model_step
             
-            # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 1 ИЗ 2 (СУММАРИЗАЦИЯ) ===
-            # Нарезка мега-батча на отдельные кадры (логика из)
+            # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02: ФРАГМЕНТ 1 ИЗ 2 (SUMM) ===
             for frame_idx in range(total_frames):
                 global_step += 1
-
-                # --- ПРЕДПУСКОВАЯ ОЧИСТКА МАГИСТРАЛИ AUTOGRAD (Фикс утечек) ---
-                # Принудительная очистка перед каждым forward для контроля памяти
+                # Очистка градиентов и кэша
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
-
-                # Подготовка данных (latents, prompt_embeds) -> device
-                latents = all_latents[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
-                prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device=device, dtype=torch.bfloat16)
-
-                # ... (Подготовка noise, t_model_scale, packing, img_ids, txt_ids) ...
-                # (Полная логика подготовки графа доступна в)
                 
-                # --- ЗАЖИМ AUTOGRAD/AMP И ЧЕКПОИНТИНГ ШАГА ---
+                # Подготовка данных (bf16)
+                latents = all_latents[frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
+                prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
+                
+                # Rectified Flow & Latent Packing
+                t_attr = torch.sigmoid(torch.randn(1, device=device) * 1.0).to(torch.bfloat16)
+                noise = torch.randn_like(latents)
+                noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
+                packed_noisy_latents = pack_latents_to_patches(noisy_latents)
+                
+                # Генерация ID (img/txt)
+                h_p, w_p = latents.shape[2] // 2, latents.shape[3] // 2
+                grid_ids = torch.zeros(h_p, w_p, 3, device=device, dtype=torch.bfloat16)
+                grid_ids[..., 1] = torch.arange(h_p, device=device)[:, None]
+                grid_ids[..., 2] = torch.arange(w_p, device=device)[None, :]
+                img_ids = grid_ids.view(1, -1, 3)
+                
+                txt_ids_aligned = torch.zeros(1, prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
+                
+                # Синхронизация и подготовка Kwargs
                 torch.cuda.synchronize()
-                t_fwd_start = time.time()
-
-                # 8-аргументный forward-проход через checkpoint с use_reentrant=False
+                kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
+                pooled_projections_fake = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
+                # === ФИНАЛ: ФРАГМЕНТ 1 ===
+                
+                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ИЗ 2 ===
+                # Автоматическая смешанная точность (bfloat16) для оптимизации VRAM
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    # Forward pass с checkpointing для экономии памяти
                     pred_tensor = checkpoint(
-                        run_lora_model_step, lora_model, ... , use_reentrant=False
+                        run_lora_model_step,
+                        lora_model, kwargs_mask, packed_noisy_latents, t_model_scale,
+                        prompt_embeds, pooled_projections_fake, txt_ids_aligned, img_ids,
+                        use_reentrant=False
                     )
 
                 torch.cuda.synchronize()
-                print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
-                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: ФРАГМЕНТ 1 ИЗ 2 (СУММАРИЗАЦИЯ) ===
-                
-                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ИЗ 2 ===
-                # --- ИЗОЛЯЦИЯ BACKWARD И РАСЧЕТА LOSS В BF16 ПОД КОНТРОЛЕМ AMP (src/train_engine_v02.py) ---
+                target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+
+                # Вычисление взвешенного MSE loss и backward pass
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
-                    # [Сжатие тензора для расчета потерь]
                     pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
                     weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
                     loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
                     loss_active.backward()
 
-                # --- ПРИНУДИТЕЛЬНЫЙ МАРШЕВЫЙ ТАКТ И ОЧИСТКА ---
+                # Обновление параметров и очистка
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
+                    
 
                 # --- ТЕЛЕМЕТРИЯ И ЧЕКПОИНТИНГ (ФИНАЛ) ---
                 # [Логирование метрик и сохранение LoRA модели]
