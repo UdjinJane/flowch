@@ -184,17 +184,25 @@ def main_train_loop():
                 # Завершение замера и расчет целевого потока
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
-                target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
 
+                # --- ИЗОЛЯЦИЯ BACKWARD И РАСЧЕТА LOSS В BF16 ПОД КОНТРОЛЕМ AMP (src/train_engine_v02.py) ---
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    # Расчет целевого потока и приведение типов мантиссы
+                    target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
 
-                # Решейпинг вывода (256 -> 64 канала) и применение весов
-                pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
-                weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
+                    # Решейпинг вывода (256 -> 64 канала) и применение весов
+                    pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
+                    weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
 
-                # Прецизионный расчет лосса и передача метрик в самописец
-                loss_active = (F.mse_loss(pred_tensor_64.float(), target_flow.float(), reduction="none") * weight_mask).mean()
-                loss = loss_active.detach().clone().to(torch.bfloat16)
-                
+                    # Прецизионный расчет лосса строго в рамках bfloat16 для защиты от раздувания Autograd
+                    loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+
+                    # Выполнение обратного прохода внутри autocast-шлюза
+                    (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+
+                # Копирование метрики для безопасного вывода на внешние датчики телеметрии
+                loss = loss_active.detach().clone()
+
                 # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
                 telemetry.accumulate_step(
                     t_attr=t_attr.detach().cpu(),
