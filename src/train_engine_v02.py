@@ -157,28 +157,35 @@ def main_train_loop():
                 txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
 
                 
-                # --- МОНТАЖ ЖЕСТКОГО ЗАЖИМА AUTOGRAD/AMP (src/train_engine_v02.py) ---
+                # --- МОНТАЖ ЖЕСТКОГО ЗАЖИМА AUTOGRAD/AMP И ЧЕКПОИНТИНГА ШАГА (src/train_engine_v02.py) ---
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
 
-                # АКТИВАЦИЯ AUTOCAST BFLOAT16 ДЛЯ КВАНТОВАННОГО ЯДРА TORCHAO
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    pred_tensor = run_lora_model_step(
+                # Подготовка словаря масок как позиционного аргумента для совместимости с checkpoint
+                kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
+                default_vec = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
+
+                # Каноничный вызов autocast с принудительной оберткой forward-прохода в checkpoint
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    pred_tensor = checkpoint(
+                        run_lora_model_step,
                         lora_model,
-                        {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)},
+                        kwargs_mask,
                         packed_noisy_latents,
                         t_model_scale,
                         prompt_embeds,
-                        torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
+                        default_vec,
                         txt_ids_aligned,
-                        img_ids
+                        img_ids,
+                        use_reentrant=False  # Безопасный современный режим отслеживания градиентов
                     )
 
                 # Завершение замера и расчет целевого потока
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
                 target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+
 
                 # Решейпинг вывода (256 -> 64 канала) и применение весов
                 pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
