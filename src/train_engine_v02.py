@@ -153,7 +153,6 @@ def main_train_loop():
                 # Выравнивание текстовых позиционных индексов
                 txt_len = prompt_embeds.shape[1]
                 txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
-
                 
                 # --- МОНТАЖ ЖЕСТКОГО ЗАЖИМА AUTOGRAD/AMP И ЧЕКПОИНТИНГА ШАГА (src/train_engine_v02.py) ---
                 torch.cuda.empty_cache()
@@ -163,8 +162,8 @@ def main_train_loop():
                 # Подготовка словаря масок и каноничного тензора guidance кузнецов Chroma1
                 kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
                 
-                # Ровно 1 элемент, расширенный под размерность батча B=1 согласно chroma_model.py
-                guidance_tensor = torch.full([1], 0, device=device, dtype=torch.bfloat16).expand(1)
+                # Нативный скаляр guidance, расширенный под батч B=1 строго по chroma_model.py кузнецов
+                guidance_tensor = torch.full((1,), 0, device=device, dtype=torch.bfloat16)
 
                 # Вызов autocast с принудительной оберткой forward-прохода в checkpoint
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -174,17 +173,16 @@ def main_train_loop():
                         kwargs_mask,
                         packed_noisy_latents,
                         t_model_scale,
-                        prompt_embeds,
-                        guidance_tensor,
-                        txt_ids_aligned,
-                        img_ids,
+                        prompt_embeds,       # 6-й позиционный аргумент: txt-эмбеддинги
+                        guidance_tensor,     # 7-й позиционный аргумент: timesteps/guidance шлюз кузнецов
+                        txt_ids_aligned,     # 8-й позиционный аргумент: txt_ids
+                        img_ids,             # 9-й позиционный аргумент: img_ids
                         use_reentrant=False
                     )
 
                 # Завершение замера
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
-
 
                 # --- ИЗОЛЯЦИЯ BACKWARD И РАСЧЕТА LOSS В BF16 ПОД КОНТРОЛЕМ AMP (src/train_engine_v02.py) ---
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
