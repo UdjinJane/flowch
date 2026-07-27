@@ -156,8 +156,8 @@ def main_train_loop():
                 pooled_projections_fake = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
 
 # === ФИНАЛ: ФРАГМЕНТ 1 (ЖДУ СИГНАЛ КЭПА) ===
-# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А ===
-                # Вызов смешанной точности и принудительный чекпоинтинг forward-шага
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-1 ===
+                # Вызов смешанной точности bfloat16 СТРОГО для forward-шага трансформера
                 with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                     pred_tensor = checkpoint(
                         run_lora_model_step,
@@ -176,17 +176,31 @@ def main_train_loop():
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
 
-                # Изолированный расчет ошибки мантиссы и обратная волна градиентов LoRA
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
-                    pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
-                    weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
-                    loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
-                    (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+                # ВЫНОС МАТЕМАТИКИ ИЗ AUTOCAST: Считаем лосс и веса сатурации СТРОГО в стабильном float32
+                target_flow = pack_latents_to_patches(latents - noise).float().to(device=device)
+                
+                # Приведение предсказания к float32 для безопасного решейпинга без субнормальных коллизий
+                pred_tensor_f32 = pred_tensor.float()
+                pred_tensor_64 = pred_tensor_f32.view(-1, pred_tensor_f32.shape[1], 64, 4).mean(dim=-1) if pred_tensor_f32.shape[-1] == 256 else pred_tensor_f32
+                
+                # Стабилизация маски времени: float32 защищает от бесконечных итераций и дедлоков CUDA
+                weight_mask = (1.0 / (1.0 - t_attr.float().view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(device=device)
+                
+                # Расчет среднеквадратичной ошибки мантиссы
+                loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-1 ===
 
-                # Безопасное клонирование метрики лосса для передачи датчикам телеметрии
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
+                # Выполнение обратного распространения строго во float32-контуре для защиты от Underflow
+                (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+
+                # Безопасный отрыв метрики от графа вычислений перед очисткой буферов
                 loss = loss_active.detach().clone()
-# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А ===
+
+                # Зачистка локальных FP32/BF16 тензоров для немедленного высвобождения VRAM
+                del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
+
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
                 # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
                 telemetry.accumulate_step(
