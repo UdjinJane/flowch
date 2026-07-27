@@ -189,28 +189,32 @@ def main_train_loop():
                 # Расчет среднеквадратичной ошибки мантиссы
                 loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-1 ===
-
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
                 # Выполнение обратного распространения строго во float32-контуре для защиты от Underflow
                 (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
 
-                # Безопасный отрыв метрики от графа вычислений перед очисткой буферов
-                loss = loss_active.detach().clone()
+                # СЛУЖЕБНЫЙ ПЕРЕХВАТ КЭПА: Клонируем и отрываем метрики от Autograd-графа ДО зачистки
+                loss_val = loss_active.detach().clone()
+                t_attr_cpu = t_attr.detach().cpu()
+                pred_tensor_64_cpu = pred_tensor_64.detach().cpu()
+                target_flow_cpu = target_flow.detach().cpu()
 
-                # Зачистка локальных FP32/BF16 тензоров для немедленного высвобождения VRAM
+                # Безопасный отрыв метрики для внешних датчиков
+                loss = loss_val
+
+                # Жесткое и безопасное выжигание тяжелых тензоров из VRAM
                 del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
-
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
-                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
+                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге из безопасных CPU-клонов
                 telemetry.accumulate_step(
-                    t_attr=t_attr.detach().cpu(),
-                    pred_tensor=pred_tensor_64.detach().cpu(),
-                    target_tensor=target_flow.detach().cpu(),
+                    t_attr=t_attr_cpu,
+                    pred_tensor=pred_tensor_64_cpu,
+                    target_tensor=target_flow_cpu,
                     current_loss=loss.item()
                 )
 
-                # Такт оптимизации и жесткий клиппинг аномальных градиентов
+                # Такт оптимизации и жесткий клиппинг аномальных градиентов параметров LoRA
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
 
                 # Проверка градиентов на конечность (NaN/Inf предохранитель)
@@ -224,7 +228,7 @@ def main_train_loop():
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
 
-                # Расширенный рапорт по приборам на каждом шаге в консоль
+                # Расширенный рапорт по приборам на каждом шаге в консоль мостика
                 current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
                 allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
                 reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
@@ -240,37 +244,32 @@ def main_train_loop():
                 print(console_msg)
 # === ФИНАЛ: ФРАГМЕНТ 2 ===
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 3 ===
-                # Сброс логов на накопитель космошхуны и вывод на экран до очистки буферов
+                # Сброс логов и чекпоинтинг
                 if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
-                    avg_loss_snapshot = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
-                    print(f"\n 📡 [ТЕЛЕМЕТРИЯ СРЕДНЕГО] Шаг: {global_step} | Скользящий MSE Loss за 10 шагов: {avg_loss_snapshot:.6f}")
+                    avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+                    print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
                     telemetry.flush_aggregated_log(global_step, epoch)
 
-                # --- РУБЕЖ ЧЕКПОИНТИНГА И ИЗОЛИРОВАННОЙ ВАЛИДАЦИИ ---
                 if global_step % TrainConfig.SAVE_STEPS == 0:
-                    print(f"[Т] Рубеж фиксации. Запекаем чекпоинт на шаге {global_step}...")
-                    checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"flux_lora_step_{global_step}.safetensors")
-                    lora_state_dict = {k: v for k, v in lora_model.state_dict().items() if "lora_" in k}
-                    torch.save(lora_state_dict, checkpoint_path)
-
-                    # Намертво запечатываем инференс от утечек Autograd графа в Shared VRAM
+                    print(f"[Т] Чекпоинт на шаге {global_step}...")
+                    torch.save({k: v for k, v in lora_model.state_dict().items() if "lora_" in k}, 
+                               os.path.join(TrainConfig.OUTPUT_DIR, f"lora_step_{global_step}.safetensors"))
+                    
+                    # Инференс-валидация
                     lora_model.eval()
-                    with torch.no_grad():
-                        with torch.inference_mode():
-                            from generate_v02 import run_inference_v02
-                            run_inference_v02(
-                                loaded_transformer=lora_model,
-                                current_step=global_step
-                            )
+                    with torch.no_grad(), torch.inference_mode():
+                        from generate_v02 import run_inference_v02
+                        run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
                     torch.cuda.empty_cache()
                     lora_model.train()
 
-        # Коррекция планировщика на выходе из эпохи
         scheduler.step()
-        
-    print("[УСПЕХ] Реактор завершил плавку всех эпох. Контур чист!")
+        print(f"[УСПЕХ] Эпоха {epoch} завершена.")
+
+    print("[УСПЕХ] Все эпохи завершены.")
 
 if __name__ == "__main__":
     main_train_loop()
 # === БЛОК ДАННЫХ V02 ФИНАЛ: КОНЕЦ МОЗАИКИ И КОНЕЦ ФАЙЛА ===
+
 
