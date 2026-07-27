@@ -1,0 +1,66 @@
+# =============================================
+# АЛГОРИТМ ПРЕОБРАЗОВАНИЯ (V02) 
+# УТОЧНЕНИЯ: 
+# 1. Исключение дублирующихся хотфиксов.
+# 2. Толька строгий поиск версии в скобках.
+# =============================================
+
+def parse_releases(file_path):
+    """
+    Функция для парсинга файла с исходными данными и разделения на:
+    - Хотфиксы (-hf-)
+    - Релизы (product-release)
+
+    Уточнения:
+    * Исключение дубликатов хотфиксов.
+    * Толька строгий поиск версии в скобках.
+    """
+
+    # 1. Прочитать файл и разделить на строки
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+    except Exception as e:
+        print(f"Ошибка при чтении файла: {e}")
+        return None, None
+
+    # 2. Очистка данных от лишних символов и пробелов
+    cleaned_lines = []
+    for line in lines:
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith(('Операции', 'Изменить порядок версий')):
+            continue  # Пропустить пустые строки и метаинформацию
+        cleaned_lines.append(stripped_line)
+
+    # 3. Разделение на хотфиксы и релиза
+    hotfixes = []
+    releases = []
+    seen_hotfixes = set()  # Для исключения дубликатов
+
+    for line in cleaned_lines:
+        parts = line.split()
+        if len(parts) < 2:
+            continue  # Пропустить строки без необходимой информации
+
+        release_name = parts[0]
+        version_type = None
+
+        # Поиск версии в скобках (строгий поиск)
+        for part in parts:
+            if '(' in part and ')' in part:
+                version_type = part.replace('(', '').replace(')', '')
+                break  # Берем первую найденную версию
+
+        if not version_type:
+            continue  # Пропустить, если тип версии не определен
+
+        # Определение типа версии
+        if '-hf-' in version_type.lower() or '-HF-' in version_type.lower():
+            if f"{release_name} ({version_type})" not in seen_hotfixes:
+                hotfixes.append(f"{release_name} ({version_type})")
+                seen_hotfixes.add(f"{release_name} ({version_type})")
+        elif 'product-release' in version_type.lower():
+            releases.append(f"{release_name} ({version_type})")
+
+    # 4. Возврат результатов
+    return hotfixes, releases
