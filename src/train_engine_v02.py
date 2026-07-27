@@ -165,10 +165,18 @@ def main_train_loop():
                 # Прецизионный расчет лосса и передача метрик в самописец
                 loss_active = (F.mse_loss(pred_tensor_64.float(), target_flow.float(), reduction="none") * weight_mask).mean()
                 loss = loss_active.detach().clone().to(torch.bfloat16)
-                telemetry.accumulate_step(t_attr, pred_tensor_64, target_flow, loss)
+                
+                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
+                telemetry.accumulate_step(
+                    t_attr=t_attr.detach().cpu(),
+                    pred_tensor=pred_tensor_64.detach().cpu(),
+                    target_tensor=target_flow.detach().cpu(),
+                    current_loss=loss.item()
+                )
 
                 # Выполнение обратного прохода с учетом шага накопления градиентов
                 (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+
 
                 # Такт оптимизации и жесткий клиппинг аномальных градиентов
                 if global_step % TrainConfig.GRADIENT_ACCUMULATION_STEPS == 0:
