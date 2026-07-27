@@ -157,23 +157,23 @@ def main_train_loop():
                 txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
 
                 
-                # Аварийная очистка кэша перед входом в тяжелое ядро для защиты от оверсвапа
+                # --- МОНТАЖ ЖЕСТКОГО ЗАЖИМА AUTOGRAD/AMP (src/train_engine_v02.py) ---
                 torch.cuda.empty_cache()
-                # Инициализация замера времени прямого прохода
                 torch.cuda.synchronize()
                 t_fwd_start = time.time()
 
-                # Выполнение шага модели (PEFT + Rectified Flow)
-                pred_tensor = run_lora_model_step(
-                    lora_model,
-                    {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)},
-                    packed_noisy_latents,
-                    t_model_scale,
-                    prompt_embeds,
-                    torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
-                    txt_ids_aligned,
-                    img_ids
-                )
+                # АКТИВАЦИЯ AUTOCAST BFLOAT16 ДЛЯ КВАНТОВАННОГО ЯДРА TORCHAO
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    pred_tensor = run_lora_model_step(
+                        lora_model,
+                        {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)},
+                        packed_noisy_latents,
+                        t_model_scale,
+                        prompt_embeds,
+                        torch.zeros(1, 768, device=device, dtype=torch.bfloat16),
+                        txt_ids_aligned,
+                        img_ids
+                    )
 
                 # Завершение замера и расчет целевого потока
                 torch.cuda.synchronize()
@@ -183,6 +183,7 @@ def main_train_loop():
                 # Решейпинг вывода (256 -> 64 канала) и применение весов
                 pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
                 weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.float32, device=device)
+
                 # Прецизионный расчет лосса и передача метрик в самописец
                 loss_active = (F.mse_loss(pred_tensor_64.float(), target_flow.float(), reduction="none") * weight_mask).mean()
                 loss = loss_active.detach().clone().to(torch.bfloat16)
