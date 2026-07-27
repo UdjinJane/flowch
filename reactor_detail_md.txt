@@ -1,0 +1,186 @@
+# 🌟 РЕАКТОР ДЛЯ ЗАПЕКАНИЯ LoRa: ДЕТАЛЬНОЕ ОПИСАНИЕ
+
+## 1. Архитектура системы и потоки данных
+
+```mermaid
+graph TD
+    %% Основные компоненты системы
+    A["train_engine_v02.py"] --> B["lora_core_v02.py"]
+    A --> C["model_runner_v02.py"]
+    A --> D["dataset_v02.py"]
+    A --> E["generate_v02.py"]
+
+    %% Структура и потоки данных
+    subgraph SRC_DIR ["/src/"]
+        A -->|Шаг обучения| B
+        A -->|Пайплайн| G1["chroma_pipeline.py"]
+        A -->|Рендеринг| E
+    end
+
+    subgraph CACHE ["Хранилище (Z:\\flowch\\)"]
+        P["\\cache\\latent_embeds"] -->|Загрузка| A
+        P2["\\text_cache (Monolithic)"] -->|T5+CLIP| E
+        OUT["\\output\\images\"] <--|PNG| E
+    end
+
+    %% Ограничения и режимы
+    VRAM["VRAM: <21.0 GB"]
+    B --> VRAM
+    P2 -->|Текстовые монолиты| A
+
+    %% Стили для визуализации
+    style A fill:#ff9,stroke:#333,color:black
+    style B fill:#9f6,stroke:#333,color:black
+    style C fill:#6f9,stroke:#333,color:black
+    style P2 fill:#f96,stroke:#333,color:black
+    style VRAM fill:#ff0,stroke:#333,color:black
+```
+
+## 2. Детальное описание модулей
+
+### 2.1 train_engine_v02.py
+**Функциональность:**
+- **Загрузка данных:**
+  - Из датасета `Z:\\flowch\\dataset\\mng_oks_bl\\metadata.jsonl`.
+  - Кэширование latent-эмбеддингов (`cache\\latent_embeds`).
+- **Цикл обучения:**
+  - Контроль VRAM (<21.0 GB).
+  - Логирование и отладка тахометра.
+  - Режимы: боевой (`USE_EMULATORS = False`) или эмуляция (`USE_EMULATORS = True`).
+- **Ограничения:**
+  - Жесткий лимит VRAM (21.0 ГБ).
+  - Запрещен самоимпорт (`from ao_optim_monolith import ...`).
+
+**Ключевые кодовые фрагменты:**
+```python
+# Пример контроля VRAM и логгирования
+current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
+elapsed_time = time.time() - last_log_time
+speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+last_log_time = time.time()
+
+console_msg = (
+    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+)
+print(console_msg)
+```
+
+### 2.2 lora_core_v02.py
+**Функциональность:**
+- **8-битная оптимизация AdamW:**
+  - Модуль `ao_optim_monolith_v02.py` перехватывает 38 обучаемых LoRa-тензоров.
+  - Сжимает моменты градиентов из `float32` в `int8`.
+  - Динамический кастинг:
+    ```python
+    # Метод step() для расчета шага
+    def step(self):
+        self._cast_to_float32()  # Разжимаем на 1 мс
+        # Расчет шага
+        self._cast_to_int8()     # Герметизация обратно
+    ```
+- **Контроль фрагментации VRAM:**
+  - Экономия до 2-3 ГБ VRAM.
+  - Блокирует фрагментацию памяти на RTX 3090.
+
+**Ограничения:**
+- Все изменения вносятся поблочно без заглушек (`TODO`, `pass`, троеточий).
+- Запрещен хардкод `sys.path`.
+
+### 2.3 model_runner_v02.py
+**Функциональность:**
+- **Запуск и управление моделью Chroma Unlocked v50:**
+  - Базовое ядро: `chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors`.
+  - Геометрия RoPE:
+    - 1280 токенов сетки (1024 патча кадра + 256 токенов текста).
+    - Без батч-размерности (ось 0 стёрта).
+- **Взаимодействие с VAE и текстовым энкодером:**
+  - Tекстовый энкодер: `t5xxl_bf16.safetensors`.
+  - VAE-модуль: `flux-vae-bf16.safetensors`.
+
+**Ограничения:**
+- Запрещено ручное кастинг `hidden_states` или токенов в `float8_e4m3fn`.
+- Весь проход модели обернут в `torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)`.
+
+### 2.4 generate_v02.py
+**Функциональность:**
+- **Decode latents (VAE):**
+  - Кодирование/декодирование latent-пространства.
+- **Postprocessing PNG:**
+  - Фиксация изображений на SSD:
+    ```python
+    output_path = os.path.join(TrainConfig.OUTPUT_DIR, "images", f"mng_render_step_{current_step}.png")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    final_image.save(output_path)
+    print(f"[ТРИУМФ V07] Чистокровное изображение запечено на SSD: {output_path}")
+    ```
+- **Статистика скорости:**
+  - Измерение `it/s`.
+
+## 3. Ключевые ограничения и режимы работы
+
+### 3.1 Физические ограничения шхуны
+- **VRAM_LIMIT_GB = 21.0** (жесткий лимит).
+- Превышение приводит к OOM и блэкауту.
+
+### 3.2 Режимы работы
+| Режим               | Описание                                                                                     | Параметр                          |
+|----------------------|---------------------------------------------------------------------------------------------|-----------------------------------|
+| Боевой               | Реальная загрузка весов VAE и трансформера.                                                | `USE_EMULATORS = False`           |
+| Эмуляция (холостой) | Отладка без реальной нагрузки (черный ящик).                                                  | `USE_EMULATORS = True`            |
+
+### 3.3 Запреты и правила кодирования
+1. **Самоимпорт:**
+   - Категорически запрещен в шапке (`from ao_optim_monolith import ...`).
+2. **Хардкодные пути:**
+   - Запрещены `sys.path` внутри модуля.
+3. **Правки математики:**
+   - Вносятся поблочно без заглушек (`TODO`, `pass`, троеточий).
+4. **Вангование:**
+   - Запрещено, верить только приборам Кэпа.
+
+## 4. Примеры кода и фрагменты
+
+### 4.1 Контроль лосса и VRAM (train_engine_v02.py)
+```python
+# Расчет среднеквадратичной ошибки мантиссы
+loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+
+# Обратное распространение во float32-контуре
+(loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+```
+
+### 4.2 Динамический кастинг градиентов (lora_core_v02.py)
+```python
+# Метод step() для расчета шага
+def step(self):
+    self._cast_to_float32()  # Разжимаем на 1 мс
+    # Расчет шага
+    self._cast_to_int8()     # Герметизация обратно
+```
+
+## 5. Инструкции по работе и настройке
+
+### 5.1 Боевой режим (по умолчанию)
+- Активируется: `USE_EMULATORS = False`.
+- Реальная загрузка весов VAE и трансформера.
+
+### 5.2 Эмуляция (холостой режим)
+- Активируется: `USE_EMULATORS = True`.
+- Используется для отладки без реальной нагрузки.
+
+### 5.3 Чекпоинтинг и логгирование
+```python
+# Чекпоинтинг каждые N шагов
+if global_step % TrainConfig.SAVE_STEPS == 0:
+    print(f"[Т] Чекпоинт на шаге {global_step}...")
+
+# Телеметрия (средний MSE)
+if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+    avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+    print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
+    telemetry.flush_aggregated_log(global_step, epoch)
+```
