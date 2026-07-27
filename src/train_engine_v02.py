@@ -140,16 +140,17 @@ def main_train_loop():
                 noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
                 packed_noisy_latents = pack_latents_to_patches(noisy_latents)
 
-                # Честный расчет img_ids по геометрии кадра (Возврат пространственной топологии)
-                h_patches = TrainConfig.HEIGHT // 16  # 512 // 16 = 32
-                w_patches = TrainConfig.WIDTH // 16   # 512 // 16 = 32
+                # Честный расчет img_ids по геометрии кадра (Возврат пространственной топологии Хромы)
+                h_patches = TrainConfig.HEIGHT // 8  # 512 // 8 = 64
+                w_patches = TrainConfig.WIDTH // 8   # 512 // 8 = 64
                 
                 grid_ids = torch.zeros(h_patches, w_patches, 3, device=device, dtype=torch.bfloat16)
                 grid_ids[..., 1] = torch.arange(h_patches, device=device)[:, None]
                 grid_ids[..., 2] = torch.arange(w_patches, device=device)[None, :]
                 
-                # Разворачиваем в последовательность токенов [1, 1024, 3] под батч B=1
+                # Разворачиваем в последовательность токенов [1, 4096, 3] под батч B=1
                 img_ids = grid_ids.view(1, -1, 3)
+
 
                 # Выравнивание текстовых позиционных индексов
                 txt_len = prompt_embeds.shape[1]
