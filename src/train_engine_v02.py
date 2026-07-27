@@ -121,25 +121,27 @@ def main_train_loop():
             # Локальная инжекция шлюза исполнения для подавления NameError
             from model_runner_v02 import run_lora_model_step
             
-            # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02: ФРАГМЕНТ 1 ИЗ 2 (SUMM) ===
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02: ФРАГМЕНТ 1 (ВЫРАВНЕННЫЙ) ===
             for frame_idx in range(total_frames):
                 global_step += 1
-                # Очистка градиентов и кэша
+                
+                # Принудительный сброс Autograd на каждом кадре для защиты от Shared RAM
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
                 
-                # Подготовка данных (bf16)
+                # Распределение тензоров кадра по портам
                 latents = all_latents[frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
                 prompt_embeds = all_embeds[frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
                 
-                # Rectified Flow & Latent Packing
                 t_attr = torch.sigmoid(torch.randn(1, device=device) * 1.0).to(torch.bfloat16)
                 noise = torch.randn_like(latents)
+                t_model_scale = t_attr.clone().to(device=device, dtype=torch.bfloat16)
+                
                 noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
                 packed_noisy_latents = pack_latents_to_patches(noisy_latents)
                 
-                # Генерация ID (img/txt)
-                h_p, w_p = latents.shape[2] // 2, latents.shape[3] // 2
+                _, _, h_l, w_l = latents.shape
+                h_p, w_p = h_l // 2, w_l // 2
                 grid_ids = torch.zeros(h_p, w_p, 3, device=device, dtype=torch.bfloat16)
                 grid_ids[..., 1] = torch.arange(h_p, device=device)[:, None]
                 grid_ids[..., 2] = torch.arange(w_p, device=device)[None, :]
@@ -147,57 +149,83 @@ def main_train_loop():
                 
                 txt_ids_aligned = torch.zeros(1, prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
                 
-                # Синхронизация и подготовка Kwargs
                 torch.cuda.synchronize()
+                t_fwd_start = time.time()
+                
                 kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
                 pooled_projections_fake = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
-                # === ФИНАЛ: ФРАГМЕНТ 1 ===
-                
-                # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ИЗ 2 ===
-                # Автоматическая смешанная точность (bfloat16) для оптимизации VRAM
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # Forward pass с checkpointing для экономии памяти
-                    pred_tensor = checkpoint(
-                        run_lora_model_step,
-                        lora_model, kwargs_mask, packed_noisy_latents, t_model_scale,
-                        prompt_embeds, pooled_projections_fake, txt_ids_aligned, img_ids,
-                        use_reentrant=False
-                    )
 
-                torch.cuda.synchronize()
-                target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+# === ФИНАЛ: ФРАГМЕНТ 1 (ЖДУ СИГНАЛ КЭПА) ===
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
+                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
+                telemetry.accumulate_step(
+                    t_attr=t_attr.detach().cpu(),
+                    pred_tensor=pred_tensor_64.detach().cpu(),
+                    target_tensor=target_flow.detach().cpu(),
+                    current_loss=loss.item()
+                )
 
-                # Вычисление взвешенного MSE loss и backward pass
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
-                    weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
-                    loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
-                    loss_active.backward()
-
-                # Обновление параметров и очистка
+                # Такт оптимизации и жесткий клиппинг аномальных градиентов
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
+
+                # Проверка градиентов на конечность (NaN/Inf предохранитель)
+                for param in trainable_params:
+                    if param.grad is not None and not torch.isfinite(param.grad).all():
+                        print("[КРИТ] Обнаружен взрыв градиентов! Аварийная остановка.")
+                        sys.exit(1)
+
+                # Фиксация весов LoRA и немедленный сброс Autograd-накопления кадра
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
-                    
 
-                # --- ТЕЛЕМЕТРИЯ И ЧЕКПОИНТИНГ (ФИНАЛ) ---
-                # [Логирование метрик и сохранение LoRA модели]
+                # Расширенный рапорт по приборам на каждом шаге в консоль
+                current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+                allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+                reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
+                elapsed_time = time.time() - last_log_time
+                speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+                last_log_time = time.time()
+
+                console_msg = (
+                    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+                    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+                    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+                )
+                print(console_msg)
+# === ФИНАЛ: ФРАГМЕНТ 2 ===
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 3 ===
+                # Сброс логов на накопитель космошхуны и вывод на экран до очистки буферов
+                if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+                    avg_loss_snapshot = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+                    print(f"\n 📡 [ТЕЛЕМЕТРИЯ СРЕДНЕГО] Шаг: {global_step} | Скользящий MSE Loss за 10 шагов: {avg_loss_snapshot:.6f}")
+                    telemetry.flush_aggregated_log(global_step, epoch)
+
+                # --- РУБЕЖ ЧЕКПОИНТИНГА И ИЗОЛИРОВАННОЙ ВАЛИДАЦИИ ---
                 if global_step % TrainConfig.SAVE_STEPS == 0:
-                    print(f"[Т] Чекпоинт {global_step}...")
+                    print(f"[Т] Рубеж фиксации. Запекаем чекпоинт на шаге {global_step}...")
                     checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"flux_lora_step_{global_step}.safetensors")
-                    torch.save({k: v for k, v in lora_model.state_dict().items() if "lora_" in k}, checkpoint_path)
-                    
-                    # [Временное переключение на eval для генерации]
+                    lora_state_dict = {k: v for k, v in lora_model.state_dict().items() if "lora_" in k}
+                    torch.save(lora_state_dict, checkpoint_path)
+
+                    # Намертво запечатываем инференс от утечек Autograd графа в Shared VRAM
                     lora_model.eval()
-                    with torch.no_grad(), torch.inference_mode():
-                        from generate_v02 import run_inference_v02
-                        run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
+                    with torch.no_grad():
+                        with torch.inference_mode():
+                            from generate_v02 import run_inference_v02
+                            run_inference_v02(
+                                loaded_transformer=lora_model,
+                                current_step=global_step
+                            )
+                    torch.cuda.empty_cache()
                     lora_model.train()
 
+        # Коррекция планировщика на выходе из эпохи
         scheduler.step()
-    print("[УСПЕХ] Реактор завершил плавку. Контур чист!")
+        
+    print("[УСПЕХ] Реактор завершил плавку всех эпох. Контур чист!")
 
 if __name__ == "__main__":
     main_train_loop()
-# === БЛОК ДАННЫХ V02 ФИНАЛ: КОНЕЦ ФАЙЛА ===
+# === БЛОК ДАННЫХ V02 ФИНАЛ: КОНЕЦ МОЗАИКИ И КОНЕЦ ФАЙЛА ===
+
