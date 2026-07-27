@@ -83,7 +83,7 @@ def main_train_loop():
     for param in trainable_params:
         param.requires_grad_(True)
         if param.ndim == 2:
-            param.data = param.data.contiguous() # Исключаем фрагментацию памяти Windows при backward
+            param.data = param.data.contiguous()  # Исключаем фрагментацию памяти Windows при backward
             
     print("[УСПЕХ] Магистрали Autograd очищены от холостых FP8-активаций. Линия герметична!")
 
