@@ -211,10 +211,13 @@ def main_train_loop():
                 )
                 print(console_msg)
 
-                # Сброс логов на накопитель космошхуны
+                # Сброс логов на накопитель космошхуны и вывод на экран до очистки буферов
+                if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+                    avg_loss_snapshot = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+                    print(f"\n📡 [ТЕЛЕМЕТРИЯ СРЕДНЕГО] Шаг: {global_step} | Скользящий MSE Loss за 10 шагов: {avg_loss_snapshot:.6f}")
+
                 telemetry.flush_aggregated_log(global_step, epoch)
-                with open(log_file_path, "a", encoding="utf-8") as lf:
-                    lf.write(f"Шаг: {global_step} | Loss: {current_loss:.4f} | Speed: {speed:.2f} it/s\n")
+
 
                 # --- РУБЕЖ ЧЕКПОИНТИНГА И ИЗОЛИРОВАННОЙ ВАЛИДАЦИИ ---
                 if global_step % TrainConfig.SAVE_STEPS == 0:
