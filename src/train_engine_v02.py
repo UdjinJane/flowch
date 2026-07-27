@@ -73,11 +73,21 @@ def main_train_loop():
         optimizer = AdamW(trainable_params, lr=TrainConfig.LEARNING_RATE, weight_decay=0.01)
 
     # Активация градиентного чекпоинтинга для экономии VRAM
-    if hasattr(lora_model, "gradient_checkpointing_enable"):
-        lora_model.gradient_checkpointing_enable()
-    elif hasattr(lora_model, "base_model") and hasattr(lora_model.base_model.model, "gradient_checkpointing_enable"):
-        lora_model.base_model.model.gradient_checkpointing_enable()
-    print("[УСПЕХ] Градиентный чекпоинтинг маршевого двигателя успешно взведен!")
+    from torch.utils.checkpoint import checkpoint
+    
+    # Рекурсивный проход по базовой модели под PEFT оберткой
+    base_transformer = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
+    
+    # Жесткий перехват слоев двойного (19) и одиночного (38) потоков Flux
+    if hasattr(base_transformer, "double_blocks"):
+        for block in base_transformer.double_blocks:
+            block.gradient_checkpointing = True
+    if hasattr(base_transformer, "single_blocks"):
+        for block in base_transformer.single_blocks:
+            block.gradient_checkpointing = True
+            
+    print("[УСПЕХ] Градиентный чекпоинтинг квантованных слоев torchao прошит вручную!")
+
 
     # Настройка планировщика
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
