@@ -156,6 +156,37 @@ def main_train_loop():
                 pooled_projections_fake = torch.zeros(1, 768, device=device, dtype=torch.bfloat16)
 
 # === ФИНАЛ: ФРАГМЕНТ 1 (ЖДУ СИГНАЛ КЭПА) ===
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А ===
+                # Вызов смешанной точности и принудительный чекпоинтинг forward-шага
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    pred_tensor = checkpoint(
+                        run_lora_model_step,
+                        lora_model,
+                        kwargs_mask,
+                        packed_noisy_latents,
+                        t_model_scale,
+                        prompt_embeds,
+                        pooled_projections_fake,
+                        txt_ids_aligned,
+                        img_ids,
+                        use_reentrant=False
+                    )
+
+                # Синхронизация потоков CUDA и фиксация времени прохода кадра
+                torch.cuda.synchronize()
+                print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
+
+                # Изолированный расчет ошибки мантиссы и обратная волна градиентов LoRA
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    target_flow = pack_latents_to_patches(latents - noise).to(dtype=torch.bfloat16, device=device)
+                    pred_tensor_64 = pred_tensor.view(-1, pred_tensor.shape[1], 64, 4).mean(dim=-1) if pred_tensor.shape[-1] == 256 else pred_tensor
+                    weight_mask = (1.0 / (1.0 - t_attr.view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(dtype=torch.bfloat16, device=device)
+                    loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
+                    (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+
+                # Безопасное клонирование метрики лосса для передачи датчикам телеметрии
+                loss = loss_active.detach().clone()
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А ===
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
                 # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге
                 telemetry.accumulate_step(
