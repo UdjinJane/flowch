@@ -141,7 +141,6 @@ pred_tensor_64 = pred_tensor_f32.view(-1, pred_tensor_f32.shape[1], 64, 4).mean(
 weight_mask = (1.0 / (1.0 - t_attr.float().view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(device=device)
 loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
 
-# === НАЧАЛО БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
         # Backward и отрыв тензоров для очистки VRAM
         (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
         
