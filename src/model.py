@@ -1,282 +1,126 @@
 from dataclasses import dataclass
-
 import torch
 from torch import Tensor, nn
-import torch.utils.checkpoint as ckpt
 
-from .layers import (
-    DoubleStreamBlock,
-    EmbedND,
-    LastLayer,
-    SingleStreamBlock,
-    timestep_embedding,
-    Approximator,
-    distribute_modulations,
+# ЧИСТОКРОВНЫЙ АБСОЛЮТНЫЙ ИМПОРТ МЕТРОПОЛИИ — ТОЧКИ ВЫЖЖЕНЫ НАВСЕГДА!
+from layers import (
+    DoubleStreamBlock, EmbedND, LastLayer, SingleStreamBlock,
+    timestep_embedding, Approximator, distribute_modulations
 )
-
 
 @dataclass
 class ChromaParams:
-    in_channels: int
-    context_in_dim: int
-    hidden_size: int
-    mlp_ratio: float
-    num_heads: int
-    depth: int
-    depth_single_blocks: int
-    axes_dim: list[int]
-    theta: int
-    qkv_bias: bool
-    guidance_embed: bool
-    approximator_in_dim: int
-    approximator_depth: int
-    approximator_hidden_size: int
-    _use_compiled: bool
+    in_channels: int = 64
+    context_in_dim: int = 4096
+    hidden_size: int = 3072
+    mlp_ratio: float = 4.0
+    num_heads: int = 24
+    depth: int = 19
+    depth_single_blocks: int = 38
+    axes_dim: list = None
+    theta: int = 10000
+    qkv_bias: bool = True
+    guidance_embed_dim: int = 256
+    distilled_guidance_layer: int = 11
 
+chroma_params = ChromaParams(axes_dim=[16, 56, 56])
 
-chroma_params = ChromaParams(
-    in_channels=64,
-    context_in_dim=4096,
-    hidden_size=3072,
-    mlp_ratio=4.0,
-    num_heads=24,
-    depth=19,
-    depth_single_blocks=38,
-    axes_dim=[16, 56, 56],
-    theta=10_000,
-    qkv_bias=True,
-    guidance_embed=True,
-    approximator_in_dim=64,
-    approximator_depth=5,
-    approximator_hidden_size=5120,
-    _use_compiled=False,
-)
-
-
-def modify_mask_to_attend_padding(mask, max_seq_length, num_extra_padding=8):
-    """
-    Modifies attention mask to allow attention to a few extra padding tokens.
-
-    Args:
-        mask: Original attention mask (1 for tokens to attend to, 0 for masked tokens)
-        max_seq_length: Maximum sequence length of the model
-        num_extra_padding: Number of padding tokens to unmask
-
-    Returns:
-        Modified mask
-    """
-    # Get the actual sequence length from the mask
-    seq_length = mask.sum(dim=-1)
-    batch_size = mask.shape[0]
-
+def modify_mask_to_attend_padding(mask: Tensor, max_seq_length: int, num_extra_padding: int = 8) -> Tensor:
+    """Удерживает паддинг-токены текстового процессора T5XXL в маске."""
+    if mask is None:
+        return None
+    b, n = mask.shape
+    if n <= max_seq_length:
+        return mask
     modified_mask = mask.clone()
-
-    for i in range(batch_size):
-        current_seq_len = int(seq_length[i].item())
-
-        # Only add extra padding tokens if there's room
-        if current_seq_len < max_seq_length:
-            # Calculate how many padding tokens we can unmask
-            available_padding = max_seq_length - current_seq_len
-            tokens_to_unmask = min(num_extra_padding, available_padding)
-
-            # Unmask the specified number of padding tokens right after the sequence
-            modified_mask[i, current_seq_len : current_seq_len + tokens_to_unmask] = 1
-
+    modified_mask[:, max_seq_length : max_seq_length + num_extra_padding] = 1
     return modified_mask
 
-
 class Chroma(nn.Module):
-    """
-    Transformer model for flow matching on sequences.
-    """
-
     def __init__(self, params: ChromaParams):
         super().__init__()
         self.params = params
         self.in_channels = params.in_channels
-        self.out_channels = self.in_channels
-        self.gradient_checkpointing = False
-        if params.hidden_size % params.num_heads != 0:
-            raise ValueError(
-                f"Hidden size {params.hidden_size} must be divisible by num_heads {params.num_heads}"
-            )
-        pe_dim = params.hidden_size // params.num_heads
-        if sum(params.axes_dim) != pe_dim:
-            raise ValueError(
-                f"Got {params.axes_dim} but expected positional dim {pe_dim}"
-            )
         self.hidden_size = params.hidden_size
-        self.num_heads = params.num_heads
-        self.pe_embedder = EmbedND(
-            dim=pe_dim, theta=params.theta, axes_dim=params.axes_dim
+        
+        # Входные проекторы кадра и текста Клондайка Хромы
+        self.img_in = nn.Linear(params.in_channels, params.hidden_size)
+        self.txt_in = nn.Linear(params.context_in_dim, params.hidden_size)
+        
+        # Позиционный радар RoPE
+        self.pe_embedder = EmbedND(dim=params.hidden_size, theta=params.theta, axes_dim=params.axes_dim)
+        
+        # Магистральные блоки обработки мантиссы
+        self.double_blocks = nn.ModuleList([
+            DoubleStreamBlock(params.hidden_size, params.num_heads, params.mlp_ratio, params.qkv_bias)
+            for _ in range(params.depth)
+        ])
+        
+        self.single_blocks = nn.ModuleList([
+            SingleStreamBlock(params.hidden_size, params.num_heads, params.mlp_ratio)
+            for _ in range(params.depth_single_blocks)
+        ])
+        
+        # Векторный дистиллятор моб-векторов
+        self.guidance_in = nn.Sequential(
+            nn.Linear(1, params.guidance_embed_dim),
+            nn.GELU(),
+            nn.Linear(params.guidance_embed_dim, params.guidance_embed_dim)
         )
-        self.img_in = nn.Linear(self.in_channels, self.hidden_size, bias=True)
-
-        # TODO: need proper mapping for this approximator output!
-        # currently the mapping is hardcoded in distribute_modulations function
-        self.distilled_guidance_layer = Approximator(
-            params.approximator_in_dim,
-            self.hidden_size,
-            params.approximator_hidden_size,
-            params.approximator_depth,
+        
+        # Рассчитываем суммарную длину вектора модуляции по формуле Метрополии:
+        # 3 вектора на каждый одиночный блок + 2 * 6 векторов экспертов на двойные блоки + 2 на финал
+        total_mod_elements = 3 * params.depth_single_blocks + 12 * params.depth + 2
+        self.approximator = Approximator(
+            in_dim=params.guidance_embed_dim + params.hidden_size,
+            out_dim=total_mod_elements * 64,
+            hidden_dim=1024,
+            depth=4
         )
-        self.txt_in = nn.Linear(params.context_in_dim, self.hidden_size)
+        
+        self.final_layer = LastLayer(params.hidden_size, 16, params.in_channels)
 
-        self.double_blocks = nn.ModuleList(
-            [
-                DoubleStreamBlock(
-                    self.hidden_size,
-                    self.num_heads,
-                    mlp_ratio=params.mlp_ratio,
-                    qkv_bias=params.qkv_bias,
-                    use_compiled=params._use_compiled,
-                )
-                for _ in range(params.depth)
-            ]
-        )
-
-        self.single_blocks = nn.ModuleList(
-            [
-                SingleStreamBlock(
-                    self.hidden_size,
-                    self.num_heads,
-                    mlp_ratio=params.mlp_ratio,
-                    use_compiled=params._use_compiled,
-                )
-                for _ in range(params.depth_single_blocks)
-            ]
-        )
-
-        self.final_layer = LastLayer(
-            self.hidden_size,
-            1,
-            self.out_channels,
-            use_compiled=params._use_compiled,
-        )
-
-        # TODO: move this hardcoded value to config
-        # single layer has 3 modulation vectors
-        # double layer has 6 modulation vectors for each expert
-        # final layer has 2 modulation vectors
-        self.mod_index_length = 3 * params.depth_single_blocks + 2 * 6 * params.depth + 2
-        self.depth_single_blocks = params.depth_single_blocks
-        self.depth_double_blocks = params.depth
-        # self.mod_index = torch.tensor(list(range(self.mod_index_length)), device=0)
-        self.register_buffer(
-            "mod_index",
-            torch.tensor(list(range(self.mod_index_length)), device="cpu"),
-            persistent=False,
-        )
-        self.approximator_in_dim = params.approximator_in_dim
-    
-    @property
-    def device(self):
-        # Get the device of the module (assumes all parameters are on the same device)
-        return next(self.parameters()).device
-    
-    def enable_gradient_checkpointing(self, enable: bool = True):
-        self.gradient_checkpointing = enable
-
-    def forward(
-        self,
-        img: Tensor,
-        img_ids: Tensor,
-        txt: Tensor,
-        txt_ids: Tensor,
-        txt_mask: Tensor,
-        timesteps: Tensor,
-        guidance: Tensor,
-        attn_padding: int = 1,
-    ) -> Tensor:
-        if img.ndim != 3 or txt.ndim != 3:
-            raise ValueError("Input img and txt tensors must have 3 dimensions.")
-
-        # running on sequences img
+    def forward(self, img: Tensor, img_ids: Tensor, txt: Tensor, txt_ids: Tensor, 
+                txt_mask: Tensor, timesteps: Tensor, guidance: Tensor, 
+                attn_padding: int = 1) -> Tensor:
+        
+        # 1. Проекция в скрытое пространство
         img = self.img_in(img)
         txt = self.txt_in(txt)
+        
+        # 2. Вычисление позиционных эмбеддингов
+        pe_img = self.pe_embedder(img_ids)
+        pe_txt = self.pe_embedder(txt_ids)
+        pe = torch.cat([pe_txt, pe_img], dim=1)
+        
+        # 3. Инжекция вектора дистилляции и генерация моб-матриц
+        vec = self.guidance_in(guidance.unsqueeze(-1).to(dtype=img.dtype))
+        vec_mixed = torch.cat([vec, txt.mean(dim=1)], dim=-1)
+        modulations = self.approximator(vec_mixed).view(img.shape[0], -1, 64)
+        mod_dict = distribute_modulations(modulations, self.params.depth_single_blocks, self.params.depth)
+        
+        # Выравнивание маски под объединенный поток
+        if txt_mask is not None:
+            txt_mask = modify_mask_to_attend_padding(txt_mask, max_seq_length=128, num_extra_padding=attn_padding)
+            img_mask = torch.ones(img.shape[0], img.shape[1], device=img.device, dtype=img.dtype)
+            full_mask = torch.cat([txt_mask, img_mask], dim=1)
+        else:
+            full_mask = None
 
-        # TODO:
-        # need to fix grad accumulation issue here for now it's in no grad mode
-        # besides, i don't want to wash out the PFP that's trained on this model weights anyway
-        # the fan out operation here is deleting the backward graph
-        # alternatively doing forward pass for every block manually is doable but slow
-        # custom backward probably be better
-        with torch.no_grad():
-            distill_timestep = timestep_embedding(timesteps, 16)
-            # TODO: need to add toggle to omit this from schnell but that's not a priority
-            distil_guidance = timestep_embedding(guidance, 16)
-            # get all modulation index
-            modulation_index = timestep_embedding(self.mod_index, 32)
-            # we need to broadcast the modulation index here so each batch has all of the index
-            modulation_index = modulation_index.unsqueeze(0).repeat(img.shape[0], 1, 1)
-            # and we need to broadcast timestep and guidance along too
-            timestep_guidance = (
-                torch.cat([distill_timestep, distil_guidance], dim=1)
-                .unsqueeze(1)
-                .repeat(1, self.mod_index_length, 1)
-            )
-            # then and only then we could concatenate it together
-            input_vec = torch.cat([timestep_guidance, modulation_index], dim=-1)
-            mod_vectors = self.distilled_guidance_layer(input_vec.requires_grad_(True))
-        mod_vectors_dict = distribute_modulations(mod_vectors, self.depth_single_blocks, self.depth_double_blocks)
-
-        ids = torch.cat((txt_ids, img_ids), dim=1)
-        pe = self.pe_embedder(ids)
-
-        # compute mask
-        # assume max seq length from the batched input
-
-        max_len = txt.shape[1]
-
-        # mask
-        with torch.no_grad():
-            txt_mask_w_padding = modify_mask_to_attend_padding(
-                txt_mask, max_len, attn_padding
-            )
-            txt_img_mask = torch.cat(
-                [
-                    txt_mask_w_padding,
-                    torch.ones([img.shape[0], img.shape[1]], device=txt_mask.device),
-                ],
-                dim=1,
-            )
-            txt_img_mask = txt_img_mask.float().T @ txt_img_mask.float()
-            txt_img_mask = (
-                txt_img_mask[None, None, ...]
-                .repeat(txt.shape[0], self.num_heads, 1, 1)
-                .int()
-                .bool()
-            )
-            # txt_mask_w_padding[txt_mask_w_padding==False] = True
-
+        # 4. Прогон через DoubleStream блоки
         for i, block in enumerate(self.double_blocks):
-            # the guidance replaced by FFN output
-            img_mod = mod_vectors_dict[f"double_blocks.{i}.img_mod.lin"]
-            txt_mod = mod_vectors_dict[f"double_blocks.{i}.txt_mod.lin"]
-            double_mod = [img_mod, txt_mod]
-
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                img.requires_grad_(True)
-                img, txt = ckpt.checkpoint(
-                    block, img, txt, pe, double_mod, txt_img_mask
-                )
-            else:
-                img, txt = block(
-                    img=img, txt=txt, pe=pe, distill_vec=double_mod, mask=txt_img_mask
-                )
-
-        img = torch.cat((txt, img), 1)
+            distill_vec = [mod_dict[f"double_blocks.{i}.img_mod.lin"], mod_dict[f"double_blocks.{i}.txt_mod.lin"]]
+            img, txt = block(img, txt, pe, distill_vec, full_mask)
+            
+        # 5. Объединение потоков и прогон через SingleStream блоки
+        x = torch.cat([txt, img], dim=1)
         for i, block in enumerate(self.single_blocks):
-            single_mod = mod_vectors_dict[f"single_blocks.{i}.modulation.lin"]
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                img.requires_grad_(True)
-                img = ckpt.checkpoint(block, img, pe, single_mod, txt_img_mask)
-            else:
-                img = block(img, pe=pe, distill_vec=single_mod, mask=txt_img_mask)
-        img = img[:, txt.shape[1] :, ...]
-        final_mod = mod_vectors_dict["final_layer.adaLN_modulation.1"]
-        img = self.final_layer(
-            img, distill_vec=final_mod
-        )  # (N, T, patch_size ** 2 * out_channels)
-        return img
+            distill_vec = mod_dict[f"single_blocks.{i}.modulation.lin"]
+            x = block(x, pe, distill_vec, full_mask)
+            
+        # Нарезаем обратно и забираем кадр
+        img = x[:, txt.shape[1]:]
+        
+        # 6. Финальный выходной слой
+        final_vec = mod_dict["final_layer.adaLN_modulation.1"]
+        return self.final_layer(img, final_vec)

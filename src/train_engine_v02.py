@@ -1,38 +1,19 @@
-# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: АППАРАТНЫЙ ПЕРЕХВАТЧИК СЛОЕВ ===
+# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: АБСОЛЮТНЫЙ ПЛОСКИЙ ДИСПЕТЧЕР ===
 import os
 import sys
 import gc
-import types
 
 # 1. Точная навигация по отсекам шхуны
 _current_file = os.path.abspath(__file__)
 _src_dir = os.path.dirname(_current_file)
 _root_dir = os.path.dirname(_src_dir)
 
+# Python ищет файлы прямо внутри src/ без всяких префиксов пакетов
 for _path in [_src_dir, _root_dir]:
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-# 2. ХАК ОМНИССИИ: Полная принудительная регистрация пакета и подмодулей
-if "src" not in sys.modules:
-    _src_module = types.ModuleType("src")
-    _src_module.__path__ = [_src_dir]
-    sys.modules["src"] = _src_module
-
-# Загружаем файлы как абсолютные модули верхнего уровня
-import math as _raw_math
-import layers as _raw_layers
-
-# ЖЕСТКАЯ СШИВКА: Подсовываем рантайму линки, чтобы слои видели друг друга и с точкой, и без точки!
-sys.modules["math"] = _raw_math
-sys.modules["layers"] = _raw_layers
-sys.modules["src.math"] = _raw_math
-sys.modules["src.layers"] = _raw_layers
-
-# Принудительно заставляем layers считать себя частью пакета 'src'
-_raw_layers.__package__ = "src"
-
-# 3. ПРЕВЕНТИВНАЯ АННИГИЛЯЦИЯ ROCM/HIP (ДО ИМПОРТА TORCH)
+# 2. ПРЕВЕНТИВНАЯ АННИГИЛЯЦИЯ ROCM/HIP (ДО ИМПОРТА TORCH)
 os.environ.update({
     "QUANTO_DISABLE_CPP_EXT": "1", 
     "HF_DISABLE_COMPILING": "1", 
@@ -42,7 +23,7 @@ os.environ.update({
 for var in ["ROCM_HOME", "HIP_PATH", "OLLAMA_LLM_LIBRARY", "ROCM_PATH"]: 
     os.environ.pop(var, None)
 
-# 4. СТЕРИЛЬНЫЕ МАРШЕВЫЕ ИМПОРТЫ ЯДРА
+# 3. СТЕРИЛЬНЫЕ МАРШЕВЫЕ ИМПОРТЫ ЯДРА
 import torch
 import diffusers.utils.import_utils as du
 from torch.optim import AdamW
@@ -55,6 +36,7 @@ torch.version.hip, torch.version.rocm = None, None
 du.is_rocm_available = lambda: False
 du.is_torch_rocm_available = lambda: False
 # === КОНЕЦ СЛУЖЕБНОГО БЛОКА №1 ===
+
 
 
 # Оптимизатор
