@@ -8,7 +8,13 @@ from torchao.quantization import quantize_, float8_weight_only
 from peft import get_peft_model, LoraConfig
 
 from config import TrainConfig
-from src.model import Chroma, chroma_params
+# === ИСПРАВЛЕНИЕ ИМПОРТА ПО КОСМОФЛОТСКОМУ РЕГЛАМЕНТУ ===
+try:
+    from src.model import Chroma, chroma_params
+except ModuleNotFoundError:
+    # Если запуск идет из папки src, берем модель напрямую из соседнего отсека
+    from model import Chroma, chroma_params
+
 
 class FakeCLIP(torch.nn.Module):
     """Космофлотская заглушка CLIP — вырезает 1.5 ГБ из VRAM."""
