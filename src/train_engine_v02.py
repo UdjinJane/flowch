@@ -1,35 +1,55 @@
-# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: СИ-ЩИТ И ПАКЕТНЫЙ ИНЖЕКТОР ===
+# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: ЖЕЛЕЗНЫЙ МОНОЛИТНЫЙ ИНЖЕКТОР ===
 import os
 import sys
-
-# Вычисляем физический корень шхуны (Z:\flowch)
-_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# Силой заталкиваем корень в пути поиска Python, чтобы он видел папку 'src'
-if _root_dir not in sys.path:
-    sys.path.insert(0, _root_dir)
-
-# ХАК ОМНИССИИ: Регистрируем папку 'src' как полноценный родительский пакет в sys.modules
-# Это позволит относительным импортам типа 'from .layers' внутри model.py отрабатывать без краша!
-if "src" not in sys.modules:
-    import types
-    sys.modules["src"] = types.ModuleType("src")
-    sys.modules["src"].__path__ = [os.path.dirname(os.path.abspath(__file__))]
-
-# Намертво глушим ROCm до импорта тяжелых либ
-os.environ.update({"QUANTO_DISABLE_CPP_EXT": "1", "HF_DISABLE_COMPILING": "1", "FORCE_CUDA": "1", "USE_ROCM": "0"})
-for var in ["ROCM_HOME", "HIP_PATH", "ROCM_PATH"]: os.environ.pop(var, None)
-
-
 import gc
+import types
+
+# 1. АБСОЛЮТНАЯ АППАРАТНАЯ НАВИГАЦИЯ (БЕЗ ДИРНАМЕ-МА ТРЕШЕК)
+_current_file = os.path.abspath(__file__)                    # Z:\flowch\src\train_engine_v02.py
+_src_dir = os.path.dirname(_current_file)                    # Z:\flowch\src
+_root_dir = os.path.dirname(_src_dir)                        # Z:\flowch
+
+# Принудительно заталкиваем отсеки шхуны в самый верх поиска Python
+for _path in [_src_dir, _root_dir]:
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+# 2. ХАК ОМНИССИИ ДЛЯ ОТНОСИТЕЛЬНЫХ ИМПОРТОВ С ТОЧКОЙ (ИЗ КЛОНДАЙКА)
+if "src" not in sys.modules:
+    _src_module = types.ModuleType("src")
+    _src_module.__path__ = [_src_dir]
+    sys.modules["src"] = _src_module
+
+# Сшиваем рантайм: заставляем Python видеть layers и math как подмодули пакета src
+import layers
+import math
+sys.modules["src.layers"] = layers
+sys.modules["src.math"] = math
+
+# 3. ТОТАЛЬНАЯ ПРЕВЕНТИВНАЯ АННИГИЛЯЦИЯ ROCM/HIP (ДО ИМПОРТА TORCH)
+os.environ.update({
+    "QUANTO_DISABLE_CPP_EXT": "1", 
+    "HF_DISABLE_COMPILING": "1", 
+    "FORCE_CUDA": "1", 
+    "USE_ROCM": "0"
+})
+for var in ["ROCM_HOME", "HIP_PATH", "OLLAMA_LLM_LIBRARY", "ROCM_PATH"]: 
+    os.environ.pop(var, None)
+
+# 4. СТЕРИЛЬНЫЕ МАРШЕВЫЕ ИМПОРТЫ ЯДРА
 import torch
 import diffusers.utils.import_utils as du
 from torch.optim import AdamW
 from config import TrainConfig
-#from lora_core_v02 import FluxLoraCoreV02
-# Изменяем прямой импорт на каноничный пакетный, чтобы связать родительский контур
-from src.lora_core_v02 import FluxLoraCoreV02
+from lora_core_v02 import FluxLoraCoreV02
 from get_dataloader_v02 import get_dataloader_v02
+
+# Жесткое покадровое ослепление ROCm в утилитах diffusers
+torch.version.hip, torch.version.rocm = None, None
+du.is_rocm_available = lambda: False
+du.is_torch_rocm_available = lambda: False
+# === КОНЕЦ СЛУЖЕБНОГО БЛОКА №1: СИСТЕМЫ СТАБИЛИЗИРОВАНЫ ===
+
 
 # --- СИ-ЩИТ: АННИГИЛЯЦИЯ ROCM/HIP ---
 os.environ.update({"QUANTO_DISABLE_CPP_EXT": "1", "HF_DISABLE_COMPILING": "1", "FORCE_CUDA": "1", "USE_ROCM": "0"})
