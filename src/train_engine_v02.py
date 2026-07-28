@@ -26,7 +26,9 @@ import torch
 import diffusers.utils.import_utils as du
 from torch.optim import AdamW
 from config import TrainConfig
-from lora_core_v02 import FluxLoraCoreV02
+#from lora_core_v02 import FluxLoraCoreV02
+# Изменяем прямой импорт на каноничный пакетный, чтобы связать родительский контур
+from src.lora_core_v02 import FluxLoraCoreV02
 from get_dataloader_v02 import get_dataloader_v02
 
 # --- СИ-ЩИТ: АННИГИЛЯЦИЯ ROCM/HIP ---
