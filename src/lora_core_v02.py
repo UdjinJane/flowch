@@ -71,22 +71,21 @@ class FluxLoraCoreV02:
         del clean_state_dict
         gc.collect()
 
-        # 4. Умное нативное квантование TorchAO с защитой слоев-малышей
+        # 4. Умное нативное квантование TorchAO через прецизионный фильтр магистрали
         print("⚡ Запуск выборочного Float8_Weight_Only квантования магистрали")
         
-        # Перебираем все внутренние модули трансформера по именам
-        for name, module in transformer.named_modules():
-            if isinstance(module, nn.Linear):
-                # Если слой слишком мелкий (размерность <= 16), обходим его стороной
-                if module.in_features <= 16 or module.out_features <= 16:
-                    print(f"🛡️ Пропуск квантования для микро-слоя: {name} ({module.in_features} -> {module.out_features})")
-                    continue
-                
-                # Квантуем только тяжелые маршевые матрицы Хромы
-                try:
-                    quantize_(module, float8_weight_only())
-                except Exception as e:
-                    print(f"⚠ Не удалось зажать слой {name}, оставляем в BF16. Инфо: {e}")
+        def _фильтр_магистрали(модуль, имя_модуля):
+            # Проверяем, что узел является линейным слоем
+            if isinstance(модуль, nn.Linear):
+                # Если слой слишком мелкий (размерность <= 16), изолируем его от сжатия
+                if модуль.in_features <= 16 or модуль.out_features <= 16:
+                    return False
+                return True
+            return False
+
+        # Запускаем квантование на весь трансформер разом, используя наш фильтр
+        quantize_(transformer, float8_weight_only(), filter_fn=_фильтр_магистрали)
+
 
         
         # ИЗОЛЯЦИЯ СВЯЩЕННЫХ ЗОН: Принудительно возвращаем x_embedder в bfloat16
