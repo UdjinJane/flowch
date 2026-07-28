@@ -142,20 +142,21 @@ weight_mask = (1.0 / (1.0 - t_attr.float().view(-1, 1, 1) + 1e-4)).clamp(max=10.
 loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weight_mask).mean()
 
 # === НАЧАЛО БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
-# Backward и отрыв тензоров для очистки VRAM
-(loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+        # Backward и отрыв тензоров для очистки VRAM
+        (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
+        
+        # [РЕАНИМАЦИЯ МЕТРИК]: Извлечение безопасных CPU-клонов до выжигания тензоров из VRAM
+        loss_val = loss_active.detach().clone()
+        loss = loss_val
+        t_attr_cpu = t_attr.detach().cpu()
+        pred_tensor_64_cpu = pred_tensor_64.detach().cpu()
+        target_flow_cpu = target_flow.detach().cpu()
 
-# [РЕАНИМАЦИЯ МЕТРИК]: Извлечение безопасных CPU-клонов до выжигания тензоров из VRAM
-loss_val = loss_active.detach().clone()
-loss = loss_val
-t_attr_cpu = t_attr.detach().cpu()
-pred_tensor_64_cpu = pred_tensor_64.detach().cpu()
-target_flow_cpu = target_flow.detach().cpu()
-
-del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
+        del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
 # === ФИНАЛ БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
 
 # === НАЧАЛО БЛОКА КЛИППИНГА, ПРЕДОХРАНИТЕЛЯ И ФИНАЛА GEMMA V3.5 ===
+
         # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Запись метрик мантиссы в изолированные буферы логгера
         telemetry.accumulate_step(
             t_attr=t_attr_cpu,
