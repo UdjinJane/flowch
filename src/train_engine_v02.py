@@ -143,7 +143,7 @@ loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weigh
 
         # Backward и отрыв тензоров для очистки VRAM
         (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
-        
+                
         # [РЕАНИМАЦИЯ МЕТРИК]: Извлечение безопасных CPU-клонов до выжигания тензоров из VRAM
         loss_val = loss_active.detach().clone()
         loss = loss_val
@@ -152,7 +152,8 @@ loss_active = (F.mse_loss(pred_tensor_64, target_flow, reduction="none") * weigh
         target_flow_cpu = target_flow.detach().cpu()
 
         del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
-# === ФИНАЛ БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
+
+        # === ФИНАЛ БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
 
 # === НАЧАЛО БЛОКА КЛИППИНГА, ПРЕДОХРАНИТЕЛЯ И ФИНАЛА GEMMA V3.5 ===
 
