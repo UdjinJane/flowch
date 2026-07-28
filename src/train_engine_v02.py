@@ -100,47 +100,54 @@ def run_main_loop(dataloader, model, optimizer):
                 )
                 
                 # Передаем управление в Блок 2Б (Стабилизация градиентов, оптимизация и клининг)
+
 # === КОНЕЦ СЛУЖЕБНОГО БЛОКА №2А ===
 
-# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №2Б: СТАБИЛИЗАЦИЯ И ФИНАЛИЗАЦИЯ ДВИЖЕКА ===
-                # 3. Такт оптимизации и жесткий клиппинг градиентов параметров LoRA
+                # === НАЧАЛО СЛУЖЕБНОГО БЛОКА №2Б-1: ОПТИМИЗАЦИЯ И ТЕЛЕМЕТРИЯ ===
+                # 3. Такт оптимизации и жесткий клиппинг градиентов
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
                 
-                # Проверка градиентов на конечность (NaN/Inf предохранитель Метрополии)
+                # Проверка градиентов на конечность
                 if not all(torch.isfinite(p.grad).all() for p in trainable_params if p.grad is not None):
-                    print("🚨 [КРИТ] Взрыв градиентов! Пропуск текущего кадра.")
                     optimizer.zero_grad(set_to_none=True)
                     continue
 
-                # Фиксация весов LoRA и немедленный покадровый клининг VRAM
+                # Фиксация весов LoRA и очистка VRAM
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-                
-                # Выжигаем мертвый кэш аллокатора CUDA под Windows
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # 4. УМНАЯ КОСМОФЛОТСКАЯ ТЕЛЕМЕТРИЯ (РАПОРТ ПО ПРИБОРАМ)
+                # 4. Телеметрия (упрощенная версия)
                 with torch.no_grad():
-                    # (Логика телеметрии сохранена, см. исходный файл)
-                    pass
-                
+                    current_loss = loss_val.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+                    allocated_vram = torch.cuda.memory_allocated() / (1024 ** 3)
+                    
+                    # Логирование основных метрик
+                    print(f"📊 Шаг: {global_step} | Loss: {current_loss:.4f} | VRAM: {allocated_vram:.2f} GB")
+                    print("─" * 40)
+                # Передаем управление в Блок 2Б-2
+                # === КОНЕЦ СЛУЖЕБНОГО БЛОКА №2Б-1 ===
+                # === НАЧАЛО СЛУЖЕБНОГО БЛОКА №2Б-2: ФИНАЛИЗАЦИЯ ДВИЖКА ===
                 # 5. Сброс агрегированных логов и чекпоинтинг
                 if global_step % TrainConfig.SAVE_STEPS == 0:
-                    # (Логика чекпоинтов сохранена, см. исходный файл)
-                    pass
+                    print(f"💾 [Т] Чекпоинт на шаге {global_step}...")
+                    lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}
+                    torch.save(lora_state, os.path.join(TrainConfig.OUTPUT_DIR, f"lora_{global_step}.safetensors"))
 
+                    # Валидация (Врубаем eval режим)
+                    model.eval()
+                    with torch.no_grad(), torch.inference_mode():
+                        from generate_v02 import run_inference_v02
+                        run_inference_v02(model, global_step)
+                    model.train()
+
+        # Шаг планировщика вынесен за цикл батчей эпохи
         scheduler.step()
         print(f"✅ Эпоха {epoch} успешно завершена.")
     print("🔱 ПЛАВКА МАНТИССЫ РЕАКТОРА ЗАВЕРШЕНА.")
 
 if __name__ == "__main__":
-    # (Инициализация и запуск, см. исходный файл)
-    pass
-# === КОНЕЦ СЛУЖЕБНОГО БЛОКА №2Б И МОДУЛЯ ===
-
-
-if __name__ == "__main__":
     dataloader, model, optimizer = init_components()
     run_main_loop(dataloader, model, optimizer)
-# === КОНЕЦ СЛУЖЕБНОГО БЛОКА №2Б И МОДУЛЯ ===
+# === КОНЕЦ СЛУЖЕБНОГО БЛОКА №2Б-2 И ВСЕГО МОДУЛЯ ===
