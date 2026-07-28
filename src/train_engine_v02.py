@@ -50,14 +50,6 @@ du.is_rocm_available = lambda: False
 du.is_torch_rocm_available = lambda: False
 # === КОНЕЦ СЛУЖЕБНОГО БЛОКА №1: СИСТЕМЫ СТАБИЛИЗИРОВАНЫ ===
 
-
-# --- СИ-ЩИТ: АННИГИЛЯЦИЯ ROCM/HIP ---
-os.environ.update({"QUANTO_DISABLE_CPP_EXT": "1", "HF_DISABLE_COMPILING": "1", "FORCE_CUDA": "1", "USE_ROCM": "0"})
-for var in ["ROCM_HOME", "HIP_PATH", "OLLAMA_LLM_LIBRARY", "ROCM_PATH"]: os.environ.pop(var, None)
-torch.version.hip, torch.version.rocm = None, None
-du.is_rocm_available = lambda: False
-du.is_torch_rocm_available = lambda: False
-
 # Оптимизатор
 try:
     from ao_optim_monolith_v02 import AdamW8bit
