@@ -91,69 +91,20 @@ def run_main_loop(dataloader, model, optimizer):
             _всего_кадров = _мега_батч["latents"].shape[0]
             for _индекс_кадра in range(_всего_кадров):
                 _глобальный_шаг += 1
-                _лосс_кадра, _шум_cpu, _прогноз_cpu, _таргет_cpu = execute_single_frame_step(
-                    mega_batch=_мега_батч, frame_idx=_индекс_кадра, device=torch.device("cuda"), lora_model=model)
-                _бортовой_логгер.accumulate_step(_шум_cpu, _прогноз_cpu, _таргет_cpu, _лосс_кадра.item())
-# === КОНЕЦ СЛУЖЕБНОГО КУСКА №3 ===
-            # === НАЧАЛО СЛУЖЕБНОГО КУСКА №4А: ОПТИМИЗАЦИЯ И МЕТРИКИ ===
-            # 3. Жесткий скалярный клиппинг градиентов матриц LoRA (канон 1.0)
-            _обучаемые_веса = [п for п in model.parameters() if п.requires_grad]
-            torch.nn.utils.clip_grad_norm_(_обучаемые_веса, max_norm=1.0)
-            
-            # Предохранитель Метрополии: аварийная защита от взрыва градиентов (NaN/Inf)
-            if not all(torch.isfinite(_параметр.grad).all() for _параметр in _обучаемые_веса if _параметр.grad is not None):
-                print(f"🚨 [РЕАКТОР] Обнаружены субнормальные числа на шаге {_глобальный_шаг}! Пропуск.")
-                optimizer.zero_grad(set_to_none=True)
-                continue
-
-            # Фиксация приращений LoRA-весов в базовое FP8 тело
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-            
-            # Выжигание мертвого кэша аллокатора CUDA для защиты от WDDM-оверсвапа
-            torch.cuda.empty_cache()
-            gc.collect()
-
-            # 4. КОСМОФЛОТСКАЯ МГНОВЕННАЯ ТЕЛЕМЕТРИЯ КАДРА
-            with torch.no_grad():
-                _мгновенный_лосс = _лосс_кадра.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                _активная_память = torch.cuda.memory_allocated() / (1024 ** 3)
-                _кэш_аллокатора = torch.cuda.memory_reserved() / (1024 ** 3)
                 
-                print(f"📊 [МАРШ] Шаг: {_глобальный_шаг} | Эпоха: {_эпоха} | Кадр: {_индекс_кадра}")
-                print(f" └── Loss кадра: {_мгновенный_лосс:.4f} | VRAM Активная: {_активная_память:.2f} GB")
-                print(f" └── Кэш CUDA: {_кэш_аллокатора:.2f} GB | Статус: КОНТУР СТАБИЛЕН")
-                print("─" * 60)
-            # Передаем управление в Кусок 4Б (Чекпоинты, закрытие циклов и __main__)
-          
-               # === КОНЕЦ СЛУЖЕБНОГО КУСКА №4А ===
-                # === НАЧАЛО СЛУЖЕБНОГО КУСКА №4Б: ЧЕКПОИНТЫ И ТОЧКА ВХОДА ===
-                # 5. Аварийный сброс приращений весов на SSD диск и запуск валидации
-                if _глобальный_шаг % TrainConfig.SAVE_STEPS == 0:
-                    print(f"💾 [МАГИСТРАЛЬ] Достигнута полка сохранения! Сброс чекпоинта на шаге {_глобальный_шаг}...")
-                    
-                    # Изолируем только тренируемые матрицы LoRA, отсекая базовое FP8 тело
-                    _веса_лора = {k: v for k, v in model.state_dict().items() if "lora_" in k}
-                    
-                    # Сохраняем чистые сафетензоры в выходную директорию
-                    _путь_сохранения = os.path.join(TrainConfig.OUTPUT_DIR, f"lora_step_{_глобальный_шаг}.safetensors")
-                    torch.save(_веса_лора, _путь_сохранения)
-
-                    # Запуск валидационного инференса в безопасном изолированном режиме
-                    model.eval()
-                    with torch.no_grad(), torch.inference_mode():
-                        try:
-                            from generate_v02 import run_inference_v02
-                            run_inference_v02(model, _глобальный_шаг)
-                        except ModuleNotFoundError:
-                            print("⚠ [ТЕЛЕМЕТРИЯ] Валидатор generate_v02 отсутствует, тестовый кадр пропущен.")
-                    model.train()
-
-        # Тактовый шаг косинусного планировщика вынесен строго за пределы батчей эпохи
-        _планировщик.step()
-        print(f"✅ [МАРШ] Эпоха {_эпоха} успешно завершена. Параметры обновлены.")
-        
-    print("🔱 ПЛАВКА МАНТИССЫ РЕАКТОРА CHROMA V50 ЗАВЕРШЕНА УСПЕШНО.")
+                # 1. Маршевый проход и подготовка тензоров кадра
+                _лосс_кадра, _шум_cpu, _прогноз_cpu, _таргет_cpu = execute_single_frame_step(
+                    mega_batch=_мега_батч, frame_idx=_индекс_кадра, device=torch.device("cuda"), lora_model=model
+                )
+                _бортовой_логгер.accumulate_step(_шум_cpu, _прогноз_cpu, _таргет_cpu, _лосс_кадра.item())
+                
+                # 2. ИНЖЕКЦИЯ МАРШЕВОГО ОПТИМИЗАТОРА (СТРОГО ВНУТРИ ЦИКЛА КАДРОВ, 20 ПРОБЕЛОВ ОТСТУПА)
+                from step_optimizer_v02 import run_optimizer_and_telemetry
+                _успех_шага = run_optimizer_and_telemetry(
+                    model, optimizer, _лосс_кадра, _глобальный_шаг, _эпоха, _индекс_кадра
+                )
+                if not _успех_шага:
+                    continue
 
 if __name__ == "__main__":
     # Финальная точка сопряжения маршевых агрегатов шхуны
