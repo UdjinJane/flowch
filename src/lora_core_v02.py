@@ -47,16 +47,16 @@ class FluxLoraCoreV02:
         double_blocks = 0
         single_blocks = 0
         for key in clean_state_dict.keys():
-            if "double_blocks" in key:
-                block_num = int(key.split(".")) + 1
-                if block_num > double_blocks:
-                    double_blocks = block_num
-            elif "single_blocks" in key:
-                block_num = int(key.split(".")) + 1
-                if block_num > single_blocks:
-                    single_blocks = block_num
+            _части_ключа = key.split(".")
+            if len(_части_ключа) > 1 and _части_ключа[1].isdigit():
+                _номер_блока = int(_части_ключа[1]) + 1
+                if "double_blocks" in key and _номер_блока > double_blocks:
+                    double_blocks = _номер_блока
+                elif "single_blocks" in key and _номер_блока > single_blocks:
+                    single_blocks = _номер_блока
 
         print(f"📊 Нативная топология Chroma: Двойных блоков={double_blocks}, Одинарных={single_blocks}")
+
         chroma_params.depth = double_blocks
         chroma_params.depth_single_blocks = single_blocks
 
