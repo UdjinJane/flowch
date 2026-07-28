@@ -205,7 +205,6 @@ def main_train_loop():
                 # Жесткое и безопасное выжигание тяжелых тензоров из VRAM
                 del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
-# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
 # === НАЧАЛО БЛОКА КЛИППИНГА GEMMA V3.5 ===
                 # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге из безопасных CPU-клонов
                 telemetry.accumulate_step(
@@ -214,65 +213,71 @@ def main_train_loop():
                     target_tensor=target_flow_cpu,
                     current_loss=loss.item()
                 )
+# === НАЧАЛО БЛОКА ПРЕДОХРАНИТЕЛЯ GEMMA V3.5 ===
+        # Такт оптимизации и жесткий клиппинг аномальных градиентов параметров LoRA
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
 
-                # Такт оптимизации и жесткий клиппинг аномальных градиентов параметров LoRA
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        # Проверка градиентов на конечность (NaN/Inf предохранитель)
+        for param in trainable_params:
+            if param.grad is not None and not torch.isfinite(param.grad).all():
+                print("[КРИТ] Обнаружен взрыв градиентов! Аварийная остановка.")
+                sys.exit(1)
 
-                # Проверка градиентов на конечность (NaN/Inf предохранитель)
-# === ФИНАЛ БЛОКА КЛИППИНГА GEMMA V3.5 ===
+        # Фиксация весов LoRA и немедленный сброс Autograd-накопления кадра
+        optimizer.step()
+# === ФИНАЛ БЛОКА ПРЕДОХРАНИТЕЛЯ GEMMA V3.5 ===
 
-                for param in trainable_params:
-                    if param.grad is not None and not torch.isfinite(param.grad).all():
-                        print("[КРИТ] Обнаружен взрыв градиентов! Аварийная остановка.")
-                        sys.exit(1)
+        optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
 
-                # Фиксация весов LoRA и немедленный сброс Autograd-накопления кадра
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                torch.cuda.empty_cache()
+        # Расширенный рапорт по приборам на каждом шаге в консоль мостика
+        current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+        allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
+        reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
+        elapsed_time = time.time() - last_log_time
+        speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+        last_log_time = time.time()
 
-                # Расширенный рапорт по приборам на каждом шаге в консоль мостика
-                current_loss = loss.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                allocated_vram = torch.cuda.memory_allocated(device) / (1024 ** 3)
-                reserved_vram = torch.cuda.memory_reserved(device) / (1024 ** 3)
-                elapsed_time = time.time() - last_log_time
-                speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
-                last_log_time = time.time()
-
-                console_msg = (
-                    f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
-                    f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
-                    f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
-                )
-                print(console_msg)
+        console_msg = (
+            f"[ОТК] Шаг: {global_step} | Эпоха: {epoch} | "
+            f"MSE Лосс: {current_loss:.4f} | Скорость: {speed:.2f} it/s | "
+            f"VRAM Active: {allocated_vram:.2f} GB | Reserved: {reserved_vram:.2f} GB"
+        )
+# === НАЧАЛО БЛОКА ВЫРАВНИВАНИЯ GEMMA V3.5 ===
+        print(console_msg)
 # === ФИНАЛ: ФРАГМЕНТ 2 ===
-# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 3 ===
-                # Сброс логов и чекпоинтинг
-                if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
-                    avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
-                    print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
-                    telemetry.flush_aggregated_log(global_step, epoch)
 
-                if global_step % TrainConfig.SAVE_STEPS == 0:
-                    print(f"[Т] Чекпоинт на шаге {global_step}...")
-                    torch.save({k: v for k, v in lora_model.state_dict().items() if "lora_" in k}, 
-                               os.path.join(TrainConfig.OUTPUT_DIR, f"lora_step_{global_step}.safetensors"))
-                    
-                    # Инференс-валидация
-                    lora_model.eval()
-                    with torch.no_grad(), torch.inference_mode():
-                        from generate_v02 import run_inference_v02
-                        run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
-                    torch.cuda.empty_cache()
-                    lora_model.train()
+# === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 3 ===
+        # Сброс логов и чекпоинтинг
+        if global_step % 10 == 0 and len(telemetry.loss_buffer) > 0:
+            avg_loss = sum(telemetry.loss_buffer) / len(telemetry.loss_buffer)
+            print(f"\n 📡 [ТЕЛЕМЕТРИЯ] Шаг: {global_step} | MSE: {avg_loss:.6f}")
+            telemetry.flush_aggregated_log(global_step, epoch)
+
+        if global_step % TrainConfig.SAVE_STEPS == 0:
+            print(f"[Т] Чекпоинт на шаге {global_step}...")
+            torch.save({k: v for k, v in lora_model.state_dict().items() if "lora_" in k},
+                        os.path.join(TrainConfig.OUTPUT_DIR, f"lora_step_{global_step}.safetensors"))
+
+            # Инференс-валидация
+            lora_model.eval()
+            with torch.no_grad(), torch.inference_mode():
+                from generate_v02 import run_inference_v02
+                run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
+            torch.cuda.empty_cache()
+            lora_model.train()
 
         scheduler.step()
-        print(f"[УСПЕХ] Эпоха {epoch} завершена.")
+# === ФИНАЛ БЛОКА ВЫРАВНИВАНИЯ GEMMA V3.5 ===
 
-    print("[УСПЕХ] Все эпохи завершены.")
+    print(f"[УСПЕХ] Эпоха {epoch} завершена.")
+
+print("[УСПЕХ] Все эпохи завершены.")
+
 
 if __name__ == "__main__":
     main_train_loop()
 # === БЛОК ДАННЫХ V02 ФИНАЛ: КОНЕЦ МОЗАИКИ И КОНЕЦ ФАЙЛА ===
+
 
 
