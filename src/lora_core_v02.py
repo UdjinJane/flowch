@@ -5,7 +5,7 @@ import torch
 from safetensors.torch import load_file
 from torchao.quantization import quantize_, float8_weight_only
 from peft import get_peft_model, LoraConfig
-
+from torch import nn
 from config import TrainConfig
 
 # ЧИСТОКРОВНЫЙ ПРЯМОЙ ИМПОРТ: БЕЗ КОСТЫЛЕЙ И СМЕЩЕНИЙ ПУТЕЙ!
@@ -71,11 +71,23 @@ class FluxLoraCoreV02:
         del clean_state_dict
         gc.collect()
 
-        # 4. Честное нативное квантование TorchAO — спасает от дедлоков Windows WDDM
-        print("⚡ Запуск честного Float8_Weight_Only квантования базового тела")
+        # 4. Умное нативное квантование TorchAO с защитой слоев-малышей
+        print("⚡ Запуск выборочного Float8_Weight_Only квантования магистрали")
         
-        # Прогон квантователя. Он сам определит линейные слои и зажмет их в e4m3fn
-        quantize_(transformer, float8_weight_only())
+        # Перебираем все внутренние модули трансформера по именам
+        for name, module in transformer.named_modules():
+            if isinstance(module, nn.Linear):
+                # Если слой слишком мелкий (размерность <= 16), обходим его стороной
+                if module.in_features <= 16 or module.out_features <= 16:
+                    print(f"🛡️ Пропуск квантования для микро-слоя: {name} ({module.in_features} -> {module.out_features})")
+                    continue
+                
+                # Квантуем только тяжелые маршевые матрицы Хромы
+                try:
+                    quantize_(module, float8_weight_only())
+                except Exception as e:
+                    print(f"⚠ Не удалось зажать слой {name}, оставляем в BF16. Инфо: {e}")
+
         
         # ИЗОЛЯЦИЯ СВЯЩЕННЫХ ЗОН: Принудительно возвращаем x_embedder в bfloat16
         if hasattr(transformer, "x_embedder"):
@@ -86,6 +98,8 @@ class FluxLoraCoreV02:
             for block in transformer.single_blocks:
                 if hasattr(block, "modulation") and hasattr(block.modulation, "lin"):
                     block.modulation.lin.to(dtype=torch.bfloat16)
+
+
 
         # Переносим сжатое тело на карту CUDA
         transformer.to("cuda")
