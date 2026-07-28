@@ -112,6 +112,7 @@ def run_main_loop(dataloader, model, optimizer):
                     optimizer.zero_grad(set_to_none=True)
                     continue
 
+                # === НАЧАЛО СЛУЖЕБНОГО ОБВЕСА ТЕЛЕМЕТРИЕЙ (БЛОК 2Б — ТОЧКА ВРЕЗКИ) ===
                 # Фиксация весов LoRA и немедленный жесткий покадровый клининг VRAM
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -120,9 +121,32 @@ def run_main_loop(dataloader, model, optimizer):
                 torch.cuda.empty_cache()
                 gc.collect()
 
-                # 4. Телеметрия и рапорт
-                current_loss = loss_val.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
-                print(f"[ОТК] Шаг: {global_step} | Loss: {current_loss:.4f} | VRAM: {torch.cuda.memory_allocated()/1024**3:.2f}GB")
+                # 4. УМНАЯ КОСМОФЛОТСКАЯ ТЕЛЕМЕТРИЯ (РАПОРТ ПО ПРИБОРАМ)
+                with torch.no_grad():
+                    current_loss = loss_val.item() * TrainConfig.GRADIENT_ACCUMULATION_STEPS
+                    allocated_vram = torch.cuda.memory_allocated() / (1024 ** 3)
+                    reserved_vram = torch.cuda.memory_reserved() / (1024 ** 3)
+                    
+                    # Считаем скользящее среднее лосса, если буфер логгера доступен
+                    window_loss = sum(telemetry.loss_buffer[-5:]) / len(telemetry.loss_buffer[-5:]) if telemetry.loss_buffer else current_loss
+                    
+                    elapsed_time = time.time() - last_log_time
+                    speed = 1.0 / elapsed_time if elapsed_time > 0 else 0.0
+                    last_log_time = time.time()
+                    
+                    # Точка бифуркации: сигнализируем, если резерв VRAM вплотную подошел к критической полке
+                    vram_warning = "⚠ КРИТ ПЕРЕГРЕВ VRAM!" if reserved_vram > (TrainConfig.VRAM_LIMIT_GB - 0.5) else "💚 КОНТУР СТАБИЛЕН"
+                    
+                    console_msg = (
+                        f"📊 [РЕАКТОР] Шаг: {global_step} | Эпоха: {epoch} | Кадр: {frame_idx}\n"
+                        f"── Лосс (Мгновенный): {current_loss:.4f} | ЕМА-5 лосса: {window_loss:.4f}\n"
+                        f"── Тахометр: {speed:.2f} it/s | Статус: {vram_warning}\n"
+                        f"── VRAM АКТИВНАЯ: {allocated_vram:.2f} GB | КЭШ АЛЛОКАТОРА: {reserved_vram:.2f} GB"
+                    )
+                    print(console_msg)
+                    print("─" * 80)
+# === КОНЕЦ СЛУЖЕБНОГО ОБВЕСА ===
+
 
                 # 5. Сброс логов и чекпоинтинг
                 if global_step % TrainConfig.SAVE_STEPS == 0:
