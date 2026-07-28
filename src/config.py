@@ -48,7 +48,7 @@ class TrainConfig:
 
     # --- ПАРАМЕТРЫ ПЛАВКИ (ГИПЕРПАРАМЕТРЫ) ---
     MAX_SEQUENCE_LENGTH = 256
-    RESOLUTION = 1024
+    RESOLUTION = 512
     BATCH_SIZE = 1
     GRADIENT_ACCUMULATION_STEPS = 2  # Удержание стабильности лосса из репозитория
     LEARNING_RATE = 2e-5
