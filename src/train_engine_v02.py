@@ -176,8 +176,9 @@ def main_train_loop():
                 torch.cuda.synchronize()
                 print(f"[КОНТРОЛЬ] Время прямого прохода: {time.time() - t_fwd_start:.4f} сек.")
 
-                # ВЫНОС МАТЕМАТИКИ ИЗ AUTOCAST: Считаем лосс и веса сатурации СТРОГО в стабильном float32
-                target_flow = pack_latents_to_patches(latents - noise).float().to(device=device)
+                # [ВЫРАВНИВАНИЕ ВЕКТОРОВ ПО ЧЕРТЕЖАМ МЕТРОПОЛИИ]: Приведение к прямому ODE-потоку (noise - latents)
+                target_flow = pack_latents_to_patches( noise - latents). float(). to( device= device)
+# ===================
                 
                 # Приведение предсказания к float32 для безопасного решейпинга без субнормальных коллизий
                 pred_tensor_f32 = pred_tensor.float()
