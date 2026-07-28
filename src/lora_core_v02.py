@@ -1,73 +1,121 @@
 import os
-import json
 import gc
 import torch
 from safetensors.torch import load_file
-from diffusers import FluxTransformer2DModel
+from optimum.quanto import freeze, QTensor
+from toolkit.util.quantize import quantize, get_qtype
+from toolkit.dequantize import patch_dequantization_on_save
 from peft import get_peft_model, LoraConfig
-from config import TrainConfig
-from torchao.quantization import quantize_, int8_weight_only
 
-# Класс FakeConfig внедрен, параметры Chroma1 настроены: 19 слоев, head_dim 128, in_channels 64
-class FakeConfig:
+from config import TrainConfig
+# Импортируем истинную геометрию Хромы из нашего Клондайка
+from src.model import Chroma, chroma_params
+
+# Космофлотская заглушка CLIP — вырезает 1.5 ГБ мусорного веса из VRAM
+class FakeCLIP(torch.nn.Module):
     def __init__(self):
-        self.attention_head_dim = 128
-        self.guidance_embeds = False
-        self.in_channels = 64
-        self.joint_attention_dim = 4096
-        self.num_attention_heads = 24
-        self.num_layers = 19
-        self.num_single_layers = 38
-        self.patch_size = 1
+        super().__init__()
+        self.dtype = torch.bfloat16
+        self.device = 'cuda'
+        self.text_model = None
+        self.tokenizer = None
+        self.model_max_length = 77
+    def forward(self, *args, **kwargs):
+        return torch.zeros(1, 1, 1).to(self.device)
 
 class FluxLoraCoreV02:
-
     @staticmethod
-
     def init_transformer_with_lora():
-        # Загрузка и первичная инициализация (аналогично логам)
-        with open(os.path.join(TrainConfig.SRC_DIR, "transformer_config.json"), "r", encoding="utf-8-sig") as f:
-            config_dict = json.load(f)
-        transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
-
-        # Загрузка весов и применение броневого листа конфигурации
-        state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-        clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
-        transformer.load_state_dict(clean_state_dict, strict=False)
+        print("📡 АКТИВИРОВАН ПРОТОКОЛ СБОРКИ НАТИВНОГО ЯДРА CHROMA V50")
+        dtype = torch.bfloat16
         
-        # Обходим С++ ограничение сеттера напрямую через внутренние структуры Питона
-        object.__setattr__(transformer, '_config', FakeConfig())
-        transformer.__dict__['config'] = FakeConfig()
+        # 1. Загрузка весов напрямую в процессор шхуны
+        state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
+        
+        # Зачищаем префиксы ComfyUI/Diffusers под нативные имена Клондайка
+        clean_state_dict = {}
+        for k, v in state_dict.items():
+            new_key = k.replace("model.diffusion_model.", "").replace("transformer.", "")
+            clean_state_dict[new_key] = v
 
+        # 2. Вычисляем реальную конфигурацию блоков по металлу реальности
+        double_blocks = 0
+        single_blocks = 0
+        for key in clean_state_dict.keys():
+            if "double_blocks" in key:
+                block_num = int(key.split(".")[1]) + 1
+                if block_num > double_blocks:
+                    double_blocks = block_num
+            elif "single_blocks" in key:
+                block_num = int(key.split(".")[1]) + 1
+                if block_num > single_blocks:
+                    single_blocks = block_num
 
-        # Квантование и донастройка (TorchAO, int8_weight_only)
-        quantize_(transformer, int8_weight_only())
+        print(f"📊 Параметры Chroma: Двойных блоков={double_blocks}, Одинарных={single_blocks}")
+        chroma_params.depth = double_blocks
+        chroma_params.depth_single_blocks = single_blocks
 
-        # Чистка VRAM
+        # 3. Инициализируем чистокровный трансформер
+        transformer = Chroma(chroma_params)
+        transformer.dtype = dtype
+        
+        # Накатываем веса без дурацкого strict=True
+        transformer.load_state_dict(clean_state_dict, strict=False)
+        transformer.to(device="cpu", dtype=dtype)
+        
+        del clean_state_dict
+        gc.collect()
+
+        # 4. Нативное квантование Optimum Quanto — защита от дедлоков Windows WDDM
+        print("⚡ Запуск потокового квантования весов через Optimum Quanto")
+        patch_dequantization_on_save(transformer)
+        
+        # Используем qint8 для базовых весов (канон Метрополии)
+        qtype = get_qtype("qint8")
+        quantize(transformer, weights=qtype)
+        freeze(transformer)
+        
+        # Переносим сжатое тело на карту
+        transformer.to("cuda")
         torch.cuda.empty_cache()
         gc.collect()
 
-        # Изоляция эмбеддеров в bf16
-        for attr in ["x_embedder", "time_text_embed", "context_embedder"]:
-            if hasattr(transformer, attr):
-                setattr(transformer, attr, getattr(transformer, attr).to(dtype=torch.bfloat16))
-        # Конфигурируем PEFT LoRA и внедряем в квантованное ядро [1.10]
-        lora_config = LoraConfig(r=TrainConfig.LORA_RANK, lora_alpha=TrainConfig.LORA_ALPHA, target_modules=list(TrainConfig.TARGET_MODULES), bias="none")
-        # Оборачиваем трансформер в полноценную структуру PEFT
-        model = get_peft_model(transformer, lora_config)
+        # 5. Конфигурируем таргеты LoRA под ИСТИННЫЕ линейные слои Клондайка Хромы
+        # Вешаемся на общие QKV проекторы двойных блоков и базовые слои одиночных блоков
+        target_modules = [
+            "img_attn.qkv", "txt_attn.qkv", # Линейные блоки DoubleStream
+            "linear1", "linear2"             # Линейные блоки SingleStream
+        ]
         
-        # 7. Гарантированная блокировка базового ядра и активация автограда только для LoRA
+        print(f"🎯 Врезка LoRA контура. Ранг: {TrainConfig.LORA_RANK}, Мишени: {target_modules}")
+        lora_config = LoraConfig(
+            r=TrainConfig.LORA_RANK,
+            lora_alpha=TrainConfig.LORA_ALPHA,
+            target_modules=target_modules,
+            bias="none"
+        )
+        
+        # Перехватываем PEFT-валидатор на лету
+        import sys
+        from types import ModuleType
+        if "peft.utils.import_utils" in sys.modules:
+            peft_import = sys.modules["peft.utils.import_utils"]
+            peft_import.is_torchao_available = lambda: False
+
+        # Оборачиваем нативный трансформер
+        model = get_peft_model(transformer, lora_config)
+
+        # 6. Жесткая герметизация автограда — учим только матрицы LoRA
         for name, param in model.named_parameters():
             if "lora_" in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
-        return model.to("cuda")
 
-# === БЛОК 4: ХОЛОДНЫЙ ТЕСТ И МОНИТОРИНГ VRAM ===
+        return model
+
 if __name__ == "__main__":
-    # Инициализация, проверка параметров и замер потребления VRAM [1.10]
     tested_model = FluxLoraCoreV02.init_transformer_with_lora()
     trainable_params = sum(p.numel() for p in tested_model.parameters() if p.requires_grad)
     allocated = torch.cuda.memory_allocated() / (1024 ** 3)
-    print(f"Активных LoRA мишеней: {trainable_params:,} | VRAM: {allocated:.2f} GB")
+    print(f"✅ УСПЕХ! Активных LoRA параметров: {trainable_params:,} | VRAM статика: {allocated:.2f} GB")
