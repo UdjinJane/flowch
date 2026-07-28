@@ -13,7 +13,8 @@ class Config:
     down_block_types = ("1",)
     up_block_types = ("1",)
     block_out_channels = (1,)
-    latent_channels = 3  # usually 4
+    # [ВЫРАВНИВАНИЕ ПОРТОВ]: Выставляем честные 16 каналов под тяжелую геометрию Chroma v50
+    latent_channels = 16
     norm_num_groups = 1
     sample_size = 512
     scaling_factor = 1.0
@@ -96,11 +97,11 @@ class FakeVAE(nn.Module):
         self, z: torch.FloatTensor, return_dict: bool = True
     ) -> Union[DecoderOutput, torch.FloatTensor]:
         decoded = self._decode(z).sample
-
         if not return_dict:
-            return (decoded,)
+            return (decoded.to(dtype=self._dtype),)
+        # [ПРИНУДИТЕЛЬНЫЙ КАСТ]: Выжигаем float32, принудительно сжимаем активации на выходе в bfloat16
+        return DecoderOutput(sample=decoded.to(dtype=self._dtype))
 
-        return DecoderOutput(sample=decoded)
 
     def _set_gradient_checkpointing(self, module, value=False):
         pass
