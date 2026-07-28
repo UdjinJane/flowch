@@ -5,7 +5,8 @@ from torch import Tensor, nn
 from einops import rearrange
 
 # ЧИСТОКРОВНЫЙ АБСОЛЮТНЫЙ ИМПОРТ МЕТРОПОЛИИ — БЕЗ ТОЧЕК!
-from math import attention, rope
+from chroma_math import attention, rope
+
 
 class EmbedND(nn.Module):
     def __init__(self, dim: int, theta: int, axes_dim: list[int]):

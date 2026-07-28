@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
+from chroma_math import apply_rope
+
 
 # ЧИСТОКРОВНЫЙ АБСОЛЮТНЫЙ ИМПОРТ МЕТРОПОЛИИ — ТОЧКИ ВЫЖЖЕНЫ НАВСЕГДА!
 from layers import (

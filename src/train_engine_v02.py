@@ -2,6 +2,8 @@
 import os
 import sys
 import gc
+import chroma_math
+sys.modules["src.math"] = chroma_math
 
 # 1. Точная навигация по отсекам шхуны
 _current_file = os.path.abspath(__file__)
@@ -30,6 +32,8 @@ from torch.optim import AdamW
 from config import TrainConfig
 from lora_core_v02 import FluxLoraCoreV02
 from get_dataloader_v02 import get_dataloader_v02
+
+
 
 # Ослепление ROCm в утилитах
 torch.version.hip, torch.version.rocm = None, None
