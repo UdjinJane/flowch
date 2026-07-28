@@ -1,10 +1,9 @@
 import os
 
-# Запрещаем фрагментацию, выставляем агрессивный сбор мусора и отключаем превентивный оффлоад WDDM
+# КОСМОФЛОТСКИЙ КРИЗИСНЫЙ ПРОТОКОЛ ДЛЯ WINDOWS WDDM (ЗАЩИТА ОТ SHARED RAM)
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-    "max_split_size_mb:256,"
-    "garbage_collection_threshold:0.6,"
-    "expandable_segments:True"
+    "max_split_size_mb:64,"
+    "garbage_collection_threshold:0.9"
 )
 
 
@@ -47,16 +46,17 @@ class TrainConfig:
     )
 
     # --- ПАРАМЕТРЫ ПЛАВКИ (ГИПЕРПАРАМЕТРЫ) ---
-    MAX_SEQUENCE_LENGTH = 256
+    # --- ТАКТИЧЕСКИЙ СЖАТЫЙ КОНТУР ПЛАВКИ (СПАСЕНИЕ ОТ OOM) ---
+    MAX_SEQUENCE_LENGTH = 128  # Зажали текстовый радар, чтобы T5 не раздувал сетку RoPE
     RESOLUTION = 512
     BATCH_SIZE = 1
-    GRADIENT_ACCUMULATION_STEPS = 2  # Удержание стабильности лосса из репозитория
+    GRADIENT_ACCUMULATION_STEPS = 2 
     LEARNING_RATE = 2e-5
     MAX_TRAIN_STEPS = 1500
     SAVE_STEPS = 100
     NUM_EPOCHS = 40
-    LORA_RANK = 16
-    LORA_ALPHA = 16
+    LORA_RANK = 4
+    LORA_ALPHA = 4
     
     # Снайперские мишени LoRA под diffusers логику lora_core_v02.py
     TARGET_MODULES = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
