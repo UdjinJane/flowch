@@ -6,7 +6,6 @@ from einops import rearrange
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from .math import attention, rope
 from functools import lru_cache
 
 
