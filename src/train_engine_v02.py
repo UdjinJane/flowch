@@ -1,14 +1,25 @@
-# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: СИ-ЩИТ И ВАКУУМ ЭНКОДЕРОВ ===
-# === ИНЖЕКТ КОРНЯ И ПРЕВЕНТИВНЫЙ СИ-ЩИТ ===
+# === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: СИ-ЩИТ И ПАКЕТНЫЙ ИНЖЕКТОР ===
 import os
 import sys
-# Силой заталкиваем корень проекта в пути поиска Python
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Вычисляем физический корень шхуны (Z:\flowch)
+_root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Силой заталкиваем корень в пути поиска Python, чтобы он видел папку 'src'
+if _root_dir not in sys.path:
+    sys.path.insert(0, _root_dir)
+
+# ХАК ОМНИССИИ: Регистрируем папку 'src' как полноценный родительский пакет в sys.modules
+# Это позволит относительным импортам типа 'from .layers' внутри model.py отрабатывать без краша!
+if "src" not in sys.modules:
+    import types
+    sys.modules["src"] = types.ModuleType("src")
+    sys.modules["src"].__path__ = [os.path.dirname(os.path.abspath(__file__))]
 
 # Намертво глушим ROCm до импорта тяжелых либ
 os.environ.update({"QUANTO_DISABLE_CPP_EXT": "1", "HF_DISABLE_COMPILING": "1", "FORCE_CUDA": "1", "USE_ROCM": "0"})
 for var in ["ROCM_HOME", "HIP_PATH", "ROCM_PATH"]: os.environ.pop(var, None)
+
 
 import gc
 import torch
