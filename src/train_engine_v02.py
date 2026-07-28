@@ -1,5 +1,15 @@
 # === НАЧАЛО СЛУЖЕБНОГО БЛОКА №1: СИ-ЩИТ И ВАКУУМ ЭНКОДЕРОВ ===
+# === ИНЖЕКТ КОРНЯ И ПРЕВЕНТИВНЫЙ СИ-ЩИТ ===
 import os
+import sys
+# Силой заталкиваем корень проекта в пути поиска Python
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Намертво глушим ROCm до импорта тяжелых либ
+os.environ.update({"QUANTO_DISABLE_CPP_EXT": "1", "HF_DISABLE_COMPILING": "1", "FORCE_CUDA": "1", "USE_ROCM": "0"})
+for var in ["ROCM_HOME", "HIP_PATH", "ROCM_PATH"]: os.environ.pop(var, None)
+
 import gc
 import torch
 import diffusers.utils.import_utils as du
