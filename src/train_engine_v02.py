@@ -163,12 +163,16 @@ def run_main_loop(dataloader, model, optimizer):
                     lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}
                     torch.save(lora_state, os.path.join(TrainConfig.OUTPUT_DIR, f"lora_{global_step}.safetensors"))
 
-                    # Валидация (Врубаем eval режим)
+                    # Валидация (Врубаем eval режим с защитой от фантомов Старпома)
                     model.eval()
                     with torch.no_grad(), torch.inference_mode():
-                        from generate_v02 import run_inference_v02
-                        run_inference_v02(model, global_step)
+                        try:
+                            from generate_v02 import run_inference_v02
+                            run_inference_v02(model, global_step)
+                        except ModuleNotFoundError:
+                            print("⚠ [ТЕЛЕМЕТРИЯ] Валидатор generate_v02 не найден, пропуск тестовой генерации кадра.")
                     model.train()
+
 
         # Шаг планировщика вынесен за цикл батчей эпохи
         scheduler.step()
