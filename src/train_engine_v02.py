@@ -206,13 +206,15 @@ def main_train_loop():
                 del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
 # === НАЧАЛО БЛОКА КЛИППИНГА GEMMA V3.5 ===
-                # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге из безопасных CPU-клонов
-                telemetry.accumulate_step(
-                    t_attr=t_attr_cpu,
-                    pred_tensor=pred_tensor_64_cpu,
-                    target_tensor=target_flow_cpu,
-                    current_loss=loss.item()
-                )
+        # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге из безопасных CPU-клонов
+        telemetry.accumulate_step(
+            t_attr=t_attr_cpu,
+            pred_tensor=pred_tensor_64_cpu,
+            target_tensor=target_flow_cpu,
+            current_loss=loss.item()
+        )
+# === ФИНАЛ БЛОКА КЛИППИНГА GEMMA V3.5 ===
+
 # === НАЧАЛО БЛОКА ПРЕДОХРАНИТЕЛЯ GEMMA V3.5 ===
         # Такт оптимизации и жесткий клиппинг аномальных градиентов параметров LoRA
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
@@ -226,6 +228,7 @@ def main_train_loop():
         # Фиксация весов LoRA и немедленный сброс Autograd-накопления кадра
         optimizer.step()
 # === ФИНАЛ БЛОКА ПРЕДОХРАНИТЕЛЯ GEMMA V3.5 ===
+
 
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
