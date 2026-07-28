@@ -25,7 +25,9 @@ class ChromaParams:
     guidance_embed_dim: int = 256
     distilled_guidance_layer: int = 11
 
+# ЭТАЛОННАЯ ТОПОЛОГИЯ ОСЕЙ ROPE КЛОНДАЙКА
 chroma_params = ChromaParams(axes_dim=[16, 56, 56])
+
 
 def modify_mask_to_attend_padding(mask: Tensor, max_seq_length: int, num_extra_padding: int = 8) -> Tensor:
     """Удерживает паддинг-токены текстового процессора T5XXL в маске."""
