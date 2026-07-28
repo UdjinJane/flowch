@@ -82,7 +82,9 @@ class Chroma(nn.Module):
             depth=4
         )
         
-        self.final_layer = LastLayer(params.hidden_size, 16, params.in_channels)
+        # ТОЧНАЯ КАЛИБРОВКА РАЗМЕРНОСТИ ПОД ГЕОМЕТРИЮ ЧЕКПОИНТА [64, 3072]
+        self.final_layer = LastLayer(params.hidden_size, out_dim=1, out_channels=64)
+
 
     def forward(self, img: Tensor, img_ids: Tensor, txt: Tensor, txt_ids: Tensor, 
                 txt_mask: Tensor, timesteps: Tensor, guidance: Tensor, 
