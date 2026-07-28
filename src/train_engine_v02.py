@@ -137,13 +137,21 @@ def main_train_loop():
                     checkpoint_path = os.path.join(TrainConfig.OUTPUT_DIR, f"lora_step_{global_step}.safetensors")
                     torch.save(lora_state, checkpoint_path)
 
-                    # Инференс-валидация
+                    # [ГЕРМЕТИЗАЦИЯ ВАЛИДАЦИИ]: Полная изоляция весов для защиты от WDDM оверсвапа
                     lora_model.eval()
                     with torch.no_grad(), torch.inference_mode():
+                        # Принудительно очищаем граф перед импортом
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        
                         from generate_v02 import run_inference_v02
                         run_inference_v02(loaded_transformer=lora_model, current_step=global_step)
+                    
+                    # Жесткое выжигание следов инференса из памяти перед возвратом в train
+                    gc.collect()
                     torch.cuda.empty_cache()
                     lora_model.train()
+
 
                 scheduler.step()
 
