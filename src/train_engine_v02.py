@@ -206,6 +206,7 @@ def main_train_loop():
                 del pred_tensor, pred_tensor_f32, pred_tensor_64, weight_mask, loss_active, target_flow
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 ФИНАЛ: СТЫКОВОЧНЫЙ ФРАГМЕНТ 2А-2 ===
 # === МАРШЕВЫЙ ДВИГАТЕЛЬ V02 СТАРТ: ФРАГМЕНТ 2 ===
+# === НАЧАЛО БЛОКА КЛИППИНГА GEMMA V3.5 ===
                 # [ВОССТАНОВЛЕНИЕ ЗРЕНИЯ]: Сбор метрик мантиссы на текущем шаге из безопасных CPU-клонов
                 telemetry.accumulate_step(
                     t_attr=t_attr_cpu,
@@ -215,9 +216,11 @@ def main_train_loop():
                 )
 
                 # Такт оптимизации и жесткий клиппинг аномальных градиентов параметров LoRA
-                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=TrainConfig.MAX_NORM)
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
 
                 # Проверка градиентов на конечность (NaN/Inf предохранитель)
+# === ФИНАЛ БЛОКА КЛИППИНГА GEMMA V3.5 ===
+
                 for param in trainable_params:
                     if param.grad is not None and not torch.isfinite(param.grad).all():
                         print("[КРИТ] Обнаружен взрыв градиентов! Аварийная остановка.")
