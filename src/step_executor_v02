@@ -1,0 +1,45 @@
+# === НАЧАЛО МОДУЛЯ: src/step_executor_v02.py (БЛОК 1) ===
+import torch
+import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
+from config import TrainConfig
+
+def pack_latents_to_patches(latents):
+    """Упаковка латентов, оптимизированная под 2x2 патчи."""
+    b, c, h, w = latents.shape
+    return latents.view(b, c, h // 2, 2, w // 2, 2).permute(0, 2, 4, 1, 3, 5).flatten(3).flatten(1, 2)
+
+
+def generate_flux_img_ids(height, width, device):
+    """Генерация идентификаторов изображения для корректной позиционной кодировки."""
+    h_patches, w_patches = height // 2, width // 2
+    img_ids = torch.zeros(h_patches, w_patches, 3, device=device)
+    img_ids[..., 1] = torch.arange(h_patches, device=device)[:, None]
+    img_ids[..., 2] = torch.arange(w_patches, device=device)[None, :]
+    return img_ids.view(-1, 3)
+# === ФИНАЛ МОДУЛЯ: src/step_executor_v02.py (БЛОК 1) ===
+# === НАЧАЛО МОДУЛЯ: src/step_executor_v02.py (БЛОК 2) ===
+def execute_single_frame_step(mega_batch, frame_idx, device, lora_model, telemetry, global_step, epoch):
+    """Герметичный инженерный отсек одного кадра. Полная изоляция Autograd-цепей."""
+    from model_runner_v02 import run_lora_model_step
+    import torch
+    import torch.nn.functional as F
+    from torch.utils.checkpoint import checkpoint
+
+    # [ПРОПУЩЕНО: Инициализация тензоров, патчинг, 8-портовая сигнатура]
+    
+    # Прямой проход (autocast bfloat16)
+    with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+        pred_tensor = checkpoint(run_lora_model_step, ...)
+
+    # === НАЧАЛО БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
+    # Вынос математики из-под автокаста строго во float32
+    target_flow = pack_latents_to_patches(noise - latents).float().to(device=device)
+    # [ПРОПУЩЕНО: Расчет loss_active, градиенты, метрики]
+
+    # Тотальное вакуумное выжигание тяжелых VRAM тензоров кадра
+    del pred_tensor, target_flow, latents, prompt_embeds # ... и прочее
+    # === ФИНАЛ БЛОКА ODE И ОБРАТНОГО ПРОХОДА GEMMA V3.5 ===
+
+    return loss_val
+# === КОНЕЦ МОДУЛЯ: src/step_executor_v02.py ===
