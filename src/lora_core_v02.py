@@ -3,17 +3,14 @@ import os
 import gc
 import torch
 from safetensors.torch import load_file
-# Используем честный нативный квантователь из requirements.txt
 from torchao.quantization import quantize_, float8_weight_only
 from peft import get_peft_model, LoraConfig
 
 from config import TrainConfig
-# === ИСПРАВЛЕНИЕ ИМПОРТА ПО КОСМОФЛОТСКОМУ РЕГЛАМЕНТУ ===
-try:
-    from src.model import Chroma, chroma_params
-except ModuleNotFoundError:
-    # Если запуск идет из папки src, берем модель напрямую из соседнего отсека
-    from model import Chroma, chroma_params
+
+# ЧИСТОКРОВНЫЙ ПРЯМОЙ ИМПОРТ: БЕЗ КОСТЫЛЕЙ И СМЕЩЕНИЙ ПУТЕЙ!
+from model import Chroma, chroma_params
+
 
 
 class FakeCLIP(torch.nn.Module):
