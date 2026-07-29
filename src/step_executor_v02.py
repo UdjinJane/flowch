@@ -48,6 +48,22 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     txt_ids_aligned = torch.zeros(1, prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
     
     kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
+#---------- Стартовый ориентир (после kwargs_mask)
+    # 4. Вставка 8-портового вызова (исправление размерности)
+    with torch. amp. autocast( device_type="cuda", dtype= torch. bfloat16):
+        pred_tensor = checkpoint(
+            run_lora_model_step,
+            lora_model,
+            kwargs_mask,
+            packed_noisy_latents,
+            t_model_scale,
+            prompt_embeds,
+            torch.zeros(1, 1, device=device, dtype=torch.bfloat16), # Исправленный порт 6
+            txt_ids, # Привязка актуальных id
+            img_ids,
+            use_reentrant= False
+        )
+#--------- Точка фиксации. Код изменен.
     
 #---------- Старт блока №2_UPDATED
     # 4. Прямой проход с градиентным чекпоинтингом через 7 портов (БЕЗ pooled_projections)

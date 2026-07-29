@@ -51,3 +51,4 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
 
     return pred_tensor.to(dtype=meta_dtype)
 
+
