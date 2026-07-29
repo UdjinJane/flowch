@@ -28,24 +28,24 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         run_lora_model_step._telemetry_fired = True
 
 
-#---------- Финальная интеграция Chroma.forward()
-    # 4. Нативная коммутация под сигнатуру Chroma
+#---------- Финальная рокировка тензоров Chroma.forward()
+    # 4. Перекоммутация портов: возвращаем кадр и текст на свои шины данных
     target_engine = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
     
-    # Подготовка тензоров в bfloat16
     txt_mask = torch.ones(prompt_embeds.shape[:2], device=device, dtype=torch.bfloat16)
     guidance = batch.get("guidance", torch.ones(prompt_embeds.shape[0], device=device, dtype=torch.bfloat16)).to(device, torch.bfloat16)
         
     out = target_engine(
-        img=packed_noisy_latents.to(device, torch.bfloat16),
+        img=packed_noisy_latents.to(device, torch.bfloat16), # Сюда идет кадр (64 канала)
         img_ids=img_ids.to(device, torch.bfloat16),
-        txt=prompt_embeds.to(device, torch.bfloat16),
+        txt=prompt_embeds.to(device, torch.bfloat16),       # Сюда идет текст (4096 каналов)
         txt_ids=txt_ids.to(device, torch.bfloat16),
         txt_mask=txt_mask,
         timesteps=t_vector.to(device, torch.bfloat16) if t_vector is not None else None,
         guidance=guidance
     )
-#--------- Конец интеграции
+#--------- Конец рокировки
+
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
     pred_tensor = out[0] if isinstance(out, tuple) else out
