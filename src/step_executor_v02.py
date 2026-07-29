@@ -31,7 +31,7 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
 
 #---------- Старт блока №1_4D_NATIVE_PACK
     # 1. Загрузка оригинальных осей из датасета (4D контур восстановлен)
-    latents = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16) # [1, 16, 64, 64]
+    latents = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
     prompt_embeds = mega_batch["prompt_embeds"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
 
     # 2. Математика Rectified Flow на нативных осях 4D-тензора
@@ -49,11 +49,12 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     # 4. Нарезка позиционных сеток RoPE на основе упакованной геометрии (32x32 = 1024)
     img_ids = generate_chroma_img_ids(32 * 16, 32 * 16, device)
     
-# Накатить взамен интервала 52-56 на вашем экране:
+    # Геометрию масок и текстовых айдишников привязываем к реальной длине текста (prompt_embeds.shape[1] = 128)
     txt_len = prompt_embeds.shape[1]
     txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
     kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
 #--------- Окончание блока №1_4D_NATIVE_PACK
+
 
 #---------- Старт блока №2_FINAL_POSITIONAL
     # 4. Градиентный чекпоинтинг: жесткое позиционное выравнивание 8 портов
