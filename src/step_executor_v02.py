@@ -49,23 +49,24 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     
     kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
 
-#---------- Старт блока №2_FINAL
-    # 4. Прямой проход с градиентным чекпоинтингом через 8 портов (ГЕРМЕТИЧНЫЙ КОНТУР)
+#---------- Старт блока №2_FINAL_POSITIONAL
+    # 4. Градиентный чекпоинтинг: жесткое позиционное выравнивание 8 портов
     pooled_projections_dummy = torch.zeros(1, 1, device=device, dtype=torch.bfloat16)
     with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
         pred_tensor = checkpoint(
-            run_lora_model_step,
-            lora_model,
-            kwargs_mask,
-            packed_noisy_latents,
-            t_model_scale,
-            prompt_embeds,
-            pooled_projections_dummy,
-            txt_ids_aligned,
-            img_ids,
+            run_lora_model_step,      # Назначение контура
+            lora_model,                # 1. lora_model
+            kwargs_mask,               # 2. batch
+            packed_noisy_latents,      # 3. packed_noisy_latents (ЗДЕСЬ ДОЛЖЕН БЫТЬ КАДР, А НЕ ТЕКСТ)
+            t_model_scale,             # 4. timesteps_attr
+            prompt_embeds,             # 5. prompt_embeds
+            pooled_projections_dummy,  # 6. pooled_projections
+            txt_ids_aligned,           # 7. txt_ids
+            img_ids,                   # 8. img_ids
             use_reentrant=False
         )
-#--------- Окончание блока №2_FINAL
+#--------- Окончание блока №2_FINAL_POSITIONAL
+
         
 #---------- Старт блока №3_PATCH
     # 5. Эвакуация математики лосса из-под автокаста строго во float32 с изоляцией градиентов
