@@ -49,8 +49,9 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     
     kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
     
+#---------- Старт блока №2_UPDATED
     # 4. Прямой проход с градиентным чекпоинтингом через 7 портов (БЕЗ pooled_projections)
-    with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+    with torch. amp. autocast( device_type="cuda", dtype= torch. bfloat16):
         pred_tensor = checkpoint(
             run_lora_model_step,
             lora_model,
@@ -60,8 +61,10 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
             prompt_embeds,
             txt_ids_aligned,
             img_ids,
-            use_reentrant=False
+            use_reentrant= False
         )
+#--------- Окончание блока №2_UPDATED
+
         
     # 5. Эвакуация математики лосса из-под автокаста строго во float32
     target_flow = pack_latents_to_patches(noise - latents).float().to(device=device)
