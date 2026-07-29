@@ -1,211 +1,132 @@
-# =============================================
-# БЛОК-СХЕМА РЕАКТОРА CHROMA V02_STABLE_COMPLIANCE
-# Версия: 1.1 (дополнено таблицей и футером)
-# Дата: 2024-XX-XX
-# =============================================
+# Реактор Chroma Unlocked v50: Экспертное руководство
 
-## 🔧 1. ОСНОВНЫЕ МОДУЛИ РЕАКТОРА
-
-### 1.1 Базовый Трансформер (FluxTransformer2DModel)
-```mermaid
-graph TD
-    A[FluxTransformer2DModel\n(float8_e4m3fn)] --> B[38 LoRA мишеней\n(to_q.0, to_k.0, ...)]
-    B --> C[Quantize: int8_weight_only()\n⚠️ Несовместимо с float8]
-    C --> D[Base Model Weights\n(19 layers, 64 channels)]
-```
-
-**Критика:**
-- Нет валидации на `dtype` при загрузке весов.
-- Потенциальный OOM при загрузке базовых весов (не проверено).
+## Общая информация
+- **Название модели:** Chroma-fp8-scaled
+- **Организация:** Clybius
+- **Репозиторий:** [Hugging Face](https://huggingface.co/Clybius/Chroma-fp8-scaled)
+- **Лицензия:** Apache 2.0
+- **Базовая задача:** Text-to-Image (генерация изображений из текста)
+- **Фреймворк:** PyTorch
+- **Классификация контента:** NSFW/Sensitive Content Verified
 
 ---
 
-### 1.2 Оптимизатор (AdamW8bit)
-```mermaid
-graph TD
-    E[AdamW8bit\n(8-bit gradients)] --> F[Quantize: _quantize_8bit()]
-    F --> G[Dequantize\n⚠️ Нет NAN/INF проверки]
-    G --> H[Step:\nAdamW math + FP32 unpacking]
-    H --> I[Re-quantize\n⚠️ Риск NaN/Inf в моментах]
-```
-
-**Критика:**
-- Нет проверки на `max_val == 0`.
-- Нет валидации градиентов на конечность (`torch.isfinite`).
+## Архитектура и квантование
+- **Архитектурная семья:** Flux MMDiT / Rectified Flow (Flow Matching)
+- **Версия модели:** v50 (Annealed variant)
+- **Основное разрешение:** 512x512
+- **Тип квантования:**
+  - FP8 Mixed Precision (e4m3fn / e5m2).
+  - Compression: Learned SVD via TorchAO.
+- **Состояние текстовых энкодеров:** Удалены из файла весов.
+- **VAE-совместимость:** Flux-VAE-BF16 dependent.
 
 ---
 
-### 1.3 Данные (CachedFluxDatasetV02)
-```mermaid
-graph TD
-    J[metadata.jsonl] --> K[RAM Load:\nt5_hidden (1, 256, 4096)\n⚠️ Должен быть срез до (256, 4096)]
-    K --> L[latents (16, 128, 128)\n⚠️ Несоответствие VAE scale=8]
-    L --> M[VAE Decode:\n(16, 64, 64) → (3, 512, 512)]
-```
-
-**Критика:**
-- Нет проверки на размерность латентов.
-- Нет валидации T5 эмбеддингов.
+## Аппаратные ограничения и бенчмарки
+- **Статический VRAM:** 17.8 GB (при загрузке модели).
+- **Рекомендуемое GPU:** NVIDIA RTX 3090 / RTX 4090 (24 GB VRAM).
+- **VRAM-стратегия:**
+  - Dynamic Offloading с `max_split_size_mb = 512`.
+  - Рекомендация: `CudaSysMemToBase = 0` для блокировки spilling.
 
 ---
 
-### 1.4 Пайплайн (ChromaPipeline)
-```mermaid
-graph TD
-    N[ChromaPipeline] --> O[FluxPipeline\n(2D)]
-    O --> P[RoPE Grid:\nimg_ids (H//2, W//2, 3)\ntxt_ids (1, 256, 3)]
-    P --> Q[Transformer Call:\npacked_noisy_latents, prompt_embeds, timestep]
-    Q --> R[Pred Tensor:\nSqueeze dim=1\n⚠️ Нет проверки на shape]
-```
-
-**Критика:**
-- Нет валидации `pred_tensor` после squeeze.
-- Нет проверки на OOM в `ChromaPipeline`.
-
----
-
-## 🔄 2. ПЛАВКА (Train Loop)
-```mermaid
-graph TD
-    S[main_train_loop] --> T[Initialize:\nAdamW8bit, FluxLoraCoreV02]
-    T --> U[Epoch Loop:\nfor epoch in range(1, NUM_EPOCHS+1)]
-    U --> V[Frame Step:\nexecute_single_frame_step]
-    V --> W[Loss Calculation:\nMSE + weight_mask]
-    W --> X[Optimizer Step:\nAdamW8bit.step()\n⚠️ Нет OOM проверки]
-    X --> Y[Checkpointing\n⚠️ Нет dynamic offloading]
-```
-
-**Критика:**
-- Нет динамического оффлоада при OOM.
-- Нет валидации градиентов на `NaN/Inf`.
+## Параметры обучения и LoRA
+- **Базовый learning rate:** 2e-5
+- **Gradient accumulation baseline:** 2
+- **LoRA гиперпараметры (по умолчанию):**
+  - Rank: 16
+  - Alpha: 16
+  - Target modules:
+    - `to_q.0`
+    - `to_k.0`
+    - `to_v.0`
+    - `to_out.0`
+- **Frozen layers (bfloat16):**
+  - `x_embedder` (FP8 запрещен).
 
 ---
 
-## 📋 3. ТАБЛИЦА УЧАСТВУЮЩИХ ФАЙЛОВ
-
-| Наименование файла (FS)               | Функциональное назначение                                                                                     |
-|--------------------------------------|----------------------------------------------------------------------------------------------------------------|
-| `ao_optim_monolith_v02.py`            | 8-битный AdamW с квантованием моментов градиентов. Базовый оптимизатор для LoRA-плавки.                   |
-| `chroma_pipeline.py`                  | Основной пайплайн Chroma, наследует `FluxPipeline`. Обрабатывает latents и текстовые эмбеддинги.            |
-| `config.py`                           | Центральный конфиг: пути к файлам, параметры плавки (LR, batch size, VRAM лимит), настройки каталогов.     |
-| `dataset_v02.py`                      | Кэшированный датасет с RAM-форсажем. Загружает латенты и T5 эмбеддинги в ОЗУ шхуны.                        |
-| `fake_vae.py`                         | Эмуляция VAE для экономии VRAM (без квантования, только мимикрирование под AutoencoderKL).                 |
-| `generate_v02.py`                     | Модуль инференса: валидация загруженного трансформера, генерация изображений.                               |
-| `lora_core_v02.py`                    | Инициализация базового трансформера с LoRA, квантование весов (`int8_weight_only`).                          |
-| `model_runner_v02.py`                 | Функциональный модуль для вызова LoRA-модели. Обрабатывает `packed_noisy_latents`, `prompt_embeds`.         |
-| `step_executor_v02.py`                | Инженерный отсек шага плавки: расчет шума, лосса MSE, обратный проход.                                    |
-| `telemetry_logger.py`                 | Бортовой логгер метрик (mean/std/min/max для pred/target/t_attr). Журналирует на SSD раз в 10 шагов.      |
-| `train_engine_v02.py`                 | Главный цикл плавки: инициализация, epoch loop, шаг за шагом execute, чекпоинтинг.                          |
-| `transformer_config.json`             | Конфигурация базового трансформера (19 слоев, 64 канала, patch_size=2).                                      |
-| `vae_config.json`                     | Конфигурация VAE (scaling_factor=0.3611, latent_channels=16).                                                 |
-| `metadata.jsonl`                      | Манифест датасета: пути к файлам, имена образцов.                                                           |
-| `*.pt` (text_cache/)                  | Кэшированные T5 эмбеддинги и CLIP hidden states (`t5_hidden`, `clip_hidden`).                               |
-| `*.pt` (latent_cache/)                | Кэшированные латенты (`(16, 128, 128)`).                                                                  |
-| `chroma-unlocked-v50-... .safetensors`| Базовый трансформер Chroma V50 (float8_e4m3fn, learned SVD).                                                  |
+## Файловая структура проекта (`Z:\flowch\src`)
+| Файл                          | Роль                                                                 | Примечания
+|-------------------------------|--------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| `ao_optim_monolith_v02.py`     | AdamW8bit оптимизатор для LoRA, управление памятью (int8 → float32).   | Запрещен самоимпорт, импортируется только из `train_engine_v02.py`.
+| `chroma_math.py`               | Математические утилиты для Chroma (квантование, избежание коллизий).    | Используется через хак `sys.modules["src.math"] = chroma_math`.
+| `config.py`                    | Конфигурация среды (запрет AMD-компиляции, CUDA настройка).             | Устанавливает `QUANTO_DISABLE_CPP_EXT`, `HF_DISABLE_COMPILING`, `FORCE_CUDA`.
+| `dataset_v02.py`               | Обработка датасета и metadata.                                           | Интеграция с `Z:\flowch\dataset\mng_oks_bl\metadata.jsonl`.
+| `generate_v02.py`              | Генерация выходных изображений и логирования.                           | Сохраняет результаты в `Z:\flowch\output\images`.
+| `get_dataloader_v02.py`        | Загрузка данных для обучения (dataloader).                               | Используется в `train_engine_v02.py`.
+| `layers.py`                     | Базовые слои модели (LoRA, RoPE).                                       | Включает логику квантования через `_фильтр_магистрали()`.
+| `lora_core_v02.py`             | Ядро обучения LoRA (380 тензоров).                                      | Интегрируется в `train_engine_v02.py`.
+| `model_runner_v02.py`           | Запуск модели, management latents и текста.                              | Основной кондуктор для инференса/обучения.
+| `model.py`                      | Основная модель Chroma Unlocked v50 (FP8).                               | Загружается из `Z:\flowch\models_core\transformer`.
+| `step_executor_v02.py`         | Выполнение шагов обучения/инференса.                                     | Обрабатывает timesteps, проверки на OOM.
+| `step_optimizer_v02.py`        | Оптимизация шагов (clipping градиентов).                                 | Используется в контуре обратного распространения.
+| `telemetry_logger.py`           | Логирование телеметрии и журналирования ошибок.                          | Сохраняет логи в `Z:\flowch\output\logs`.
+| `train_engine_v02.py`           | Основной цикл обучения (LoRA, RoPE, OOM-обработка).                      | Точка входа для процесса обучения.
 
 ---
 
-## ⚠️ БЛОК РИСКОВ И ОШИБОК (ФУТЕР)
+## Ограничения и запреты
+1. **VRAM:**
+   - Лимит: 21.0 GB (dynamic offloading при превышении).
+   - Рекомендация: `CudaSysMemToBase = 0`.
 
-### 1. Критические риски
-| Риск                     | Описание                                                                 | Уровень |
-|-------------------------|----------------------------------------------------------------------------|---------|
-| **OOM (VRAM)**          | Нет dynamic offloading, только `empty_cache()`. Превышение 21.0 GB → полный блэкаут шхуны.
-| **NaN/Inf в градиентах** | Нет проверки на конечность в `AdamW8bit.step()` или лоссе MSE.
-| **Несовместимость квантования** | `int8_weight_only()` не работает с float8_e4m3fn (ошибка TorchAO).
-| **Размерности данных** | LATENTS: `(16, 128, 128)` vs VAE scale → ожидается `(16, 64, 64)`.
+2. **Режимы работы:**
+   - Боевой режим (`USE_EMULATORS = False`): Эмуляторы запрещены.
 
-### 2. Потенциальные ошибки
-| Ошибка                          | Причина                                                                 | Последствие                                  |
-|---------------------------------|--------------------------------------------------------------------------|-----------------------------------------------|
-| **Падение лосса на `inf`**      | Нет валидации `torch.isfinite()` для `pred_tensor` или `target_flow`.
-| **VRAM фрагментация**           | Нет `max_split_size_mb=512`, `garbage_collection_threshold:0.8`.     |
-| **Несовместимость PEFT/TorchAO** | LoRA веса квантируются `int8_weight_only()`, а модель работает в float8_e4m3fn.
-| **Deadlock в autograd**          | Нет сброса графа Autograd между фреймами (`zero_grad(set_to_none=True)`).
+3. **Запреты:**
+   - Самоимпорт: Запрещен `from ao_optim_monolith import ...`.
+   - Хардкодные пути: Нет `sys.path` внутри `ao_optim_monolith_v02.py`.
+   - FP8 для frozen layers: Запрещен для `x_embedder`.
 
 ---
 
-## 🔧 РЕКОМЕНДАЦИИ ДЛЯ ГЕММЫ
+## Ключевые проверки и логика
+1. **VRAM и OOM:**
+   ```python
+   del pred_tensor, pred_tensor_f32, weight_mask, loss_active, target_flow
+   del latents, prompt_embeds, t_raw, t_attr, noise, noisy_latents, packed_noisy_latents
+   del img_ids, txt_ids_aligned, kwargs_mask
+   ```
 
-### 1. Неотложные действия
-- **Проверить VRAM после загрузки базового трансформера.**
-  ```python
-  import torch
-  transformer = FluxTransformer2DModel.from_config(config_dict).to(dtype=torch.bfloat16)
-  state_dict = load_file(TrainConfig.MODEL_SINGLE_FILE, device="cpu")
-  clean_state_dict = {k.replace("model.diffusion_model.", ""): v for k, v in state_dict.items()}
-  transformer.load_state_dict(clean_state_dict, strict=False)
-  allocated_vram = torch.cuda.memory_allocated() / (1024 ** 3)
-  if allocated_vram > TrainConfig.VRAM_LIMIT_GB - 2.0:
-      print(f"[КРИТ] Базовый трансформер занимает {allocated_vram:.2f} GB! Потолок: {TrainConfig.VRAM_LIMIT_GB}")
-  ```
-- **Добавить OOM проверку в `train_engine_v02.py`.**
-  ```python
-  def _check_vram():
-      allocated = torch.cuda.memory_allocated(device) / (1024 ** 3)
-      if allocated > TrainConfig.VRAM_LIMIT_GB - 0.5:
-          print(f"[КРИТ] VRAM OOM! Active: {allocated:.2f} GB")
-          torch.cuda.empty_cache()
-          gc.collect()
-          sys.exit(1)
-  ```
+2. **Timestep:**
+   - Должен быть в `[0.0, 1.0]` с маржином (`epsilon=1e-5`).
 
-### 2. Улучшения для стабильности
-- **Валидация градиентов на `NaN/Inf`.**
-  ```python
-  for param in trainable_params:
-      if param.grad is not None and not torch.isfinite(param.grad).all():
-          print("[КРИТ] Обнаружен NaN/Inf в градиентах!")
-          sys.exit(1)
-  ```
-- **Замена `int8_weight_only()` на явное float8 квантование.**
-  ```python
-  quantize_(transformer, "weight_only", dtype=torch.float8)  # Вместо int8_weight_only()
-  ```
-
-### 3. Структурные улучшения (для будущих версий)
-- **Разбить `lora_core_v02.py` на:**
-  - `init_model_v02.py` (загрузка весов, квантование).
-  - `apply_lora_v02.py` (применение LoRA, валидация мишеней).
-- **Добавить dynamic offloading в `config.py`.**
-  ```python
-  os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-      "max_split_size_mb:512,"  # Агрессивный split для уменьшения фрагментации
-      "garbage_collection_threshold:0.8,"
-      "expandable_segments:True"
-  )
-  ```
-
-### 4. Запреты на изменения (стабильность V02_STABLE_COMPLIANCE)
-- **Не изменять:**
-  - Структуру `ao_optim_monolith_v02.py`.
-  - Логику плавки в `train_engine_v02.py` без аппрува.
-  - Обращаться к весам `ModuleList.weight` (даже для отладки).
-- **Не добавлять:**
-  - Комментарии с TODO, pass или троеточия.
-  - Локальные запуски кода (нет доступа к GPU шхуны).
+3. **LoRA-градиенты:**
+   - Clipping: `max_norm=1.0`.
+   - Проверка на zero-градиенты.
 
 ---
 
-## 🔍 ФАЙЛЫ ДЛЯ ПРОВЕРКИ
-1. **`Z:lowcheactor_expert_md.txt`** – текущий файл.
-2. **`Z:lowcheactor_expert_md.txt`** – текущий файл.
-3. **`Z:lowcheactor_expert_md.txt`** – текущий файл.
-4. **`Z:lowcheactor_expert_md.txt`** – текущий файл.
-5. **`Z:lowcheactor_expert_md.txt`** – текущий файл.
+## Инструкции по эксплуатации
+1. **Загрузка модели:**
+   ```python
+   import torch
+   from safetensors.torch import load_file
+   model = load_file("chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors")
+   ```
+
+2. **Обработка latents и текста:**
+   - Latents: `(B, 16, H, W)` (H и W должны быть четными).
+   - Text embeds: `(1, 256, 4096)`.
+
+3. **Обучение LoRA:**
+   - Использовать `ao_optim_monolith_v02.py` для AdamW8bit.
+   - Проверки:
+     ```python
+     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+     ```
+
+4. **Журналирование:**
+   - Логи сохраняются в `Z:\flowch\output\logs`.
 
 ---
 
-## 📌 Финальные заметки
-- **Экспертный уровень:** Схема включает все участвующие файлы и модули, но не содержит сырой информации (комментариев, log'ов).
-- **Гемма должна:**
-  1. Проверить VRAM после загрузки базового трансформера.
-  2. Добавить OOM проверку в `train_engine_v02.py`.
-  3. Запросить аппрув на замену `int8_weight_only()` (если подтверждено, что это критическая ошибка).
-- **Для Мистраля:**
-  - В следующей сессии можно использовать эту схему как reference для анализа багов.
-  - Не лениться проверять размерности данных и VRAM перед запуском.
+## Рекомендации для ИИ Гемма
+- Для блок-схемы использовать только боевой режим (`USE_EMULATORS = False`).
+- Обращать внимание на аппаратные ограничения (VRAM, CUDA).
+- Проверять integrity модели через SHA-256 checksum.
 
-# =============================================
-# КОНЕЦ ДОКУМЕНТА (Версия: 1.1)
-# =============================================
+© 2026 Бортовой журнал космошхуны Flowch. Все права защищены Омниссией.

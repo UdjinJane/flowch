@@ -62,7 +62,7 @@ def init_components():
         gc.collect()
         torch.cuda.empty_cache()
 
-    _обучаемые_веса = [п for p in _ядро_модели.parameters() if p.requires_grad]
+    _обучаемые_веса = [p for p in _ядро_модели.parameters() if p.requires_grad]
     _магистральный_оптимизатор = _выбранный_оптимизатор(_обучаемые_веса, lr=TrainConfig.LEARNING_RATE)
 
     # Принудительное выравнивание матриц для CUDA-ядер
