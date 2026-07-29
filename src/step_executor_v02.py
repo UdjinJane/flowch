@@ -43,15 +43,16 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     # Прямой сдвиг мантиссы в 3D пространстве
     packed_noisy_latents = (1.0 - t_attr.view(-1, 1, 1)) * latents + t_attr.view(-1, 1, 1) * noise
 
+#---------- Старт блока №1_3D_ADAPTATION_PATCH
     # 3. Нарезка позиционных сеток RoPE на основе патчей (корень из 1024 = 32)
     num_patches = latents.shape[1]
     side = int(num_patches ** 0.5) # Жесткие 32 патча под разрешение 512
     img_ids = generate_chroma_img_ids(side * 16, side * 16, device) # Восстановление осей для RoPE
     
-    txt_ids_aligned = torch.zeros(1, prompt_embeds.shape[1], 3, device=device, dtype=torch.bfloat16)
-    kwargs_mask = {"txt_mask": torch.ones((1, prompt_embeds.shape[1]), device=device, dtype=torch.bfloat16)}
-#--------- Окончание блока №1_3D_ADAPTATION
-
+    # Исправление портов: длину текстового контура берем из 3D-тензора latents (строка 34)
+    txt_ids_aligned = torch.zeros(1, latents.shape[1], 3, device=device, dtype=torch.bfloat16)
+    kwargs_mask = {"txt_mask": torch.ones((1, latents.shape[1]), device=device, dtype=torch.bfloat16)}
+#--------- Окончание блока №1_3D_ADAPTATION_PATCH
 
 #---------- Старт блока №2_FINAL_POSITIONAL
     # 4. Градиентный чекпоинтинг: жесткое позиционное выравнивание 8 портов
