@@ -48,9 +48,11 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     side = int(num_patches ** 0.5) # Жесткие 32 патча под разрешение 512
     img_ids = generate_chroma_img_ids(side * 16, side * 16, device) # Восстановление осей для RoPE
     
-    # Выравнивание портов: длину текстового контура берем из 3D-тензора latents (строка 34)
-    txt_ids_aligned = torch.zeros(1, latents.shape[1], 3, device=device, dtype=torch.bfloat16)
-    kwargs_mask = {"txt_mask": torch.ones((1, latents.shape[1]), device=device, dtype=torch.bfloat16)}
+    # Выравнивание портов: геометрию масок жестко привязываем к размеру сетки айдишников
+    txt_len = latents.shape[1]
+    txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
+    kwargs_mask = {"txt_mask": torch.ones(1, txt_len, device=device, dtype=torch.bfloat16)}
+
 #--------- Окончание блока №1_3D_ADAPTATION_COMPLETE
 
 #---------- Старт блока №2_FINAL_POSITIONAL
