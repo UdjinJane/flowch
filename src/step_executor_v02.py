@@ -29,29 +29,31 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     from config import TrainConfig
     from model_runner_v02 import run_lora_model_step
 
-#---------- Старт блока №1_3D_ADAPTATION_FINAL_CURE
-    # 1. Возврат к оригинальным ключам датасета (реверс отменен, 3D контур сохранен)
-    latents = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16) # [1, 1024, 64]
-    prompt_embeds = mega_batch["prompt_embeds"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16) # [1, 128, 4096]
+#---------- Старт блока №1_4D_NATIVE_PACK
+    # 1. Загрузка оригинальных осей из датасета (4D контур восстановлен)
+    latents = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16) # [1, 16, 64, 64]
+    prompt_embeds = mega_batch["prompt_embeds"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
 
-    # 2. Математика Rectified Flow прямо на 3D тензоре латентов кадра
+    # 2. Математика Rectified Flow на нативных осях 4D-тензора
     t_raw = torch.rand(1, device=device, dtype=torch.bfloat16)
     t_attr = (3.0 * t_raw) / (1.0 + 2.0 * t_raw)
     noise = torch.randn_like(latents)
     t_model_scale = (t_attr.clone() * 1000.0).to(device=device, dtype=torch.bfloat16)
     
-    packed_noisy_latents = (1.0 - t_attr.view(-1, 1, 1)) * latents + t_attr.view(-1, 1, 1) * noise
+    # Прямой сдвиг мантиссы шума в 4D пространстве кадра
+    noisy_latents = (1.0 - t_attr.view(-1, 1, 1, 1)) * latents + t_attr.view(-1, 1, 1, 1) * noise
 
-    # 3. Нарезка позиционных сеток RoPE на основе патчей кадра (из latents.shape[1] = 1024)
-    num_patches = latents.shape[1]
-    side = int(num_patches ** 0.5) # Жесткие 32 патча под разрешение 512
-    img_ids = generate_chroma_img_ids(side * 16, side * 16, device)
+    # 3. Нативная упаковка патчей: сжатие 4D (1, 16, 64, 64) -> 3D (1, 1024, 64)
+    packed_noisy_latents = pack_latents_to_patches(noisy_latents)
+
+    # 4. Нарезка позиционных сеток RoPE на основе упакованной геометрии (32x32 = 1024)
+    img_ids = generate_chroma_img_ids(32 * 16, 32 * 16, device)
     
     # Геометрию масок и текстовых айдишников привязываем к реальной длине текста (prompt_embeds.shape[1] = 128)
     txt_len = prompt_embeds.shape[1]
     txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
     kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
-#--------- Окончание блока №1_3D_ADAPTATION_FINAL_CURE
+#--------- Окончание блока №1_4D_NATIVE_PACK
 
 #---------- Старт блока №2_FINAL_POSITIONAL
     # 4. Градиентный чекпоинтинг: жесткое позиционное выравнивание 8 портов
