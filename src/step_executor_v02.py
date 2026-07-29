@@ -85,15 +85,19 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     # Дифференциальный спуск Autograd-графа
     (loss_active / TrainConfig.GRADIENT_ACCUMULATION_STEPS).backward()
     
-    # 6. Космофлотская средневзвешенная смарт-телеметрия (моменты прогноза и полки VRAM)
+#---------- Старт блока №6_TELEMETRY_FIX
+    # 6. Настоящая раздельная телеметрия осей без строковых заглушек альтеров
     with torch.no_grad():
-        m_pred = pred_tensor_f32.mean().item()
-        std_pred = pred_tensor_f32.std().item()
-        vram_active = torch.cuda.memory_allocated() / (1024 ** 3)
-        vram_reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+        m_pred = pred_tensor_f32. mean(). item()
+        std_pred = pred_tensor_f32. std(). item()
+        vram_active = torch. cuda. memory_allocated() / ( 1024 ** 3)
+        vram_reserved = torch. cuda. memory_reserved() / ( 1024 ** 3)
         
-        print(f"📊 [Кадр {frame_idx}] t_noise={t_attr.item():.3f} | Loss={loss_active.item():.4f} | "
-              f"M_pred={m_pred:.4f}±{std_pred:.4f} | VRAM Акт/Резерв: {vram_active:.2f}/{vram_reserved:.2f} GB")
+        print(f"\n📊 [Кадр {frame_idx}] t_noise={t_attr.item():.3f} | Loss={loss_active.item():.4f}")
+        print(f"📡 [ПРИБОРЫ] Физическая форма кадра в VRAM: {list(target_flow.shape)}")
+        print(f"📡 [ПРИБОРЫ] Геометрия выхода ядра: {list(pred_tensor_f32.shape)}")
+        print(f"📊 M_pred={m_pred:.4f} ±{std_pred:.4f} | VRAM Акт/Резерв: {vram_active:.2f}/{vram_reserved:.2f} GB\n")
+#--------- Окончание блока №6_TELEMETRY_FIX
         
     # 7. Извлечение безопасных CPU-клонов до тотального выжигания памяти кадра
     loss_val = loss_active.detach().clone()
