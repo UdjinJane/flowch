@@ -30,16 +30,28 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
     # 4. Синхронизация шины автокаста — перекоммутация нативных портов ядра Chroma
     import contextlib
     
+#---------- Старт блока №1_RUNNER_FINAL
+    # 4. Полная нативная коммутация под жесткую сигнатуру Chroma.forward()
     target_engine = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
+    
+    # Сборка маски текста на основе размерности эмбеддингов
+    txt_mask_native = torch.ones(prompt_embeds.shape[0], prompt_embeds.shape[1], device=device, dtype=torch.bfloat16)
+    
+    # Извлечение вектора дистилляции guidance (если нет в батче, инициализируем единичным вектором)
+    guidance_tensor = batch.get("guidance", torch.ones(prompt_embeds.shape[0], device=device, dtype=torch.bfloat16))
+    if isinstance(guidance_tensor, torch.Tensor):
+        guidance_tensor = guidance_tensor.to(device=device, dtype=torch.bfloat16)
+        
     out = target_engine(
-        x=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
-        context=prompt_embeds.to(device=device, dtype=torch.bfloat16),
-        timesteps=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
+        img=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
+        img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
+        txt=prompt_embeds.to(device=device, dtype=torch.bfloat16),
         txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
-        img_ids=img_ids.to(device=device, dtype=torch.bfloat16)
+        txt_mask=txt_mask_native,
+        timesteps=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
+        guidance=guidance_tensor
     )
-#--------- Окончание блока №1_RUNNER_PATCH
-
+#--------- Окончание блока №1_RUNNER_FINAL
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
     pred_tensor = out[0] if isinstance(out, tuple) else out
