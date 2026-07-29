@@ -49,7 +49,7 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     # 4. Нарезка позиционных сеток RoPE на основе упакованной геометрии (32x32 = 1024)
     img_ids = generate_chroma_img_ids(32 * 16, 32 * 16, device)
     
-    # Геометрию масок и текстовых айдишников привязываем к реальной длине текста (prompt_embeds.shape[1] = 128)
+# Накатить взамен интервала 52-56 на вашем экране:
     txt_len = prompt_embeds.shape[1]
     txt_ids_aligned = torch.zeros(1, txt_len, 3, device=device, dtype=torch.bfloat16)
     kwargs_mask = {"txt_mask": torch.ones((1, txt_len), device=device, dtype=torch.bfloat16)}
