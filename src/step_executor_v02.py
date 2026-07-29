@@ -67,10 +67,12 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
         )
 #--------- Окончание блока №2_FINAL
         
-    # 5. Эвакуация математики лосса из-под автокаста строго во float32
-    target_flow = pack_latents_to_patches(noise - latents).float().to(device=device)
+#---------- Старт блока №3_PATCH
+    # 5. Эвакуация математики лосса из-под автокаста строго во float32 с изоляцией градиентов
+    target_flow = pack_latents_to_patches((noise - latents).detach()).float().to(device=device)
     pred_tensor_f32 = pred_tensor.float()
-    
+#--------- Окончание блока №3_PATCH
+
     # Расчет маски весов и стабильный Huber/MSE шаг
     weight_mask = (1.0 / (1.0 - t_attr.float().view(-1, 1, 1) + 1e-4)).clamp(max=10.0).to(device=device)
     loss_active = (F.mse_loss(pred_tensor_f32, target_flow, reduction="none") * weight_mask).mean()
