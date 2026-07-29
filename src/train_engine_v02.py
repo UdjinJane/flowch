@@ -115,3 +115,5 @@ if __name__ == "__main__":
     dataloader, model, optimizer = init_components()
     run_main_loop(dataloader, model, optimizer)
 #--------- Окончание блока №8
+
+
