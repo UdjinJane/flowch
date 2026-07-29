@@ -1,4 +1,5 @@
 import torch
+import contextlib
 
 def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr, prompt_embeds, pooled_projections, txt_ids, img_ids):
     device = torch.device("cuda")
@@ -26,32 +27,25 @@ def run_lora_model_step(lora_model, batch, packed_noisy_latents, timesteps_attr,
         print("="*50 + "\n")
         run_lora_model_step._telemetry_fired = True
 
-#---------- Старт блока №1_RUNNER_PATCH
-    # 4. Синхронизация шины автокаста — перекоммутация нативных портов ядра Chroma
-    import contextlib
-    
-#---------- Старт блока №1_RUNNER_FINAL
-    # 4. Полная нативная коммутация под жесткую сигнатуру Chroma.forward()
+
+#---------- Финальная интеграция Chroma.forward()
+    # 4. Нативная коммутация под сигнатуру Chroma
     target_engine = lora_model.base_model.model if hasattr(lora_model, "base_model") else lora_model
     
-    # Сборка маски текста на основе размерности эмбеддингов
-    txt_mask_native = torch.ones(prompt_embeds.shape[0], prompt_embeds.shape[1], device=device, dtype=torch.bfloat16)
-    
-    # Извлечение вектора дистилляции guidance (если нет в батче, инициализируем единичным вектором)
-    guidance_tensor = batch.get("guidance", torch.ones(prompt_embeds.shape[0], device=device, dtype=torch.bfloat16))
-    if isinstance(guidance_tensor, torch.Tensor):
-        guidance_tensor = guidance_tensor.to(device=device, dtype=torch.bfloat16)
+    # Подготовка тензоров в bfloat16
+    txt_mask = torch.ones(prompt_embeds.shape[:2], device=device, dtype=torch.bfloat16)
+    guidance = batch.get("guidance", torch.ones(prompt_embeds.shape[0], device=device, dtype=torch.bfloat16)).to(device, torch.bfloat16)
         
     out = target_engine(
-        img=packed_noisy_latents.to(device=device, dtype=torch.bfloat16),
-        img_ids=img_ids.to(device=device, dtype=torch.bfloat16),
-        txt=prompt_embeds.to(device=device, dtype=torch.bfloat16),
-        txt_ids=txt_ids.to(device=device, dtype=torch.bfloat16),
-        txt_mask=txt_mask_native,
-        timesteps=t_vector.to(device=device, dtype=torch.bfloat16) if t_vector is not None else None,
-        guidance=guidance_tensor
+        img=packed_noisy_latents.to(device, torch.bfloat16),
+        img_ids=img_ids.to(device, torch.bfloat16),
+        txt=prompt_embeds.to(device, torch.bfloat16),
+        txt_ids=txt_ids.to(device, torch.bfloat16),
+        txt_mask=txt_mask,
+        timesteps=t_vector.to(device, torch.bfloat16) if t_vector is not None else None,
+        guidance=guidance
     )
-#--------- Окончание блока №1_RUNNER_FINAL
+#--------- Конец интеграции
 
     # 4. Обработка выхода диффузионного ядра (извлекаем первый элемент из кортежа)
     pred_tensor = out[0] if isinstance(out, tuple) else out
