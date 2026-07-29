@@ -29,9 +29,13 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     from config import TrainConfig
     from model_runner_v02 import run_lora_model_step
 
-    # 1. Извлечение и подготовка тензоров кадра
-    latents = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
-    prompt_embeds = mega_batch["prompt_embeds"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
+#---------- Старт блока №1_REVERSE_PATCH
+    # 1. Аварийный реверс перепутанных ключей датасета прошлых инкарнаций
+    # Восстанавливаем физическое соответствие: латенты = 16 каналов, текст = 4096 каналов
+    latents = mega_batch["prompt_embeds"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
+    prompt_embeds = mega_batch["latents"][frame_idx:frame_idx+1].to(device, dtype=torch.bfloat16)
+#--------- Окончание блока №1_REVERSE_PATCH
+
     
     # 2. Математика Rectified Flow (динамический сдвиг мантиссы шума, shift=3.0)
     t_raw = torch.rand(1, device=device, dtype=torch.bfloat16)
