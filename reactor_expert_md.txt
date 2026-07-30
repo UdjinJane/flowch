@@ -1,132 +1,170 @@
-# Реактор Chroma Unlocked v50: Экспертное руководство
 
-## Общая информация
-- **Название модели:** Chroma-fp8-scaled
-- **Организация:** Clybius
-- **Репозиторий:** [Hugging Face](https://huggingface.co/Clybius/Chroma-fp8-scaled)
-- **Лицензия:** Apache 2.0
-- **Базовая задача:** Text-to-Image (генерация изображений из текста)
-- **Фреймворк:** PyTorch
-- **Классификация контента:** NSFW/Sensitive Content Verified
 
----
+====================================================================================
+CHROMA V02 REACTOR — EXPERT-LEVEL ARCHITECTURE DOCUMENTATION (V02_STABLE) 
+            MONOLITHIC TRAINING CONTROLLER FOR FLUX LORA ON WINDOWS WDDM  
+                RTX3090 / CUDA12.1 • VRAM LIMIT 21GB STABILITY MODE
+====================================================================================
 
-## Архитектура и квантование
-- **Архитектурная семья:** Flux MMDiT / Rectified Flow (Flow Matching)
-- **Версия модели:** v50 (Annealed variant)
-- **Основное разрешение:** 512x512
-- **Тип квантования:**
-  - FP8 Mixed Precision (e4m3fn / e5m2).
-  - Compression: Learned SVD via TorchAO.
-- **Состояние текстовых энкодеров:** Удалены из файла весов.
-- **VAE-совместимость:** Flux-VAE-BF16 dependent.
 
----
+== TABLE OF CONTENTS ==
 
-## Аппаратные ограничения и бенчмарки
-- **Статический VRAM:** 17.8 GB (при загрузке модели).
-- **Рекомендуемое GPU:** NVIDIA RTX 3090 / RTX 4090 (24 GB VRAM).
-- **VRAM-стратегия:**
-  - Dynamic Offloading с `max_split_size_mb = 512`.
-  - Рекомендация: `CudaSysMemToBase = 0` для блокировки spilling.
+[SECTION 0] OVERVIEW — REACTOR ARCHITECTURE PHILOSOPHY (V02_STABLE_COMPLIANCE)  
+    [PHASE-LEVEL SUMMARY]: PHASE_0_THROUGH_PHASE_7 EXECUTION FLOW    
+        KEY DESIGN PRINCIPLES: MONOLITHIC • VRAM-GUARDED • CHECKPOINTED
 
----
+[SECTION 1] CONFIGURATION LAYER — config.py (GLOBAL STATE & HYPERPARAMETERS)
+    PATHS, ENV_VARS, HYPERS
+     
+[SCTION 2] MODEL INITIALIZATION — lora_core_v02.py  
+[TORCHAO QUANTIZATION + PEFT WRAPPING
 
-## Параметры обучения и LoRA
-- **Базовый learning rate:** 2e-5
-- **Gradient accumulation baseline:** 2
-- **LoRA гиперпараметры (по умолчанию):**
-  - Rank: 16
-  - Alpha: 16
-  - Target modules:
-    - `to_q.0`
-    - `to_k.0`
-    - `to_v.0`
-    - `to_out.0`
-- **Frozen layers (bfloat16):**
-  - `x_embedder` (FP8 запрещен).
 
----
+PHASE-3: DATA LOADING LAYER
 
-## Файловая структура проекта (`Z:\flowch\src`)
-| Файл                          | Роль                                                                 | Примечания
-|-------------------------------|--------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `ao_optim_monolith_v02.py`     | AdamW8bit оптимизатор для LoRA, управление памятью (int8 → float32).   | Запрещен самоимпорт, импортируется только из `train_engine_v02.py`.
-| `chroma_math.py`               | Математические утилиты для Chroma (квантование, избежание коллизий).    | Используется через хак `sys.modules["src.math"] = chroma_math`.
-| `config.py`                    | Конфигурация среды (запрет AMD-компиляции, CUDA настройка).             | Устанавливает `QUANTO_DISABLE_CPP_EXT`, `HF_DISABLE_COMPILING`, `FORCE_CUDA`.
-| `dataset_v02.py`               | Обработка датасета и metadata.                                           | Интеграция с `Z:\flowch\dataset\mng_oks_bl\metadata.jsonl`.
-| `generate_v02.py`              | Генерация выходных изображений и логирования.                           | Сохраняет результаты в `Z:\flowch\output\images`.
-| `get_dataloader_v02.py`        | Загрузка данных для обучения (dataloader).                               | Используется в `train_engine_v02.py`.
-| `layers.py`                     | Базовые слои модели (LoRA, RoPE).                                       | Включает логику квантования через `_фильтр_магистрали()`.
-| `lora_core_v02.py`             | Ядро обучения LoRA (380 тензоров).                                      | Интегрируется в `train_engine_v02.py`.
-| `model_runner_v02.py`           | Запуск модели, management latents и текста.                              | Основной кондуктор для инференса/обучения.
-| `model.py`                      | Основная модель Chroma Unlocked v50 (FP8).                               | Загружается из `Z:\flowch\models_core\transformer`.
-| `step_executor_v02.py`         | Выполнение шагов обучения/инференса.                                     | Обрабатывает timesteps, проверки на OOM.
-| `step_optimizer_v02.py`        | Оптимизация шагов (clipping градиентов).                                 | Используется в контуре обратного распространения.
-| `telemetry_logger.py`           | Логирование телеметрии и журналирования ошибок.                          | Сохраняет логи в `Z:\flowch\output\logs`.
-| `train_engine_v02.py`           | Основной цикл обучения (LoRA, RoPE, OOM-обработка).                      | Точка входа для процесса обучения.
+[SECTION4]: step_executor_ v. py (CHECKPOINTED FRAME STEP)
+    PACKING • ROPE IDS INPUT PORTS
+    
+[SCTION5] COMPUTE GRAPH — model_runner_v02.py  
+        FLUX_TRANSFORMER FORWARD + BLOATCAST CAST
 
----
 
-## Ограничения и запреты
-1. **VRAM:**
-   - Лимит: 21.0 GB (dynamic offloading при превышении).
-   - Рекомендация: `CudaSysMemToBase = 0`.
+PHASE6: OPTIMIZATION LAYER
 
-2. **Режимы работы:**
-   - Боевой режим (`USE_EMULATORS = False`): Эмуляторы запрещены.
+[SECTION7]: TELEMETRY & LOGGING 
+FLUSH EVERY 10 STEPS 
 
-3. **Запреты:**
-   - Самоимпорт: Запрещен `from ao_optim_monolith import ...`.
-   - Хардкодные пути: Нет `sys.path` внутри `ao_optim_monolith_v02.py`.
-   - FP8 для frozen layers: Запрещен для `x_embedder`.
+SHARED MODULES
+layers.chroma_math ROPE ATTENTION FLASH_ATTN
 
----
 
-## Ключевые проверки и логика
-1. **VRAM и OOM:**
-   ```python
-   del pred_tensor, pred_tensor_f32, weight_mask, loss_active, target_flow
-   del latents, prompt_embeds, t_raw, t_attr, noise, noisy_latents, packed_noisy_latents
-   del img_ids, txt_ids_aligned, kwargs_mask
-   ```
+== FILE REFERENCE TABLE (PROJECT FILES FUNCTIONAL DESCRIPTION) == 
 
-2. **Timestep:**
-   - Должен быть в `[0.0, 1.0]` с маржином (`epsilon=1e-5`).
 
-3. **LoRA-градиенты:**
-   - Clipping: `max_norm=1.0`.
-   - Проверка на zero-градиенты.
+====================================================================================
+CHROMA V02 PROJECT — COMPLETE ARCHITECTURE MAP FOR LLM UNDERSTANDING  
+        "VIRGINIA" REACTOR DESIGN DOCUMENT • EXPERT-LEVEL INTERPRETATION GUIDE 
+          ===========================================
 
----
 
-## Инструкции по эксплуатации
-1. **Загрузка модели:**
-   ```python
-   import torch
-   from safetensors.torch import load_file
-   model = load_file("chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors")
-   ```
+== SECTION 1: INITIALIZATION & CONFIGURATION (PHASES 0–2) ==
 
-2. **Обработка latents и текста:**
-   - Latents: `(B, 16, H, W)` (H и W должны быть четными).
-   - Text embeds: `(1, 256, 4096)`.
+[FILE]: config.py
+    FUNCTIONALITY:: Global configuration hub containing all hyperparameters, paths, and environment variables required for the training loop. Defines dataset/cache/model directories in relative form; sets VRAM limits (~21GB), batch size=1, max sequence length=128 (T5 truncation to prevent RoPE explosion); LoRA rank/alpha targets ("img_attn.qkv" etc.); and torch.cuda memory management settings for WDDM Windows drivers.
+    KEY VARIABLES:  
+        - DATASET_DIR = "dataset/mng_oks_bl/" → metadata.jsonl + text_cache/*.pt (T5) / latent_cache/* (images). 
+      OUTPUT_DIR, LOGS_DIR paths; MODELS_CORE/transformer/vae/text_encoder weights (.safetensors); LORA_RANK=4 ALPHA=4.
+        - VRAM_LIMIT_GB = 21.0 • PYTORCH_CUDA_ALLOC_CONF(max_split_size_mb:64,gc_threshold:.9).
 
-3. **Обучение LoRA:**
-   - Использовать `ao_optim_monolith_v02.py` для AdamW8bit.
-   - Проверки:
-     ```python
-     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-     ```
 
-4. **Журналирование:**
-   - Логи сохраняются в `Z:\flowch\output\logs`.
+[FILE]: lora_core_v02.py  
+    FUNCTIONALITY:: Initializes the Flux Chroma transformer from safetensors checkpoint, cleans weight key names (strip "model.diffusion_model." prefix), auto-detects double/single block depths by scanning state_dict keys; applies TorchAO float8_weight_only quantization with custom filter_fn to avoid small layers (<16 dims); wraps model in PEFT LoRA(r=4) targeting only ["img_attn.qkv","txt_qkvvqkl" "linear/2"]; freezes all backbone weights except x_embedder (casted back to bfloat16 for numerical stability).
+    KEY FUNCTIONS:  
+        load_file() → clean_keys(), detect_blocks, CHROMA(chroma_params), quantize_(transformer,float8_weight_only(filter_fn)), get_peft_model().
 
----
 
-## Рекомендации для ИИ Гемма
-- Для блок-схемы использовать только боевой режим (`USE_EMULATORS = False`).
-- Обращать внимание на аппаратные ограничения (VRAM, CUDA).
-- Проверять integrity модели через SHA-256 checksum.
+[FILE]: dataset_v02.py / get_dataloader_ v. py (REAL DATASET PATH) 
+FUNCTIONALITY:: CachedFluxDatasetV02 loads metadata.jsonl once at startup, then preloads all text_cache/*.pt + latent_cache/* into RAM for zero-I/O inference during training; returns batches of shape {"latents": [B,C,H/8,W/8], "prompt_embeds":[ B,T5_L×D]} where T5 sequence is truncated to MAX_SEQ_LEN=128.
+    KEY FUNCTIONS:  
+        - CachedFluxDatasetV02.__init__(): iterates metadata.jsonl, loads each pair of .pt files (T5 + latent), squeezes batch axis [B,C,H/8,W//] → returns {"latents":..., "prompt_embeds"}. 
+      __len__, _getitem_.
+        - get_dataloader_v02() creates DataLoader(batch_size=1, shuffle=True).
 
-© 2026 Бортовой журнал космошхуны Flowch. Все права защищены Омниссией.
+
+[FILE]: model.py / layers.py (SHARED MODULES — CORE TRANSFORMER ARCH)  
+    FUNCTIONALITY:: Pure PyTorch implementation of the Flux Chroma MMDiT transformer without Diffusers dependencies. Contains: EmbedND(ROPE), SelfAttention(qkv chunking + attention()), DoubleStreamBlock(img/txt parallel MLP+attn.), SingleStreamBlock(combined stream linear1/2 modulation lin, LastLayer(out_channels=64).
+    KEY CLASSES & METHODS:  
+        - Chroma(nn.Module): __init__(params) builds img_in.txt_in.pe_embedder.double_blocks(single_blocks.guidance_in.approximator.final_layer. 
+          forward(img,timesteps_txt_ids,img_mask,...)) returns output logits [B,C].
+
+
+[FILE]: chroma_math.py (SHARED MATH UTILITIES)  
+    FUNCTIONALITY:: Implements RoPE positional embeddings and attention computation compatible with FlashAttn2 fallback; provides rope(pos,dim,theta), apply_rope(q,k,prefix_cis).
+      KEY FUNCTIONS:attention() uses torch.nn.functional.scaled_dot_product_attention if flash_attn unavailable.
+
+
+== SECTION 3 STEP EXECUTION & COMPUTE GRAPH (PHASES 4–5) ==
+
+[FILE]: step_executor_v02.py  
+    FUNCTIONALITY:: Executes one training frame in a checkpointed manner: packs latents to patches(16×, view + permute flatten), generates img_ids for RoPE positioning; constructs input dict {packed_latents,img_ids,txt_mask,pooled_proj_dummy}, wraps run_lora_model_step inside torch.amp.autocast(dtype=torch.bfloat16) with checkpoint=True use_reentrant=False to save VRAM during forward pass.
+    KEY FUNCTIONS:  
+        pack_latents_to_patches(latents): 4D →3 D, patch_size=16 (p×H// p ×W//). 
+          generate_chroma_img_ids(h,w): creates [h/p ,w /_,_ ] grid of positions for RoPE alignment.
+      execute_single_frame_step(mega_batch,...) returns {loss_val,t_attr_cpu,pred_tensor,target_flow}.
+
+
+[FILE]: model_runner_v02.py  
+    FUNCTIONALITY:: Tensor routing layer that reconstructs the FluxTransformer forward interface expected by ChromaPipeline: upcasts all norms to bfloat16; reshapes timesteps into 1D batch-compatible vector; invokes target_engine.forward(img,txt_ids,txt_mask,...); handles output tuple unpacking and dtype casting back.
+    KEY FUNCTIONS::  
+        run_lora_model_step(lora,batch,packed_noisy_latents,img_ids.txt_masks,..): returns pred_tensor [B,C] ready for scheduler step in diffusion loop (simulated via flow matching).
+
+
+[FILE]: chroma_pipeline.py / generate_v02.py (INFERENC E MODE) 
+    FUNCTIONALITY:: ChromaPipeline wraps FluxTransformer+VAE+Scheduler from diffusers; used only for inference testing. Loads T5/CLIP embeddings directly from text_cache/*.pt, constructs prompt_attn_mask ones(B,T), computes pooled_projections as mean over CLIP dimension, calls pipe(prompt_embeds,height=width,resolution) returning decoded PIL images saved to OUTPUT_DIR/images/. 
+    NOTE: This path is bypassed during main training loop (use step_executor instead).
+    
+== SECTION 4 OPTIMIZATION LAYER ==
+
+[FILE]: ao_optim_monolith_v02.py  
+FUNCTIONALITY:: Custom AdamW optimizer with int8 quantized momentum states to reduce VRAM pressure; stores exp_avg/exp_sq as OptimState8BitTensor objects (int×scale), dequantizes only during gradient calculation, re-quantizes after update.
+    KEY METHODS: _quantize_8bit(tensor): computes scale=max_val/127., rounds/clamps int8 return. 
+      step(closure) loops over param groups; applies AdamW formula in float32 then quantization again to persist 8-bit states on GPU (reduces VRAM fragmentation).
+
+
+[FILE]: step_optimizer_ v02.py  
+    FUNCTIONALITY:: Post-step guardrails: clips gradient norms of trainable LoRA params(<=1.0), checks for NaN/Inf, zeros gradients + CUDA cache eviction; accumulates telemetry metrics before logging.
+      KEY FUNCTIONS run_optimier_and_telemetry(model.optimizer.loss,..): returns True after successful step or False on crash (NaN detected).
+
+
+== SECTION5 TELEMETRY LAYER ==
+
+[FILE]: telemetry_logger.py  
+    FUNCTIONALITY:: Collects per-step tensor statistics: mean/std/min/max for pred/target/loss/timestep; flushes aggregated logs every 10 steps to LOGS_DIR/session_YYYYMMDD_HH.txt.
+      KEY METHODS accumulate_step(t_attr,pred,target, loss): appends dicts without autograd hooks (torch.no_grad). 
+        flush_aggregated_log(global_step_epoch) computes rolling averages and writes formatted session log line; clears buffers after each write.
+
+
+== FILE REFERENCE TABLE — COMPLETE LISTING ==
+
+| File Name                                      | Functional Description                                                                                           │
+┼─────────+--------------------------------──────  ─────────────────────────────────────────────────────────────────────────│ 
+config.py                                       Global configuration hub with hyperparameters (RES=512,BS=1,LORA_RANK/ALPHA), paths to dataset/cache/models; env vars for CUDA memory management.         │  
+lora_core_v02.py                                Initializes Flux Chroma from safetensors weights in CPU→GPU mode; applies float8_weight_only quantization with filter_fn (skip small layers); wraps model in PEFT LoRA(r=4) targeting ["img_attn.qkv","txt_qkvvqkl" linear1/linear2]; freezes all backbone except x_embedder(bfloat).  │  
+dataset_v02.py / get_dataloader_ v. py          CachedFluxDatasetV02 preloads metadata.jsonl + text_cache/*.pt (T5) and latent_cache/* into RAM for zero-I/O training; returns batches {"latents", "prompt_em"} with truncated T5 sequences(=128 tokens).         │  
+step_executor_v02.py                            Executes one frame per step in checkpointed manner: packs latents to 3D patches, generates img_ids via RoPE grid alignment; runs forward pass through model_runner inside autocast(bfloat) + torch.utils.checkpoint(use_reentrant=False); returns loss and CPU tensors for logging.    │  
+model_runner_v02.py                             Tensor routing interface mimicking FluxTransformer.forward: upcasts norms to bfloat16, reshapes timesteps into batch-compatible vector; invokes target_engine(img,txt_ids,...), handles output tuple unpacking + dtype casting back.         │ 
+ao_optim_monolith_ v02.py                       Custom AdamW optimizer with int8 quantized momentum states (OptimStateTensor): stores exp_avg/exp_sq as int×scale, dequantizes only during gradient computation to reduce VRAM fragmentation under RTX3090 limits(≈ 21GB).     │  
+step_optimizer_v02.py                           Post-step guardrails: clips LoRA grad norms(max_norm=1.0), checks for NaN/Inf before optimizer.step(); zeros grads + CUDA cache eviction; accumulates telemetry metrics and logs crash if unstable (NaN detected → skip frame)    │ 
+telemetry_logger.py                             Collects per-tensor statistics(mean/std/min/max) across 10-step windows using torch.no_grad isolation from autograd graph; flushes session log file every N steps to LOGS_DIR/session_YYYYMMDD_HH.txt.              │  
+model.py / layers.py                            Pure PyTorch implementation of Flux Chroma MMDiT transformer without Diffusers: EmbedND(ROPE), SelfAttention(qkv chunking + attention()), DoubleStreamBlock(img/txt parallel MLP+attn.), SingleStreamBlock(combined stream linear/2 modulation lin, LastLayer(out_channels=64).          │  
+chroma_math.py                                  Implements RoPE positional embeddings and scaled_dot_product_attention compatible with FlashAttn2 fallback; provides rope(pos,dim theta), apply_rope(q,k,prefix_cis) for position-aware attention computation.         │   
+transformer_config.json                         JSON config specifying transformer architecture: num_layers=19, patch_size=2 (for VAE packing/decoding compatibility); sample_resolution = 512x512; joint_attention_dim(4096).                                   │  
+vae_config.json                                  Decoded latent dimensions for AutoencoderKL decoder with scaling_factor=0.36 and shift_correction≈+/- .                                              
+
+
+== ARCHITECTURE SUMMARY ==
+
+CHROMA V02 REACTOR operates in MONOLITHIC MODE on Windows WDDM/RTX 3090 to train Flux-LoRA models via flow-matching (rectified diffusion) with checkpointed forward passes for VRAM conservation. The main training loop is driven by step_executor_v02.py, which orchestrates:
+
+1→ INITIALIZATION → config + lora_core loads Chroma weights in CPU mode and quantizes to float8; dataset preloads latents into RAM (zero-I/O during train).
+  
+   2 STEP EXECUTION packs latent images into patches(6×3) for RoPE alignment, constructs input ports {packed_latent,img_ids,txt_mask}, runs transformer forward via checkpointed model_runner.run().
+
+      4→ OPTIMIZATION quantizes momentum states to int8 before each gradient step (reduces VRAM pressure), clips gradients(max_norm=1.0).
+        FLUSH TELEMETRY aggregates metrics every N steps, writes session log file for monitoring loss/mean/std over time
+
+
+All shared libraries(model.py / layers.chroma_math) are imported directly without external dependencies beyond PyTorch and PEFT + TorchAO quantization stack (torchao.float8_weight_only() filter_fn skips small linear modules).
+
+VRAM GUARDRAILS:  
+- All activations casted to bfloat16 before forward pass.
+   OptimStateTensor stores moments as int×scale → reduces VRAM footprint by ~2–3GB on RTX 3090(≈ 48 GB total, usable ≈21).
+
+INFERENCE PATH (OPTIONAL):  
+generate_v02.py uses ChromaPipeline from diffusers to decode saved images via FakeVAE; intended only for testing/debugging.
+
+
+== END OF EXPERT DOCUMENTATION ==
+====================================================================================
+
+
