@@ -17,15 +17,23 @@ def pack_latents_to_patches(latents):
     return latents.view(b, c, h // p, p, w // p, p).permute(0, 2, 4, 1, 3, 5).flatten(3).flatten(1, 2)
 
 #----------- КОНЕЦ БЛОКА №1_4D_NATIVE_PACK_FIX --------------
+#----------- БЛОК №4_IMG_IDS_SCALE_FIX --------------
+# Файл: src/step_executor_v02.py
+# Позиция: Замена тела функции generate_chroma_img_ids (строки 22-28)
+# Привязка: Сразу под комментарием """Генерация трехмерных RoPE идентификаторов кадра под длину Хромы."""
 
 def generate_chroma_img_ids(height, width, device):
     """Генерация трехмерных RoPE идентификаторов кадра под длину Хромы."""
-    p = 16
+    # КРИТИЧЕСКИЙ ФИКС: Переводим генератор на нативный шаг Кузнецов p = 2 вместо старого p = 16
+    p = 2
     h_patches, w_patches = height // p, width // p
     img_ids = torch.zeros(h_patches, w_patches, 3, device=device, dtype=torch.bfloat16)
     img_ids[..., 1] = torch.arange(h_patches, device=device)[:, None]
     img_ids[..., 2] = torch.arange(w_patches, device=device)[None, :]
     return img_ids.view(1, -1, 3)
+
+#----------- КОНЕЦ БЛОКА №4_IMG_IDS_SCALE_FIX --------------
+
 
 # === НАЧАЛО СЛУЖЕБНОГО БЛОКА №2: МАРШЕВЫЙ ШАГ И СМАРТ-ТЕЛЕМЕТРИЯ ===
 def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
