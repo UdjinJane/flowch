@@ -50,7 +50,7 @@ def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
 
 def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
     # СНЙПЕРСКАЯ ТЕЛЕМЕТРИЯ: Снимаем метрики деформации осей внимания
-    
+
     print("\n" + "="*50)
     print("[ДАТЧИК RoPE] Анализ входящих фаз тензоров:")
     print(f" -> xq.shape: {list(xq.shape)} | xk.shape: {list(xk.shape)}")
@@ -58,6 +58,16 @@ def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tenso
     print("="*50 + "\n")
 
 #----------- КОНЕЦ БЛОКА №2_ROPE_TELEMETRY --------------
+
+#----------- БЛОК №3_ROPE_DYNAMIC_SLICE_FIX --------------
+    # КРИТИЧЕСКИЙ ФИКС: Динамически обрезаем сетку частот RoPE под фактическую длину последовательности входящего тензора
+    if freqs_cis.shape[1] != xq.shape[1]:
+        freqs_cis = freqs_cis[:, :xq.shape[1], :]
+
+    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
+    xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
+#----------- КОНЕЦ БЛОКА №3_ROPE_DYNAMIC_SLICE_FIX --------------
+
     xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
     xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
     xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
