@@ -18,7 +18,6 @@ def pack_latents_to_patches(latents):
 
 #----------- КОНЕЦ БЛОКА №1_4D_NATIVE_PACK_FIX --------------
 
-
 def generate_chroma_img_ids(height, width, device):
     """Генерация трехмерных RoPE идентификаторов кадра под длину Хромы."""
     p = 16
