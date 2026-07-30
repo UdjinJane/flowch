@@ -50,15 +50,15 @@ def rope(pos: Tensor, dim: int, theta: int) -> Tensor:
 
 def apply_rope(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
     # СНЙПЕРСКАЯ ТЕЛЕМЕТРИЯ: Снимаем метрики деформации осей внимания
+    
     print("\n" + "="*50)
     print("[ДАТЧИК RoPE] Анализ входящих фаз тензоров:")
     print(f" -> xq.shape: {list(xq.shape)} | xk.shape: {list(xk.shape)}")
     print(f" -> freqs_cis.shape: {list(freqs_cis.shape)}")
     print("="*50 + "\n")
 
-    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
 #----------- КОНЕЦ БЛОКА №2_ROPE_TELEMETRY --------------
-
+    xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
     xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
     xq_out = freqs_cis[..., 0] * xq_[..., 0] + freqs_cis[..., 1] * xq_[..., 1]
     xk_out = freqs_cis[..., 0] * xk_[..., 0] + freqs_cis[..., 1] * xk_[..., 1]
