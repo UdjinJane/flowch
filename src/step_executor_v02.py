@@ -4,12 +4,20 @@ from torch.utils.checkpoint import checkpoint
 from config import TrainConfig
 from model_runner_v02 import run_lora_model_step
 
+#----------- БЛОК №1_4D_NATIVE_PACK_FIX --------------
+# Файл: src/step_executor_v02.py
+# Позиция: Замена тела функции pack_latents_to_patches (строки 8-12)
+# Привязка: Сразу под комментарием """Каноническая упаковка латентов Хромы под 16x16 патчи Метрополии."""
+
 def pack_latents_to_patches(latents):
     """Каноническая упаковка латентов Хромы под 16x16 патчи Метрополии."""
     b, c, h, w = latents.shape
-    # Пересобираем оси: patch_size=16 (вместо ошибочного 2x2 у альтеров)
-    p = 16
+    # КРИТИЧЕСКИЙ ФИКС: Возвращаем p = 2 (оригинальный шаг кузнецов) вместо взрывоопасного p = 16
+    p = 2
     return latents.view(b, c, h // p, p, w // p, p).permute(0, 2, 4, 1, 3, 5).flatten(3).flatten(1, 2)
+
+#----------- КОНЕЦ БЛОКА №1_4D_NATIVE_PACK_FIX --------------
+
 
 def generate_chroma_img_ids(height, width, device):
     """Генерация трехмерных RoPE идентификаторов кадра под длину Хромы."""
