@@ -62,7 +62,9 @@ def execute_single_frame_step(mega_batch, frame_idx, device, lora_model):
     packed_noisy_latents = pack_latents_to_patches(noisy_latents)
 
     # 4. Нарезка позиционных сеток RoPE на основе упакованной геометрии (32x32 = 1024)
-    img_ids = generate_chroma_img_ids(32 * 16, 32 * 16, device)
+    #img_ids = generate_chroma_img_ids(32 * 16, 32 * 16, device)
+    # КРИТИЧЕСКИЙ ФИКС: Приводим множитель к нативному p = 2 (32 * 2), чтобы получить сетку ровно на 1024 токена
+    img_ids = generate_chroma_img_ids(32 * 2, 32 * 2, device)
     
     # Геометрию масок и текстовых айдишников привязываем к реальной длине текста (prompt_embeds.shape[1] = 128)
     txt_len = prompt_embeds.shape[1]
