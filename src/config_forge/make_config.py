@@ -56,40 +56,69 @@ def append_dataset_and_train_params(current_yaml: str, data_dir: str) -> str:
         "        dtype: bf16  # Вычисления строго в bfloat16",
     ]
     return current_yaml + "\n".join(extra_lines) + "\n"
-def finalize_and_save(base_yaml: str, root_dir: Path):
-    """Допись блока модели, сэмплов и физическое сохранение файла"""
-    # Локальный путь к нашей запечатанной SVD-красотке из трюма
-    local_model = (
-        "Z:\\\\flowch\\\\models_core\\\\transformer\\\\"
-        "chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"
-    )
+def assemble_and_save_monolith(config_dir: Path, data_dir: Path):
+    """Сборка параметров плавки с изоляцией T5XXL и запись в бункер"""
     
-    # Финальные строки параметров модели и генерации сэмплов
-    final_lines = [
-        "      model:",
-        f"        name_or_path: \"{local_model}\"  # Локальные веса",
-        "        quantize: true  # Квантование базы в 8-бит",
-        "      sample:",
-        "        sample_every: 250  # Шаг генерации тест-картинок",
-        "        width: 1024  # Ширина кадра для теста",
-        "        height: 1024  # Высота кадра для теста",
-    ]
+    # Реальные пути к нашей SVD-красотке и VAE из трюма сканирования
+    model_path = "Z:\\\\flowch\\\\models_core\\\\transformer\\\\chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"
+    vae_path = "Z:\\\\flowch\\\\models_core\\\\vae\\\\flux-vae-bf16.safetensors"
     
-    full_yaml = base_yaml + "\n".join(final_lines)
-    
-    # Замечание №1: Перенаправляем полетный лист в выделенный бункер
-    config_dir = root_dir / "src" / "config_models"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    
-    config_file = config_dir / "train_chroma_mng_oks.yaml"
-    
-    # Записываем монолитный конфиг в чистый отсек
-    config_file.write_text(full_yaml, encoding='utf-8')
-    log(f"Боевой конфиг запечатан в бункере: {config_file}")
+    yaml_content = f"""# ==============================================================================
+# БОЕВОЙ ПОЛЕТНЫЙ ЛИСТ: КУЗНЯ CHROMA (CORE SPEC V03)
+# БУНТ ПРИНЯТ. ТЕКСТОВЫЙ ЭНКОДЕР АМПУТИРОВАН ИЗ VRAM ДЛЯ ЗАЩИТЫ ОТ ОВЕРСВАПА
+# ==============================================================================
+
+job: extension
+config:
+  name: "chroma_mng_oks_v1"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "Z:\\\\flowch\\\\run"
+      device: cuda:0
+      
+      # Сектор 1: Настройки LoRA-матрицы по канону Kohya
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+        
+      # Сектор 2: Датасет и тотальный пре-кэш текстового пространства на диск Z
+      datasets:
+        - folder_path: "{str(data_dir).replace('\\', '\\\\')}"
+          caption_ext: "txt"
+          cache_latents_to_disk: true  # Кэш геометрии
+          cache_text_encoder_to_disk: true  # ЗАКОН ВЫЖЖЕННОЙ ЗЕМЛИ ДЛЯ T5XXL
+          
+      # Сектор 3: Контур стабилизации и оптимизаторы
+      train:
+        batch_size: 1
+        steps: 2000
+        gradient_checkpointing: true  # Autograd защита WDDM
+        optimizer: "adamw8bit"
+        dtype: bf16  # Вычисления строго в bfloat16 (Защита AdaLN)
+        
+      # Сектор 4: Изолированное FP8-ядро Метрополии
+      model:
+        name_or_path: "{model_path}"
+        vae_path: "{vae_path}"
+        quantize: true  # Включение TorchAO Hooks фильтрации
+        train_text_encoder: false  # Полное вымывание T5 из VRAM
+        
+      # Сектор 5: Контур безопасного тест-сэмплинга (без шага 0)
+      sample:
+        sample_every: 250
+        sample_start_step: 250  # Защита от краша на старте
+        width: 1024
+        height: 1024
+"""
+
+    target_file = config_dir / "train_chroma_mng_oks.yaml"
+    target_file.write_text(yaml_content.strip(), encoding='utf-8')
+    log(f"Реактор перенастроен! Чистый YAML запечатан в бункере: {target_file}")
 
 if __name__ == "__main__":
     log("Запуск генератора кузнечного конфига...")
-    root, data, run_dir = setup_environment()
-    yaml_data = build_config_text(run_dir, data)
-    yaml_data = append_dataset_and_train_params(yaml_data, str(data).replace("\\", "\\\\"))
-    finalize_and_save(yaml_data, root)
+    # 1. Запуск новой структуры окружения из Блока 6
+    root, data, config_dir = init_core_structure()
+    # 2. Прямой вызов сборщика монолита без промежуточного мусора
+    assemble_and_save_monolith(config_dir, data)
