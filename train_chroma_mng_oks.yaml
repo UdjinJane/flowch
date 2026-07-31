@@ -1,0 +1,29 @@
+job: extension
+config:
+  name: "chroma_mng_oks_v1"  # Имя папки сохранения
+  process:
+    - type: 'sd_trainer'  # Движок плавки
+      training_folder: "Z:\flowch\run"  # Куда лить веса
+      device: cuda:0  # Топливо — первая RTX 3090
+      network:
+        type: "lora"  # Архитектура адаптера
+        linear: 16  # Ранг матрицы (Rank)
+        linear_alpha: 16  # Альфа-множитель для баланса
+      datasets:
+        - folder_path: "Z:\\flowch\\dataset\\mng_oks_bl"  # Путь к картинкам mng_oks_bl
+          caption_ext: "txt"  # Описания из текстовых файлов
+          cache_latents_to_disk: true  # Кэш латентов на диск Z
+      train:
+        batch_size: 1  # Размер батча строго единица
+        steps: 2000  # Длина прыжка — 2000 шагов
+        gradient_accumulation: 1  # Накопление градиентов отключено
+        gradient_checkpointing: true  # Защита VRAM от переполнения
+        optimizer: "adamw8bit"  # 8-битный оптимизатор Adam
+        dtype: bf16  # Вычисления строго в bfloat16
+      model:
+        name_or_path: "lodestones/Chroma"  # Базовые веса
+        quantize: true  # Квантование базы в 8-бит
+      sample:
+        sample_every: 250  # Шаг генерации тест-картинок
+        width: 1024  # Ширина кадра для теста
+        height: 1024  # Высота кадра для теста
