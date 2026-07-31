@@ -1,29 +1,47 @@
+# ==============================================================================
+# БОЕВОЙ ПОЛЕТНЫЙ ЛИСТ: КУЗНЯ CHROMA (CORE SPEC V03)
+# БУНТ ПРИНЯТ. ТЕКСТОВЫЙ ЭНКОДЕР АМПУТИРОВАН ИЗ VRAM ДЛЯ ЗАЩИТЫ ОТ ОВЕРСВАПА
+# ==============================================================================
+
 job: extension
 config:
-  name: "chroma_mng_oks_v1"  # Имя папки сохранения
+  name: "chroma_mng_oks_v1"
   process:
-    - type: 'sd_trainer'  # Движок плавки
-      training_folder: "Z:\flowch\run"  # Куда лить веса
-      device: cuda:0  # Топливо — первая RTX 3090
+    - type: 'sd_trainer'
+      training_folder: "Z:\\flowch\\run"
+      device: cuda:0
+      
+      # Сектор 1: Настройки LoRA-матрицы по канону Kohya
       network:
-        type: "lora"  # Архитектура адаптера
-        linear: 16  # Ранг матрицы (Rank)
-        linear_alpha: 16  # Альфа-множитель для баланса
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+        
+      # Сектор 2: Датасет и тотальный пре-кэш текстового пространства на диск Z
       datasets:
-        - folder_path: "Z:\\flowch\\dataset\\mng_oks_bl"  # Путь к картинкам mng_oks_bl
-          caption_ext: "txt"  # Описания из текстовых файлов
-          cache_latents_to_disk: true  # Кэш латентов на диск Z
+        - folder_path: "Z:\\flowch\\dataset\\mng_oks_bl"
+          caption_ext: "txt"
+          cache_latents_to_disk: true  # Кэш геометрии
+          cache_text_encoder_to_disk: true  # ЗАКОН ВЫЖЖЕННОЙ ЗЕМЛИ ДЛЯ T5XXL
+          
+      # Сектор 3: Контур стабилизации и оптимизаторы
       train:
-        batch_size: 1  # Размер батча строго единица
-        steps: 2000  # Длина прыжка — 2000 шагов
-        gradient_accumulation: 1  # Накопление градиентов отключено
-        gradient_checkpointing: true  # Защита VRAM от переполнения
-        optimizer: "adamw8bit"  # 8-битный оптимизатор Adam
-        dtype: bf16  # Вычисления строго в bfloat16
+        batch_size: 1
+        steps: 2000
+        gradient_checkpointing: true  # Autograd защита WDDM
+        optimizer: "adamw8bit"
+        dtype: bf16  # Вычисления строго в bfloat16 (Защита AdaLN)
+        
+      # Сектор 4: Изолированное FP8-ядро Метрополии
       model:
-        name_or_path: "Z:\\flowch\\models_core\\transformer\\chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"  # Локальные веса
-        quantize: true  # Квантование базы в 8-бит
+        name_or_path: "Z:\\flowch\\models_core\\transformer\\chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"
+        vae_path: "Z:\\flowch\\models_core\\vae\\flux-vae-bf16.safetensors"
+        quantize: true  # Включение TorchAO Hooks фильтрации
+        train_text_encoder: false  # Полное вымывание T5 из VRAM
+        
+      # Сектор 5: Контур безопасного тест-сэмплинга (без шага 0)
       sample:
-        sample_every: 250  # Шаг генерации тест-картинок
-        width: 1024  # Ширина кадра для теста
-        height: 1024  # Высота кадра для теста
+        sample_every: 250
+        sample_start_step: 250  # Защита от краша на старте
+        width: 1024
+        height: 1024

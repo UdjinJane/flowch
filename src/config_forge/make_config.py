@@ -59,6 +59,9 @@ def append_dataset_and_train_params(current_yaml: str, data_dir: str) -> str:
 def assemble_and_save_monolith(config_dir: Path, data_dir: Path):
     """Сборка параметров плавки с изоляцией T5XXL и запись в бункер"""
     
+    # Ремонт цепи: экранируем слэши пути датасета ЗА ПРЕДЕЛАМИ f-строки
+    safe_data_path = str(data_dir).replace('\\', '\\\\')
+    
     # Реальные пути к нашей SVD-красотке и VAE из трюма сканирования
     model_path = "Z:\\\\flowch\\\\models_core\\\\transformer\\\\chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"
     vae_path = "Z:\\\\flowch\\\\models_core\\\\vae\\\\flux-vae-bf16.safetensors"
@@ -84,7 +87,7 @@ config:
         
       # Сектор 2: Датасет и тотальный пре-кэш текстового пространства на диск Z
       datasets:
-        - folder_path: "{str(data_dir).replace('\\', '\\\\')}"
+        - folder_path: "{safe_data_path}"
           caption_ext: "txt"
           cache_latents_to_disk: true  # Кэш геометрии
           cache_text_encoder_to_disk: true  # ЗАКОН ВЫЖЖЕННОЙ ЗЕМЛИ ДЛЯ T5XXL
@@ -122,3 +125,4 @@ if __name__ == "__main__":
     root, data, config_dir = init_core_structure()
     # 2. Прямой вызов сборщика монолита без промежуточного мусора
     assemble_and_save_monolith(config_dir, data)
+
