@@ -1,27 +1,25 @@
 # -*- coding: utf-8 -*-
-import os  # Работа с операционной системой шхуны
-import sys # Контроль потоков вывода APEX
-from pathlib import Path # Навигация по файловым отсекам
+import os  # Инструмент операционной системы
+import sys # Управление потоками ввода-вывода APEX
+from pathlib import Path # Высокоуровневая навигация по дискам
 
 def log(msg: str):
-    """Явный UTF-8 вывод в консоль для песочницы"""
-    sys.stdout.buffer.write(f"[FORGE] {msg}\n".encode('utf-8'))
-def setup_environment() -> tuple[Path, Path, Path]:
-    """Разметка секторов диска Z под проект плавки"""
-    # Корневая папка нашей космошхуны
+    """Строгий UTF-8 вывод в терминал космошхуны"""
+    sys.stdout.buffer.write(f"[FORGE_CORE] {msg}\n".encode('utf-8'))
+
+def init_core_structure() -> tuple[Path, Path, Path]:
+    """Разметка физических секторов и проверка бункера config_models"""
     root = Path(r"Z:\flowch")
-    
-    # Сектор со старым датасетом (картинки + txt)
     data = root / "dataset" / "mng_oks_bl"
-    
-    # Сектор вывода (куда полетят веса LoRA и логи)
     run_dir = root / "run"
     
-    # Создаем папку вывода, если ее сдуло вакуумом
-    run_dir.mkdir(parents=True, exist_ok=True)
-    log(f"Сектор вывода run готов по адресу: {run_dir}")
+    # Замечание №1: Изолированный бункер для хранения полетных листов
+    config_dir = root / "src" / "config_models"
+    config_dir.mkdir(parents=True, exist_ok=True)
     
-    return root, data, run_dir
+    log(f"Бункер для YAML-конфигов развернут: {config_dir}")
+    return root, data, config_dir
+
 def build_config_text(run_dir: Path, data_dir: Path) -> str:
     """Сборка текстового массива YAML-конфига"""
     log("Начало генерации структуры полетного листа...")
