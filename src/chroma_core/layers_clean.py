@@ -194,7 +194,8 @@ class NerfEmbedder(nn.Module):
             # Возвращаем строго во float32, защищая Autograd-граф от деградации [1.3]
             return out
 #--------------------Окончание блока №4 ----------------------------
-#-------------------- Блок №5: Маршевые блоки DoubleStreamBlock и SingleStreamBlock --------------
+#-------------------- Блок №5-7: Маршевые блоки DoubleStreamBlock и SingleStreamBlock --------------
+
 class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int = 24, head_dim: int = 128):
         super().__init__()
@@ -202,15 +203,12 @@ class DoubleStreamBlock(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
         
-        # Раздельная нормализация потоков текста и картинок [1.3]
         self.txt_norm = RMSNorm(hidden_size)
         self.img_norm = RMSNorm(hidden_size)
         
-        # Линейные проекции (таргеты для инлайн LoRA швов) [1.2, 1.3]
         self.txt_attn = nn.Linear(hidden_size, hidden_size * 3)
         self.img_attn = nn.Linear(hidden_size, hidden_size * 3)
         
-        # Выравнивание внимания QKNorm для каждого заголовка [1.3]
         self.query_norm = RMSNorm(head_dim)
         self.key_norm = RMSNorm(head_dim)
         
@@ -221,20 +219,24 @@ class DoubleStreamBlock(nn.Module):
         ChromaTelemetry.verify(txt, "DoubleStream.txt_in", 3)
         ChromaTelemetry.verify(img, "DoubleStream.img_in", 3)
 
-        # Инлайн применение модуляции AdaLayerNorm-Zero [1.3]
-        # Вычисления адаптеров и сдвигов жестко удерживаются в bfloat16 [1.3]
+        # Вычисляем модуляцию в BF16
         txt_mod = self.txt_norm(txt) * (1 + mods["txt_scale"].to(txt.dtype)) + mods["txt_shift"].to(txt.dtype)
         img_mod = self.img_norm(img) * (1 + mods["img_scale"].to(img.dtype)) + mods["img_shift"].to(img.dtype)
 
-        # Проекция QKV (внимание вычисляется по динамическому сплиту [1.3])
+        # ЗАЩИТНЫЙ ХУК: Приводим активации к типу весов (исправление краша mat1/mat2)
+        txt_mod = txt_mod.to(self.txt_attn.weight.dtype)
+        img_mod = img_mod.to(self.img_attn.weight.dtype)
+
+        # Безопасный прогон проекций QKV
         qkv_txt = self.txt_attn(txt_mod)
         qkv_img = self.img_attn(img_mod)
         
-        # Применение QKNorm, расчет внимания, проекция назад
-        txt_out = self.txt_proj(qkv_txt[..., :self.hidden_size]) * mods["txt_gate"].to(txt.dtype)
-        img_out = self.img_proj(qkv_img[..., :self.hidden_size]) * mods["img_gate"].to(img.dtype)
+        # Обратная проекция с защитой по типу весов линейного слоя
+        txt_out = self.txt_proj(qkv_txt[..., :self.hidden_size].to(self.txt_proj.weight.dtype)) * mods["txt_gate"].to(txt.dtype)
+        img_out = self.img_proj(qkv_img[..., :self.hidden_size].to(self.img_proj.weight.dtype)) * mods["img_gate"].to(img.dtype)
         
-        return txt + txt_out, img + img_out
+        return txt + txt_out.to(txt.dtype), img + img_out.to(img.dtype)
+#--------------------Окончание блока №7 ----------------------------
 
 class SingleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, mlp_hidden_dim: int = 12288):
@@ -314,46 +316,3 @@ def run_cold_reactor_test():
 if __name__ == "__main__":
     run_cold_reactor_test()
 #--------------------Окончание блока №6 ----------------------------
-#-------------------- Блок №7: Горячий патч типов для DoubleStreamBlock --------------
-class DoubleStreamBlock(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int = 24, head_dim: int = 128):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        
-        self.txt_norm = RMSNorm(hidden_size)
-        self.img_norm = RMSNorm(hidden_size)
-        
-        self.txt_attn = nn.Linear(hidden_size, hidden_size * 3)
-        self.img_attn = nn.Linear(hidden_size, hidden_size * 3)
-        
-        self.query_norm = RMSNorm(head_dim)
-        self.key_norm = RMSNorm(head_dim)
-        
-        self.txt_proj = nn.Linear(hidden_size, hidden_size)
-        self.img_proj = nn.Linear(hidden_size, hidden_size)
-
-    def forward(self, txt: torch.Tensor, img: torch.Tensor, mods: dict) -> tuple[torch.Tensor, torch.Tensor]:
-        ChromaTelemetry.verify(txt, "DoubleStream.txt_in", 3)
-        ChromaTelemetry.verify(img, "DoubleStream.img_in", 3)
-
-        # Вычисляем модуляцию в BF16
-        txt_mod = self.txt_norm(txt) * (1 + mods["txt_scale"].to(txt.dtype)) + mods["txt_shift"].to(txt.dtype)
-        img_mod = self.img_norm(img) * (1 + mods["img_scale"].to(img.dtype)) + mods["img_shift"].to(img.dtype)
-
-        # ЗАЩИТНЫЙ ХУК: Приводим активации к типу весов (исправление краша mat1/mat2)
-        txt_mod = txt_mod.to(self.txt_attn.weight.dtype)
-        img_mod = img_mod.to(self.img_attn.weight.dtype)
-
-        # Безопасный прогон проекций QKV
-        qkv_txt = self.txt_attn(txt_mod)
-        qkv_img = self.img_attn(img_mod)
-        
-        # Обратная проекция с защитой по типу весов линейного слоя
-        txt_out = self.txt_proj(qkv_txt[..., :self.hidden_size].to(self.txt_proj.weight.dtype)) * mods["txt_gate"].to(txt.dtype)
-        img_out = self.img_proj(qkv_img[..., :self.hidden_size].to(self.img_proj.weight.dtype)) * mods["img_gate"].to(img.dtype)
-        
-        return txt + txt_out.to(txt.dtype), img + img_out.to(img.dtype)
-#--------------------Окончание блока №7 ----------------------------
-
