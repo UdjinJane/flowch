@@ -1,139 +1,169 @@
 import os
 import sys
+import html
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from pygments import highlight
-from pygments.lexers import get_lexer_for_filename
-from pygments.formatters import HtmlFormatter
 
-# === КОНФИГУРАЦИЯ КОНТУРА СКАНИРОВАНИЯ ===
-TARGET_DIR = "./src"         # Что сканируем
-OUTPUT_DIR = "./out_pdf"     # Куда складываем плавки
-IGNORE_DIRS = {".venv", "__pycache__", ".git", "out_pdf"}
-VALID_EXTENSIONS = {".py", ".txt"}
-
-
-# === ИСПРАВЛЕННЫЙ ИМПОРТ ДЛЯ СИСТЕМЫ ШРИФТОВ ===
+# Подсистемы шрифтов
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+# Подсистемы подсветки синтаксиса
+from pygments import lex
+from pygments.lexers import get_lexer_for_filename
+from pygments.token import Token
 
-# Прокачиваем контур: регистрируем системный Courier New с поддержкой русского языка
+# === КОНФИГУРАЦИЯ КОНТУРА СКАНИРОВАНИЯ ===
+TARGET_DIR = "./src" 
+OUTPUT_DIR = "./out_pdf" 
+IGNORE_DIRS = {".venv", "__pycache__", ".git", "out_pdf"}
+VALID_EXTENSIONS = {".py", ".txt"}
+
+# Наша кастомная снайперская палитра для терминала
+COLOR_MAP = {
+    Token.Keyword: "#0033CC",       # Яркий синий для def, import, return
+    Token.Name.Function: "#006666", # Бирюзовый для функций
+    Token.String: "#008000",        # Зеленый для строк
+    Token.Comment: "#7A7A7A",       # Серый для комментов
+    Token.Number: "#FF6600",        # Оранжевый для цифр
+    Token.Operator: "#000000",      # Черный для знаков = + -
+    Token.Name.Builtin: "#990099"   # Пурпурный для print, len, assert
+}
+
+# Инициализация кириллического моноширинного шрифта
 try:
-    # Стандартный путь к шрифтам в Windows хосте
     win_font_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts', 'cour.ttf')
     if os.path.exists(win_font_path):
         pdfmetrics.registerFont(TTFont('CourierCyr', win_font_path))
         FONT_NAME = 'CourierCyr'
     else:
-        # Резервный вариант, если шрифт не найден (хотя в Windows он есть всегда)
         FONT_NAME = 'Courier'
-        print("[WARN] Системный шрифт Courier New не найден, возможны квадраты.")
+        print("[WARN] Системный шрифт Courier New не найден.")
 except Exception as e:
     FONT_NAME = 'Courier'
     print(f"[WARN] Ошибка инициализации шрифта: {e}")
 
 
 def scan_project_directory(root_dir):
-    """
-    Снайперский обход директории. 
-    Изолирует целевые файлы от внешнего шума и служебных каталогов.
-    """
     target_files = []
-    
     for root, dirs, files in os.walk(root_dir):
-        # Жесткая фильтрация карантинных зон на месте (in-place)
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
-        
         for file in files:
             _, ext = os.path.splitext(file)
             if ext.lower() in VALID_EXTENSIONS:
-                full_path = os.path.join(root, file)
-                target_files.append(full_path)
-                
+                target_files.append(os.path.join(root, file))
     return target_files
 
+
+def highlight_code_to_clean_xml(source_text, filename):
+    """
+    Конвертирует код в XML-формат ReportLab.
+    Заменяет переводы строк на <br/>, а пробелы на &nbsp; 
+    для сохранения идеальной структуры кода.
+    """
+    try:
+        lexer = get_lexer_for_filename(filename)
+    except Exception:
+        # Для .txt файлов просто экранируем и размечаем структуру
+        escaped = html.escape(source_text)
+        return escaped.replace('\n', '<br/>').replace(' ', '&nbsp;')
+
+    xml_output = []
+    
+    # Гоним код через лексер pygments
+    for token_type, value in lex(source_text, lexer):
+        # 1. Экранируем спецсимволы (<, >, &), чтобы XML не падал
+        escaped_value = html.escape(value)
+        
+        # 2. Форматируем переносы и отступы под стандарты Paragraph
+        escaped_value = escaped_value.replace('\n', '<br/>').replace(' ', '&nbsp;')
+        
+        # 3. Ищем цвет для токена
+        color = None
+        for t_type, hex_color in COLOR_MAP.items():
+            if token_type in t_type:
+                color = hex_color
+                break
+        
+        if color:
+            xml_output.append(f'<font color="{color}">{escaped_value}</font>')
+        else:
+            xml_output.append(escaped_value)
+            
+    return "".join(xml_output)
 
 
 def convert_file_to_pdf(source_path, output_dir):
     """
-    Трансформирует сырой исходный код в изолированный векторный PDF-контейнер.
-    Защищен от провала кодировок и полностью поддерживает кириллицу.
+    Трансформирует код в PDF с идеальным сохранением структуры переносов,
+    отступов, цвета и полной поддержкой русского языка.
     """
     rel_path = os.path.relpath(source_path)
     safe_name = rel_path.replace(os.sep, "_") + ".pdf"
     os.makedirs(output_dir, exist_ok=True)
     pdf_path = os.path.join(output_dir, safe_name)
     
+    # Сужаем поля, чтобы длинные строки реже переносились
     doc = SimpleDocTemplate(
         pdf_path,
         pagesize=letter,
-        leftMargin=36, rightMargin=36,
-        topMargin=36, bottomMargin=36
+        leftMargin=24, rightMargin=24,
+        topMargin=24, bottomMargin=24
     )
     
     styles = getSampleStyleSheet()
     
-    # Внедряем наш зарегистрированный FONT_NAME вместо сырого 'Courier'
     code_style = ParagraphStyle(
         'CodeStyle',
         parent=styles['Normal'],
-        fontName=FONT_NAME,  # <--- Здесь теперь живет кириллический CourierCyr
-        fontSize=8,
-        leading=10,
+        fontName=FONT_NAME,
+        fontSize=7.5,      # Чуть уменьшили, чтобы длинный код влезал по ширине
+        leading=9.5,
         textColor=colors.HexColor("#1A1A1A")
     )
     
     header_style = ParagraphStyle(
         'HeaderStyle',
         parent=styles['Heading2'],
-        fontName='Helvetica-Bold', # Заголовки на латинице оставляем так
-        fontSize=12,
-        spaceAfter=12,
+        fontName='Helvetica-Bold',
+        fontSize=11,
+        spaceAfter=10,
         textColor=colors.HexColor("#0066CC")
     )
 
     story = []
     story.append(Paragraph(f"SOURCE LOG: {rel_path}", header_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 5))
     
     try:
         with open(source_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
-            
-        clean_content = content.replace('\r\n', '\n').replace('\t', '    ')
-        story.append(Preformatted(clean_content, code_style))
+        
+        # Унифицируем табы и переносы Windows
+        content = content.replace('\r\n', '\n').replace('\t', '    ')
+        
+        # Генерируем подсвеченный XML-абзац
+        highlighted_xml = highlight_code_to_clean_xml(content, source_path)
+        
+        # Скармливаем чистый XML в Paragraph
+        story.append(Paragraph(highlighted_xml, code_style))
         
         doc.build(story)
-        print(f"[OK] Выплавлен PDF контур для: {rel_path} -> {safe_name}")
+        print(f"[OK] Выплавлен ИДЕАЛЬНЫЙ PDF контур для: {rel_path}")
     except Exception as e:
         print(f"[FAIL] Сбой деквантования файла {rel_path}: {str(e)}")
 
 
 if __name__ == "__main__":
-
-    print("# === ЗАПУСК АВТОНОМНОГО КОНВЕРТЕРА КОНТЕКСТА v1.0 ===")
-    
-    # Проверка плацдарма
-    if not os.path.exists(TARGET_DIR):
-        print(f"[INFO] Создаю пулевой каталог {TARGET_DIR} для исходников...")
-        os.makedirs(TARGET_DIR, exist_ok=True)
-        
-    # Шаг 1: Сканирование
-    print(f"[RUN] Сканирую сектор '{TARGET_DIR}' на наличие .py и .txt файлов...")
+    print("# === ЗАПУСК КРИСТАЛЬНОГО КОНВЕРТЕРА v4.0 ===")
     files_to_convert = scan_project_directory(TARGET_DIR)
     
     if not files_to_convert:
-        print("[WARN] Целевые файлы не обнаружены. Положите исходники в папку /src")
+        print("[WARN] Целевые файлы не обнаружены.")
         sys.exit(0)
         
-    print(f"[OK] Обнаружено целей для упаковки: {len(files_to_convert)}")
-    
-    # Шаг 2: Конвертация
-    print("[RUN] Запуск маршевого цикла плавки в PDF...")
     for file_path in files_to_convert:
         convert_file_to_pdf(file_path, OUTPUT_DIR)
-        
-    print("# === КОНТУР УСПЕШНО ЗАВЕРШИЛ РАБОТУ. ВСЕ ПДФ В out_pdf/ ===")
+    print("# === КОНТУР УСПЕШНО ЗАВЕРШИЛ РАБОТУ ===")
