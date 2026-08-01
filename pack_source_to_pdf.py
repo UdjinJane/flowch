@@ -5,16 +5,17 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatte
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# === НОВЫЕ ИМПОРТЫ ДЛЯ СИСТЕМЫ ШРИФТОВ ===
-from reportlab.pdfbase import pdfbase
+# === ИСПРАВЛЕННЫЙ ИМПОРТ ДЛЯ СИСТЕМЫ ШРИФТОВ ===
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
 
 # Прокачиваем контур: регистрируем системный Courier New с поддержкой русского языка
 try:
     # Стандартный путь к шрифтам в Windows хосте
     win_font_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts', 'cour.ttf')
     if os.path.exists(win_font_path):
-        pdfbase.registerFont(TTFont('CourierCyr', win_font_path))
+        pdfmetrics.registerFont(TTFont('CourierCyr', win_font_path))
         FONT_NAME = 'CourierCyr'
     else:
         # Резервный вариант, если шрифт не найден (хотя в Windows он есть всегда)
