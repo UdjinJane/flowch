@@ -4,6 +4,16 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from pygments import highlight
+from pygments.lexers import get_lexer_for_filename
+from pygments.formatters import HtmlFormatter
+
+# === КОНФИГУРАЦИЯ КОНТУРА СКАНИРОВАНИЯ ===
+TARGET_DIR = "./src"         # Что сканируем
+OUTPUT_DIR = "./out_pdf"     # Куда складываем плавки
+IGNORE_DIRS = {".venv", "__pycache__", ".git", "out_pdf"}
+VALID_EXTENSIONS = {".py", ".txt"}
+
 
 # === ИСПРАВЛЕННЫЙ ИМПОРТ ДЛЯ СИСТЕМЫ ШРИФТОВ ===
 from reportlab.pdfbase import pdfmetrics
