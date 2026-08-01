@@ -238,31 +238,36 @@ class DoubleStreamBlock(nn.Module):
         return txt + txt_out.to(txt.dtype), img + img_out.to(img.dtype)
 #--------------------Окончание блока №7 ----------------------------
 
+#-------------------- Блок №9: Исправление SingleStreamBlock и финальная верификация --------------
 class SingleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, mlp_hidden_dim: int = 12288):
         super().__init__()
         self.hidden_size = hidden_size
-        
-        # Единая нормализация склеенного потока
         self.norm = RMSNorm(hidden_size)
-        # Стандартное MLP ratio=4, линейный слой принимает монолитный поток [1.3]
         self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim)
         self.linear2 = nn.Linear(mlp_hidden_dim, hidden_size)
 
     def forward(self, x: torch.Tensor, mods: dict) -> torch.Tensor:
         ChromaTelemetry.verify(x, "SingleStream.input", 3)
         
-        # Инлайн модуляция объединенного транспортного пути
+        # Инлайн модуляция транспортного пути
         x_mod = self.norm(x) * (1 + mods["scale"].to(x.dtype)) + mods["shift"].to(x.dtype)
         
-        # Жесткий распил монолита через torch.split в форварде [1.3]
+        # ЗАЩИТНЫЙ ХУК ХОЛОДНОГО ТЕСТА: Приведение типа к весам слоя (BF16 -> FP32 / FP8)
+        x_mod = x_mod.to(self.linear1.weight.dtype)
+        
+        # Прогон через первый слой и распил
+        linear1_out = self.linear1(x_mod)
         gate_gate = mods["gate"].to(x.dtype)
         
-        # Прогон через полносвязный слой и зажатие гейтом модуляции
-        mlp_out = self.linear2(torch.nn.functional.silu(self.linear1(x_mod)[..., (self.hidden_size * 3):]))
-        out = mlp_out * gate_gate
+        # Вычленение MLP-составляющей и обратная проекция
+        mlp_in = linear1_out[..., (self.hidden_size * 3):]
+        mlp_out = self.linear2(torch.nn.functional.silu(mlp_in))
         
+        out = mlp_out.to(x.dtype) * gate_gate
         return x + out
+#--------------------Окончание блока №9 ----------------------------
+
 #--------------------Окончание блока №5 ----------------------------
 #-------------------- Блок №6: Скрипт холодного тестирования ядра (Sandbox-Run) --------------
 def run_cold_reactor_test():
