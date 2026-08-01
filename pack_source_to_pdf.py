@@ -36,6 +36,27 @@ except Exception as e:
     print(f"[WARN] Ошибка инициализации шрифта: {e}")
 
 
+def scan_project_directory(root_dir):
+    """
+    Снайперский обход директории. 
+    Изолирует целевые файлы от внешнего шума и служебных каталогов.
+    """
+    target_files = []
+    
+    for root, dirs, files in os.walk(root_dir):
+        # Жесткая фильтрация карантинных зон на месте (in-place)
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        
+        for file in files:
+            _, ext = os.path.splitext(file)
+            if ext.lower() in VALID_EXTENSIONS:
+                full_path = os.path.join(root, file)
+                target_files.append(full_path)
+                
+    return target_files
+
+
+
 def convert_file_to_pdf(source_path, output_dir):
     """
     Трансформирует сырой исходный код в изолированный векторный PDF-контейнер.
