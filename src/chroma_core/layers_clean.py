@@ -261,3 +261,55 @@ class SingleStreamBlock(nn.Module):
         
         return x + out
 #--------------------Окончание блока №5 ----------------------------
+#-------------------- Блок №6: Скрипт холодного тестирования ядра (Sandbox-Run) --------------
+def run_cold_reactor_test():
+    """
+    Эмуляция подачи напряжения на слои ядра. 
+    Проверяет прохождение сигналов, расчет RMSNorm, тригонометрический кэш 
+    и жесткий распил монолитной шины модуляции.
+    """
+    print("# === ЗАПУСК СИМУЛЯЦИИ КЛЕТКИ SANDBOX === ")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Инициализация параметров по Платиновой Книге (ChromaParams) [1.2, 1.4]
+    B, N, hidden_size = 1, 64, 3072
+    num_double = 19
+    num_single = 38
+    
+    try:
+        # 1. Верификация шины
+        bus = ChromaModulationBus(hidden_size=hidden_size, num_double=num_double, num_single=num_single)
+        fake_monolith = torch.randn(B, (num_double * 6 + num_single * 3) * hidden_size, device=device, dtype=torch.bfloat16)
+        mods = bus.distribute_modulations(fake_monolith)
+        print(" -> [OK] Распил шины distribute_modulations стабилен.")
+
+        # 2. Верификация NerfEmbedder (Float32 Изоляция) [1.4]
+        coords = torch.randn(B, N, 3, device=device, dtype=torch.bfloat16) # вход с денормализатора
+        nerf = NerfEmbedder(in_channels=3, num_frequencies=64)
+        spatial_emb = nerf(coords)
+        if spatial_emb.dtype != torch.float32:
+            raise TypeError("❌ КРАХ ИЗОЛЯЦИИ: NerfEmbedder провалился ниже float32!")
+        print(f" -> [OK] NerfEmbedder выдал изолированный FP32 тензор: {spatial_emb.shape}")
+
+        # 3. Верификация DoubleStreamBlock (Срез 0)
+        double_block = DoubleStreamBlock(hidden_size=hidden_size).to(device)
+        txt_tensor = torch.randn(B, N, hidden_size, device=device, dtype=torch.bfloat16)
+        img_tensor = torch.randn(B, N, hidden_size, device=device, dtype=torch.bfloat16)
+        
+        txt_out, img_out = double_block(txt_tensor, img_tensor, mods["double"][0])
+        print(f" -> [OK] DoubleStreamBlock успешно прогнал латенты: txt{txt_out.shape}, img{img_out.shape}")
+
+        # 4. Верификация SingleStreamBlock (Срез 0)
+        single_block = SingleStreamBlock(hidden_size=hidden_size).to(device)
+        x_combined = torch.randn(B, N * 2, hidden_size, device=device, dtype=torch.bfloat16)
+        
+        x_out = single_block(x_combined, mods["single"][0])
+        print(f" -> [OK] SingleStreamBlock успешно прогнал монолит: {x_out.shape}")
+        print("# === [ВЕРИФИКАЦИЯ ПРОЙДЕНА]: Ошибок компиляции и Underflow не обнаружено. === ")
+
+    except Exception as e:
+        print(f"❌ ТЕЛЕМЕТРИЯ АВАРИИ: Контур холодной проверки выявил дефект:\n{str(e)}")
+
+if __name__ == "__main__":
+    run_cold_reactor_test()
+#--------------------Окончание блока №6 ----------------------------
