@@ -106,38 +106,35 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     return patched_count
 #-------------------- Окончание блока №3 --------------------
 
-#-------------------- Блок №4 (АВТОНОМНЫЙ БОЕВОЙ): Маршевое ядро train_step_core --------------------
+#-------------------- Блок №4 (ОГНЕУПОРНЫЙ БОЕВОЙ): Маршевое ядро train_step_core --------------------
 def train_step_core(batch: dict, model: nn.Module, bus: ChromaModulationBus, optimizer: AdamW8bit, approximator: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Принимает эталонный 4D-батч латентов [B, 16, 128, 128] напрямую из DataLoader.
+    Обеспечивает жесткое удержание градиентов в пределах физической VRAM чипа.
     """
     # 1. Извлечение и сквозной контроль геометрии сырого 4D-потока данных
-    x1 = batch["latent"].cuda()              # Исходный латент 4D: [B, 16, 128, 128]
+    x1 = batch["latent"].cuda()              # Иходный латент 4D: [B, 16, 128, 128]
     clip_hidden = batch["clip_hidden"].cuda()  # Текст CLIP
     t5_hidden = batch["t5_hidden"].cuda()      # Текст T5
     
-    # Контроль геометрии: жестко верифицируем сырой 4D латент перед наложением шума
     ChromaTelemetry.verify(x1, "train_step.latents", 4)
     
-    # 2. Generation траектории Rectified Flow в исходном 4D пространстве латентов
-    x0 = torch.randn_like(x1) # Чистый латентный шум на CUDA
+    # 2. Изоляция и принудительное обнуление градиентов ДО начала вычислений
+    optimizer.zero_grad(set_to_none=True)
     
-    # Рандомный таймстеп t для каждого элемента батча
+    # 3. Generation траектории Rectified Flow в исходном 4D пространстве латентов
+    x0 = torch.randn_like(x1)
     t = torch.rand((x1.shape[0],), device=x1.device, dtype=x1.dtype)
     
     # Линейный транспортный путь (4D)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
-    # 3. Расчет монолитной шины модуляции векторов управления через аппроксиматор
+    # 4. Расчет монолитной шины модуляции векторов управления
     monolithic_mod = approximator(t, clip_hidden, t5_hidden)
     mods = bus.distribute_modulations(monolithic_mod)
     
-    # 4. Подача в модель: вся упаковка и проекция скрыты внутри форварда ChromaMMDiT
-    optimizer.zero_grad(set_to_none=True)
-    
-    # Модель возвращает предсказанное поле скоростей в исходной 4D геометрии [B, 16, 128, 128]
+    # 5. Прямой проход через ядро модели (активирован Gradient Checkpointing внутри модели)
     pred_velocity = model(xt, t5_hidden, mods)
     
     # Расчет ошибки между истинным полем скоростей и предсказанным
@@ -146,24 +143,31 @@ def train_step_core(batch: dict, model: nn.Module, bus: ChromaModulationBus, opt
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss свалился в NaN! Рантайм остановлен.")
         
-    # 5. Обратный проход и прокалка градиентов Master Weights
+    # 6. Обратный проход и прокалка градиентов Master Weights
     loss.backward()
+    
+    # Жесткий барьер против микро-взрывов латентного пространства
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    
+    # Шаг 8-битного оптимизатора градиентов
     optimizer.step()
     
-    # 6. Жесткое шлакоотделение (Очистка памяти WDDM Windows)
+    # 7. ТОТАЛЬНОЕ ШЛАКООТДЕЛЕНИЕ: немедленное уничтожение градиентов после шага
+    optimizer.zero_grad(set_to_none=True)
+    
+    # Полная принудительная очистка кэша аллокатора CUDA под Windows
     torch.cuda.empty_cache()
     
     return loss.item()
 #-------------------- Окончание блока №4 --------------------
 
-#-------------------- Блок №5 (ГЕРМЕТИЧНЫЙ МЕТРОПОЛИЯ): Инициализация и Управляющий Цикл --------------------
+#-------------------- Блок №5 (ОГНЕУПОРНЫЙ СИНХРОНИЗИРОВАННЫЙ): Маршевый пуск и Управляющий Цикл --------------------
 from torch.utils.checkpoint import checkpoint
 
 def run_reactor_forge():
     """
     Главный пульт управления процессом плавки LoRA на хосте APEX.
-    Внедрена авторитарная защита Gradient Checkpointing против утечек в Shared VRAM.
+    Полное уничтожение Shared RAM: прямой инлайн-проброс тензоров в checkpoint [22.2].
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -186,7 +190,7 @@ def run_reactor_forge():
             self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
             
         def pack_latents(self, x: torch.Tensor) -> torch.Tensor:
-            """Снахперское схлопывание блоков 2х2 по уставу Метрополии: [B, 16, 128, 128] -> [B, 4096, 64]"""
+            """Снайперское схлопывание блоков 2х2 по уставу Метрополии: [B, 16, 128, 128] -> [B, 4096, 64]"""
             B, C, H, W = x.shape
             x = x.view(B, C, H // 2, 2, W // 2, 2)
             x = x.permute(0, 2, 4, 1, 3, 5)
@@ -199,43 +203,40 @@ def run_reactor_forge():
             x_latent = x_latent.to(torch.bfloat16)
             txt_hidden = txt_hidden.to(torch.bfloat16)
             
+            # 1. Сжатие геометрии латентов и проекция через img_in
             xt_flat = self.pack_latents(x_latent)
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
             
-            # --- Контур защиты №1: Gradient Checkpointing для Double-блоков ---
-            # Пересчитываем активации внимания на бэкварде, освобождая VRAM под градиенты
+            # [КРИТИЧЕСКИЙ ТРИГГЕР МЕТРОПОЛИИ]: Взводим градиенты до чекпоинта
+            img_tokens = img_tokens.detach().requires_grad_(True)
+            txt_tokens = txt_tokens.detach().requires_grad_(True)
+            
+            # 2. Прямой прогон через Double-блоки без CPU-замыканий
             for i, block in enumerate(self.double_blocks):
-                # Чекпоинт требует функцию и её позиционные аргументы
-                def create_custom_forward(layer):
-                    def custom_forward(t_tok, i_tok, modulation):
-                        return layer(t_tok, i_tok, modulation)
-                    return custom_forward
-                
+                # Передаем forward и тензоры напрямую. Чекпоинт видит requires_grad!
                 txt_tokens, img_tokens = checkpoint(
-                    create_custom_forward(block), 
+                    block, 
                     txt_tokens, 
                     img_tokens, 
                     mods["double"][i],
-                    use_reentrant=False # Безопасный режим Autograd без утечек контекста
+                    use_reentrant=False,
+                    preserve_rng_state=False
                 )
                 
             x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             
-            # --- Контур защиты №2: Gradient Checkpointing для Single-блоков ---
+            # 3. Прямой прогон через Single-блоки без CPU-замыканий
             for i, block in enumerate(self.single_blocks):
-                def create_single_forward(layer):
-                    def single_forward(combined_tok, modulation):
-                        return layer(combined_tok, modulation)
-                    return single_forward
-                    
                 x_combined = checkpoint(
-                    create_single_forward(block),
+                    block,
                     x_combined,
                     mods["single"][i],
-                    use_reentrant=False
+                    use_reentrant=False,
+                    preserve_rng_state=False
                 )
                 
+            # 4. Обратная декомпрессия и распаковка векторов скоростей в 4D
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
             
@@ -303,5 +304,5 @@ def run_reactor_forge():
 
 if __name__ == "__main__":
     run_reactor_forge()
-#-------------------- Окончание блока №5 --------------------
+#-------------------- Окончание кода Блока №5 --------------------
 
