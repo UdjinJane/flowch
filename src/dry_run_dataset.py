@@ -4,8 +4,8 @@ import torch
 from torch.utils.data import DataLoader
 import importlib.util
 
-# 1. Принудительная жесткая локализация файла __init__.py на диске Z:
-INIT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "chroma_core", "__init__.py"))
+# Наводка по фактическому слепку палубы из Проводника
+INIT_PATH = r"Z:\flowch\src\chroma_core\init.py"
 
 if not os.path.exists(INIT_PATH):
     print(f"[CRIT] Файл ядра не найден по адресу: {INIT_PATH}")
