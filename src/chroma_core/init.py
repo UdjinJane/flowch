@@ -1,3 +1,4 @@
+from .__init__ import ChromaDataset  # Добавить строго первой строкой!
 import os
 import torch
 from torch.utils.data import Dataset
