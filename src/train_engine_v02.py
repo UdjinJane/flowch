@@ -157,11 +157,13 @@ def train_step_core(batch: dict, model: nn.Module, bus: ChromaModulationBus, opt
     return loss.item()
 #-------------------- Окончание блока №4 --------------------
 
-#-------------------- Блок №5 (БОЕВОЙ СИНХРОНИЗИРОВАННЫЙ): Маршевый пуск, Инициализация и Управляющий Цикл --------------------
+#-------------------- Блок №5 (ГЕРМЕТИЧНЫЙ МЕТРОПОЛИЯ): Инициализация и Управляющий Цикл --------------------
+from torch.utils.checkpoint import checkpoint
+
 def run_reactor_forge():
     """
     Главный пульт управления процессом плавки LoRA на хосте APEX.
-    Исправлен порядок переноса на CUDA: строго ПОСЛЕ инжекции адаптеров.
+    Внедрена авторитарная защита Gradient Checkpointing против утечек в Shared VRAM.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -175,7 +177,7 @@ def run_reactor_forge():
     class ChromaMMDiT(nn.Module):
         def __init__(self):
             super().__init__()
-            # Входные проекторы Метрополии
+            # Входные проекторы Метрополии согласно физической карте весов
             self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
             self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
             self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
@@ -184,7 +186,7 @@ def run_reactor_forge():
             self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
             
         def pack_latents(self, x: torch.Tensor) -> torch.Tensor:
-            """Снайперское схлопывание блоков 2х2 по уставу Метрополии: [B, 16, 128, 128] -> [B, 4096, 64]"""
+            """Снахперское схлопывание блоков 2х2 по уставу Метрополии: [B, 16, 128, 128] -> [B, 4096, 64]"""
             B, C, H, W = x.shape
             x = x.view(B, C, H // 2, 2, W // 2, 2)
             x = x.permute(0, 2, 4, 1, 3, 5)
@@ -201,12 +203,38 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
             
+            # --- Контур защиты №1: Gradient Checkpointing для Double-блоков ---
+            # Пересчитываем активации внимания на бэкварде, освобождая VRAM под градиенты
             for i, block in enumerate(self.double_blocks):
-                txt_tokens, img_tokens = block(txt_tokens, img_tokens, mods["double"][i])
+                # Чекпоинт требует функцию и её позиционные аргументы
+                def create_custom_forward(layer):
+                    def custom_forward(t_tok, i_tok, modulation):
+                        return layer(t_tok, i_tok, modulation)
+                    return custom_forward
+                
+                txt_tokens, img_tokens = checkpoint(
+                    create_custom_forward(block), 
+                    txt_tokens, 
+                    img_tokens, 
+                    mods["double"][i],
+                    use_reentrant=False # Безопасный режим Autograd без утечек контекста
+                )
                 
             x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
+            
+            # --- Контур защиты №2: Gradient Checkpointing для Single-блоков ---
             for i, block in enumerate(self.single_blocks):
-                x_combined = block(x_combined, mods["single"][i])
+                def create_single_forward(layer):
+                    def single_forward(combined_tok, modulation):
+                        return layer(combined_tok, modulation)
+                    return single_forward
+                    
+                x_combined = checkpoint(
+                    create_single_forward(block),
+                    x_combined,
+                    mods["single"][i],
+                    use_reentrant=False
+                )
                 
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
@@ -218,13 +246,12 @@ def run_reactor_forge():
             out = out.permute(0, 3, 1, 4, 2, 5)
             return out.reshape(B, 16, H_raw, W_raw)
 
-    # Шаг 1: Создаем пустую модель (пока на CPU)
     model = ChromaMMDiT()
     
-    # Шаг 2: Врезаем LoRA адаптеры в CPU-структуру (параметры сразу создадутся на CPU)
+    # Врезка кастомных швов LoRA в CPU-каркас
     patched_count = patch_chroma_reactor(model, rank=16)
     
-    # Шаг 3: Переносим ВЕСЬ комплекс (базу + LoRA) на маршевую CUDA в один приём!
+    # Подъем всего герметичного комплекса на CUDA в один чистый приём
     model = model.to(device)
     
     class DummyApproximator(nn.Module):
@@ -237,9 +264,7 @@ def run_reactor_forge():
     bus = ChromaModulationBus(hidden_size=hidden_size, num_double=num_double, num_single=num_single)
     approximator = DummyApproximator(bus.expected_features).to(device)
     
-    # Сборка 8-битного оптимизатора градиентов AdamW8bit
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = AdamW8bit(trainable_params, lr=1e-4)
+    optimizer = AdamW8bit(model.parameters(), lr=1e-4)
     print(" -> [OK] 8-битный оптимизатор градиентов AdamW8bit зафиксирован.")
     
     LATENT_DIR = "./dataset/latent_cache"
