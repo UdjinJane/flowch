@@ -5,7 +5,9 @@ from torch.utils.data import DataLoader
 
 # Проброс путей для работы внутри .venv
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.chroma_core import ChromaDataset
+#---Бронебойный импорт:
+from src.chroma_core.__init__ import ChromaDataset
+
 
 LATENT_DIR = "./dataset/latent_cache"
 TEXT_DIR = "./dataset/text_cache"
