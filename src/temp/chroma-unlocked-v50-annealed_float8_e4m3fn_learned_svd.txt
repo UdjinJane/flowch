@@ -1,0 +1,56 @@
+{
+  "model_metadata": {
+    "model_name": "Chroma-fp8-scaled",
+    "developer_organization": "Clybius",
+    "repository_url": "https://huggingface.co/Clybius/Chroma-fp8-scaled",
+    "specific_file_url": "https://huggingface.co/Clybius/Chroma-fp8-scaled/blob/main/v50/chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors",
+    "license": "apache-2.0",
+    "base_task": "Text-to-Image",
+    "framework": "PyTorch",
+    "content_safety_rating": "Not-For-All-Audiences (NSFW/Sensitive Content Verified)"
+  },
+  "tensor_file_specifications": {
+    "filename": "chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors",
+    "file_path_in_repo": "v50/chroma-unlocked-v50-annealed_float8_e4m3fn_learned_svd.safetensors",
+    "file_size_on_disk_gb": 8.9,
+    "file_format": "Safetensors (Strictly verified)",
+    "sha256_checksum": "2839f47aad0ddb1734ed71026f8e48e7c363753c6de079b13b8872afea90f132",
+    "storage_backend": "Hugging Face Xet Data Pointer"
+  },
+  "architecture_and_quantization_details": {
+    "architecture_family": "Flux MMDiT / Rectified Flow (Flow Matching)",
+    "model_version": "v50 (Annealed variant)",
+    "primary_precision": "FP8 Mixed Precision (e4m3fn / e5m2)",
+    "compression_type": "Learned SVD (Singular Value Decomposition) weight reduction via torchao",
+    "text_encoder_status": "Stripped / Removed from this specific weights compartment",
+    "vae_compatibility": "Flux-VAE-BF16 dependent"
+  },
+  "hardware_constraints_and_runtime_benchmarks": {
+    "vram_footprint_static_load_gb": 17.8,
+    "recommended_gpu_hardware": "NVIDIA GeForce RTX 3090 / RTX 4090 (24GB VRAM baseline)",
+    "vram_allocation_mitigation_required": true,
+    "recommended_cuda_sysmem_policy": "CudaSysMemToBase = 0 (Strictly block system RAM tensor spilling / WDDM mitigation override)",
+    "memory_management_strategy": "Dynamic Offloading with max_split_size_mb = 512"
+  },
+  "training_and_lora_fusion_parameters": {
+    "default_resolution": 512,
+    "gradient_accumulation_baseline": 2,
+    "recommended_learning_rate": "2e-5",
+    "lora_hyperparameters_default": {
+      "rank": 16,
+      "alpha": 16,
+      "target_modules": [
+        "to_q.0",
+        "to_k.0",
+        "to_v.0",
+        "to_out.0"
+      ]
+    },
+    "critical_weight_preservation_policy": {
+      "frozen_layers": [
+        "x_embedder"
+      ],
+      "frozen_precision": "bfloat16 (Strictly forbidden from FP8 quantization to avoid latent space breakdown)"
+    }
+  }
+}
