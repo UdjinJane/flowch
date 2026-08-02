@@ -2,12 +2,22 @@ import sys
 import os
 import torch
 from torch.utils.data import DataLoader
+import importlib.util
 
-# Проброс путей для работы внутри .venv
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-#---Бронебойный импорт:
-from src.chroma_core.__init__ import ChromaDataset
+# 1. Принудительная жесткая локализация файла __init__.py на диске Z:
+INIT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "chroma_core", "__init__.py"))
 
+if not os.path.exists(INIT_PATH):
+    print(f"[CRIT] Файл ядра не найден по адресу: {INIT_PATH}")
+    sys.exit(1)
+
+# 2. Прямая динамическая инжекция модуля в обход Python Path-менеджера
+spec = importlib.util.spec_from_file_location("chroma_core_init", INIT_PATH)
+chroma_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(chroma_module)
+
+# 3. Извлечение нашего класса
+ChromaDataset = chroma_module.ChromaDataset
 
 LATENT_DIR = "./dataset/latent_cache"
 TEXT_DIR = "./dataset/text_cache"
