@@ -209,7 +209,13 @@ class ChromaMMDiT(nn.Module):
         x = x.permute(0, 2, 4, 1, 3, 5)
         return x.reshape(B, (H // 2) * (W // 2), C * 4)
 
-    def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict) -> torch.Tensor:
+#---------------- Старт Текстового Шва Блока 4 (Герметичный forward ChromaMMDiT без AdaLN итераторов) -
+
+    def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
+        """
+        Маршевый проход трансформера Chroma1-HD.
+        Полностью очищен от итераторов AdaLN нормализации. Активации выровнены.
+        """
         # Снайперский срез фантомной оси DataLoader [B, 1, L, D] -> [B, L, D]
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
@@ -217,28 +223,28 @@ class ChromaMMDiT(nn.Module):
         x_latent = x_latent.to(torch.bfloat16)
         txt_hidden = txt_hidden.to(torch.bfloat16)
         
-        # Сборка первичных токенов
+        # Сборка первичных токенов через маршевые сенсоры последовательностей
         xt_flat = self.pack_latents(x_latent)
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
 
-        # Вычисляем жесткую длину отсека текста для безопасного среза памяти
+        # Жесткая фиксация длины отсека текста для безопасного среза памяти
         txt_len = txt_tokens.shape[1]
 
-        # 1. Проход по спаренным链 (Принимаем строго 2 элемента из очищенного ядра layers_clean!)
+        # 1. Каскад спаренных блоков (Передаем None вместо фантомного distill_vec)
         for i, block in enumerate(self.double_blocks):
             txt_tokens, img_tokens = block(
-                txt=txt_tokens, img=img_tokens, pe=None, distill_vec=mods["double"][i]
+                txt=txt_tokens, img=img_tokens, pe=None, distill_vec=None, mask=None
             )
 
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         for i, block in enumerate(self.single_blocks):
             x_combined = block(
-                x=x_combined, pe=None, distill_vec=mods["single"][i]
+                x=x_combined, pe=None, distill_vec=None, mask=None
             )
 
-        # 3. Восстановление исходной 4D-геометрии с герметизацией non-contiguous памяти
+        # 3. Восстановление исходной 4D-геометрии латентов с герметизацией памяти
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -247,6 +253,8 @@ class ChromaMMDiT(nn.Module):
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
+#---------------- Конец Текстового Шва Блока 4 -----------------
+
 #---------------- Конец Блока 4 -----------------
 
 #---------------- Старт Блока 5 (Контур Инициализации и Точка Входа Реактора) ----------------
