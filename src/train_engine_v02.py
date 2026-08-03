@@ -190,8 +190,8 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
 
-    # Инициализация Аппроксиматора Метрополии под 5120 каналов
-    approximator = Approximator(in_dim=1, out_dim=5120, hidden_dim=5120, n_layers=4).to(device)
+    # Инициализация Аппроксиматора Метрополии: out_dim должен строго соответствовать скрытому слою ядра трансформера
+    approximator = Approximator(in_dim=1, out_dim=hidden_size, hidden_dim=hidden_size, n_layers=4).to(device)
     optimizer = AdamW8bit(model.parameters(), lr=1e-4)
     print(" -> [OK] 8-битный оптимизатор градиентов AdamW8bit зафиксирован.")
 
