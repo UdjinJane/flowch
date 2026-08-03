@@ -127,7 +127,7 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Выводит жесткие физические параметры длин контейнеров прямо перед входом в трансформер.
+    Полностью очищен от ошибок вложенности списков и утечек VRAM в Shared RAM Windows.
     """
     x1 = batch["latent"].cuda()
     clip_hidden = batch["clip_hidden"].cuda()
@@ -144,14 +144,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     optimizer.zero_grad(set_to_none=True)
     
+    # Генерация шумового поля траектории Rectified Flow
     x0 = torch.randn_like(x1)
     t = torch.rand((x1.shape,), device=x1.device, dtype=x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
+    # Расчет векторов модуляции через Аппроксиматор Метрополии
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
     raw_mod = approximator(t_vec)
 
+    # Проекция шины модуляции через статический узел (Защита VRAM от мусорных Autograd-копий)
     if raw_mod.shape[-1] == 5120:
         raw_mod = mod_projector(raw_mod)
 
@@ -160,10 +163,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     mods = {"double": [], "single": [], "final": None}
     
+    # Снайперская сборка пакетов: выпрямляем структуру под устав DoubleStreamBlock ядра
     for i in range(19):
-        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]
-        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]
-        mods["double"].append([img_mod_pair, txt_mod_pair])
+        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2]
+        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2]
+        
+        # Разворачиваем в плоский уставной список из 4-х изолированных объектов ModulationOut
+        flat_double_vec = [img_mod_pair[0], img_mod_pair[1], txt_mod_pair[0], txt_mod_pair[1]]
+        mods["double"].append(flat_double_vec)
         
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
@@ -179,30 +186,31 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
     print(f" -> Контейнер mods['double']     : Длина списка = {len(mods['double'])}")
     if len(mods['double']) > 0:
-        print(f"    * Структура пакета Блока №0 : {type(mods['double'][0]).__name__} | Длина = {len(mods['double'][0])}")
-        print(f"    * Элемент 0 (Графика)       : {type(mods['double'][0][0]).__name__} | Длина = {len(mods['double'][0][0]) if isinstance(mods['double'][0][0], list) else 'Not List'}")
+        print(f"    * Длина плоского вектора Блока №0 : {len(mods['double'][0])} (Обязана быть равна 4!)")
+        print(f"    * Тип элемента 0 (Графика)       : {type(mods['double'][0][0]).__name__}")
     print(f" -> Контейнер mods['single']     : Длина списка = {len(mods['single'])}")
-    if len(mods['single']) > 0:
-        print(f"    * Тип объекта Одиночного №0 : {type(mods['single'][0]).__name__}")
-    print(f" -> Финальный контейнер mods['final']: Тип = {type(mods['final']).__name__} | Длина = {len(mods['final']) if isinstance(mods['final'], list) else 'Not List'}")
+    print(f" -> Финальный контейнер mods['final']: Длина списка = {len(mods['final'])}")
     print("="*60 + "\n")
     # ==========================================================================
 
+    # Прямой маршевый проход трансформера
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss рухнул в NaN!")
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
         
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
+    # Тотальная зачистка и выжигание следов бэкварда: спасаем VRAM от Shared-течи WDDM
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
