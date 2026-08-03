@@ -1,4 +1,4 @@
-#---------------- Старт Блока 1 (Хедер, Самописец Черного Ящика и Телеметрия LoRA) ----------------
+#---------------- Старт Блока 1 (Супер-Боровик тотального следствия и контроля С++ либ) ------------
 import os
 import sys
 import traceback
@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-# Блокировка скрытого PCIe-спиллинга Windows WDDM в ОЗУ хоста
+# Жесткая блокировка утечек градиентов во внешнюю Shared RAM Windows WDDM
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 sys.path.append(os.path.abspath("./src"))
@@ -16,42 +16,39 @@ from ao_optim_monolith import AdamW8bit
 
 def trace_lines(frame, event, arg):
     """
-    Черный ящик: перехватывает аварийный останов, делает полный дамп стека
-    и выводит точные структуры данных в момент падения expected 3.
+    Супер-Боровик: Полное следствие без фильтрации директорий.
+    Перехватывает ЛЮБОЙ ValueError во всех системных С++ и Python модулях.
     """
     if event == "exception":
         exc_type, exc_value, exc_traceback = arg
         if issubclass(exc_type, ValueError):
-            print("\n" + "="*80)
-            print(f"[КРИТИЧЕСКИЙ ДАМП АВАРИИ]: Перехвачено исключение {exc_type.__name__}")
-            print(f"Сообщение об ошибке: {exc_value}")
-            print("="*80)
+            print("\n" + "!"*80)
+            print(f"[ТОТАЛЬНЫЙ ПЕРЕХВАТ С++ АВАРИИ]: Исключение {exc_type.__name__}")
+            print(f"Системный маркер: {exc_value}")
+            print("!"*80)
             
-            # Печатаем полный стек, чтобы узнать точный файл и номер строки падения
-            print("[СТЕК ВЫЗОВОВ СИСТЕМЫ]:")
+            # Распечатываем полный сквозной стек вызовов PyTorch и внешних Си-либ
+            print("[СКВОЗНОЙ СТЕК ВСЕХ СИСТЕМНЫХ БИБЛИОТЕК]:")
             traceback.print_exception(exc_type, exc_value, exc_traceback)
-            print("="*80)
+            print("!"*80)
             
-            # Инспектируем локальные переменные в упавшем кадре (пытаемся найти mods или distill_vec)
-            print("[ЛОКАЛЬНЫЙ КОНТЕКСТ ПАДЕНИЯ]:")
-            for key, val in frame.f_locals.items():
-                if key in ["distill_vec", "mods", "flat_mods", "x", "x_mod", "tensor"]:
-                    try:
-                        if isinstance(val, dict):
-                            print(f" -> Переменная [{key}]: Тип dict | Ключи: {list(val.keys())}")
-                            for k, v in val.items():
-                                if isinstance(v, list):
-                                    print(f"    * Ключ [{k}]: Длина списка = {len(v)} | Тип элементов = {type(v[0]).__name__}")
-                        elif isinstance(val, list):
-                            print(f" -> Переменная [{key}]: Тип list | Длина списка = {len(val)}")
-                            if len(val) > 0:
-                                print(f"    * Элемент 0: Тип = {type(val[0]).__name__}")
-                                if hasattr(val[0], "shape"): print(f"      - Форма тензора = {val[0].shape}")
-                        elif hasattr(val, "shape"):
-                            print(f" -> Переменная [{key}]: Тип {type(val).__name__} | Форма = {val.shape} | Dtype = {val.dtype}")
-                    except Exception as t_err:
-                        print(f" -> Ошибка инспекции переменной [{key}]: {t_err}")
-            print("="*80 + "\n")
+            # Тотальный дамп всех локальных объектов во всех доступных кадрах стека
+            print("[ИНСПЕКЦИЯ ПАМЯТИ КАДРА ПАДЕНИЯ]:")
+            curr_frame = frame
+            while curr_frame:
+                print(f" -> Локация: {curr_frame.f_code.co_filename}:{curr_frame.f_lineno} в функции {curr_frame.f_code.co_name}")
+                for key, val in curr_frame.f_locals.items():
+                    if any(x in key.lower() for x in ["mod", "vec", "tensor", "args", "shape"]):
+                        try:
+                            if hasattr(val, "shape"):
+                                print(f"    * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
+                            elif isinstance(val, (list, tuple)):
+                                print(f"    * Контейнер [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
+                                if len(val) > 0: print(f"      - Элемент 0: {type(val[0]).__name__}")
+                        except:
+                            pass
+                curr_frame = curr_frame.f_back
+            print("!"*80 + "\n")
     return trace_lines
 
 class ChromaInlineLoRA(nn.Module):
@@ -78,21 +75,17 @@ class ChromaInlineLoRA(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         base_out = self.base_layer(x)
-        
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             lora_out = torch.matmul(x.to(torch.bfloat16), self.lora_A)
             lora_out = torch.matmul(lora_out, self.lora_B) * self.scale
-            
-        out = base_out + lora_out.to(base_out.dtype)
-        ChromaTelemetry.verify(out, f"LoRA_Out_r{self.rank}")
-        return out
+        return base_out + lora_out.to(base_out.dtype)
 
     def verify_gradients(self, layer_name: str):
         for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
             if param.grad is None:
-                print(f" [WARN] МЕРТВЫЙ ГРАДИЕНТ [{layer_name}.{name}]: Адаптер простаивает!")
+                print(f" [WARN] МЕРТВЫЙ ГРАДИЕНТ [{layer_name}.{name}]")
             elif torch.isnan(param.grad).any():
-                print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]: Обнаружен NaN!")
+                print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]")
 #---------------- Конец Блока 1 -----------------
 
 
@@ -130,15 +123,12 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Очищенное Боевое Ядро train_step_core) ----------------
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро со сквозной приборной панелью) -------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Полностью вычищен от ошибок вложенности списков и утечек VRAM в Shared RAM Windows.
+    Выводит жесткие физические параметры длин контейнеров прямо перед входом в трансформер.
     """
-    # Активация дефектоскопа для сквозного построчного контроля рантайма
-    sys.settrace(trace_lines)
-    
     x1 = batch["latent"].cuda()
     clip_hidden = batch["clip_hidden"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
@@ -152,20 +142,16 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
 
-    ChromaTelemetry.verify(x1, "train_step.latents", 4)
     optimizer.zero_grad(set_to_none=True)
     
-    # Генерация шумового поля траектории Rectified Flow
     x0 = torch.randn_like(x1)
-    t = torch.rand((x1.shape[0],), device=x1.device, dtype=x1.dtype)
+    t = torch.rand((x1.shape,), device=x1.device, dtype=x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
-    # Расчет векторов модуляции через Аппроксиматор Метрополии
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
     raw_mod = approximator(t_vec)
 
-    # Проекция шины модуляции через статический узел (Защита VRAM от мусорных Autograd-копий)
     if raw_mod.shape[-1] == 5120:
         raw_mod = mod_projector(raw_mod)
 
@@ -174,41 +160,46 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     mods = {"double": [], "single": [], "final": None}
     
-    # Снайперская сборка пакетов под устав распаковки DoubleStreamBlock ядра
     for i in range(19):
-        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2]
-        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2]
-        
-        # Разворачиваем в плоский уставной список из 4-х изолированных объектов ModulationOut
-        flat_double_vec = [img_mod_pair[0], img_mod_pair[1], txt_mod_pair[0], txt_mod_pair[1]]
-        mods["double"].append(flat_double_vec)
+        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]
+        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]
+        mods["double"].append([img_mod_pair, txt_mod_pair])
         
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
         
     mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
 
-    # Прямой маршевый проход трансформера
+    # ==========================================================================
+    # ПРИБОРНАЯ ПАНЕЛЬ ТЕЛЕМЕТРИИ ПЕРЕД ПОДЖИГОМ (Прямой рентген памяти)
+    # ==========================================================================
+    print("\n" + "="*60)
+    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Срез параметров перед маршевым проходом:")
+    print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
+    print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
+    print(f" -> Контейнер mods['double']     : Длина списка = {len(mods['double'])}")
+    if len(mods['double']) > 0:
+        print(f"    * Структура пакета Блока №0 : {type(mods['double'][0]).__name__} | Длина = {len(mods['double'][0])}")
+        print(f"    * Элемент 0 (Графика)       : {type(mods['double'][0][0]).__name__} | Длина = {len(mods['double'][0][0]) if isinstance(mods['double'][0][0], list) else 'Not List'}")
+    print(f" -> Контейнер mods['single']     : Длина списка = {len(mods['single'])}")
+    if len(mods['single']) > 0:
+        print(f"    * Тип объекта Одиночного №0 : {type(mods['single'][0]).__name__}")
+    print(f" -> Финальный контейнер mods['final']: Тип = {type(mods['final']).__name__} | Длина = {len(mods['final']) if isinstance(mods['final'], list) else 'Not List'}")
+    print("="*60 + "\n")
+    # ==========================================================================
+
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
-        sys.settrace(None)
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss рухнул в NaN!")
         
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
-    # Рантайм-проверка градиентов LoRA-адаптеров перед флашингом
-    for name, module in model.named_modules():
-        if hasattr(module, "verify_gradients"):
-            module.verify_gradients(name)
-
-    # Тотальная зачистка и выжигание следов бэкварда: спасаем VRAM от Shared-течи WDDM
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
-    sys.settrace(None)
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
