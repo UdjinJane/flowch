@@ -1,11 +1,12 @@
-#---------------- Старт Блока 1 (Хедер, Трейсер и Телеметрия LoRA-Инжектора) ----------------
+#---------------- Старт Блока 1 (Хедер, Самописец Черного Ящика и Телеметрия LoRA) ----------------
 import os
 import sys
+import traceback
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-# Жесткое удержание WDDM Windows против утечек во внешнюю RAM хоста APEX
+# Блокировка скрытого PCIe-спиллинга Windows WDDM в ОЗУ хоста
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 sys.path.append(os.path.abspath("./src"))
@@ -14,12 +15,43 @@ from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
 
 def trace_lines(frame, event, arg):
-    """Дефектоскоп реального времени: построчный трейсер ядра геометрии."""
-    if event == "line":
-        code = frame.f_code
-        filename = code.co_filename
-        if "chroma_core" in filename or "train_engine" in filename:
-            print(f" [TRACE] {filename}:{frame.f_lineno} -> {code.co_name}")
+    """
+    Черный ящик: перехватывает аварийный останов, делает полный дамп стека
+    и выводит точные структуры данных в момент падения expected 3.
+    """
+    if event == "exception":
+        exc_type, exc_value, exc_traceback = arg
+        if issubclass(exc_type, ValueError):
+            print("\n" + "="*80)
+            print(f"[КРИТИЧЕСКИЙ ДАМП АВАРИИ]: Перехвачено исключение {exc_type.__name__}")
+            print(f"Сообщение об ошибке: {exc_value}")
+            print("="*80)
+            
+            # Печатаем полный стек, чтобы узнать точный файл и номер строки падения
+            print("[СТЕК ВЫЗОВОВ СИСТЕМЫ]:")
+            traceback.print_exception(exc_type, exc_value, exc_traceback)
+            print("="*80)
+            
+            # Инспектируем локальные переменные в упавшем кадре (пытаемся найти mods или distill_vec)
+            print("[ЛОКАЛЬНЫЙ КОНТЕКСТ ПАДЕНИЯ]:")
+            for key, val in frame.f_locals.items():
+                if key in ["distill_vec", "mods", "flat_mods", "x", "x_mod", "tensor"]:
+                    try:
+                        if isinstance(val, dict):
+                            print(f" -> Переменная [{key}]: Тип dict | Ключи: {list(val.keys())}")
+                            for k, v in val.items():
+                                if isinstance(v, list):
+                                    print(f"    * Ключ [{k}]: Длина списка = {len(v)} | Тип элементов = {type(v[0]).__name__}")
+                        elif isinstance(val, list):
+                            print(f" -> Переменная [{key}]: Тип list | Длина списка = {len(val)}")
+                            if len(val) > 0:
+                                print(f"    * Элемент 0: Тип = {type(val[0]).__name__}")
+                                if hasattr(val[0], "shape"): print(f"      - Форма тензора = {val[0].shape}")
+                        elif hasattr(val, "shape"):
+                            print(f" -> Переменная [{key}]: Тип {type(val).__name__} | Форма = {val.shape} | Dtype = {val.dtype}")
+                    except Exception as t_err:
+                        print(f" -> Ошибка инспекции переменной [{key}]: {t_err}")
+            print("="*80 + "\n")
     return trace_lines
 
 class ChromaInlineLoRA(nn.Module):
@@ -34,7 +66,6 @@ class ChromaInlineLoRA(nn.Module):
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
         
-        # Разворачиваем Master Weights строго в bfloat16 для CUDA
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
 
@@ -57,13 +88,13 @@ class ChromaInlineLoRA(nn.Module):
         return out
 
     def verify_gradients(self, layer_name: str):
-        """Инспектор прожогов: контроль градиентов на каждом шаге."""
         for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
             if param.grad is None:
                 print(f" [WARN] МЕРТВЫЙ ГРАДИЕНТ [{layer_name}.{name}]: Адаптер простаивает!")
             elif torch.isnan(param.grad).any():
                 print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]: Обнаружен NaN!")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
