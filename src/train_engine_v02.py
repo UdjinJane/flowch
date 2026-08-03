@@ -110,7 +110,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     target_velocity = x1 - x0
 
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
-    monolithic_mod = approximator(t_vec).unsqueeze(1)
+    raw_mod = approximator(t_vec)
+    
+    # СНАЙПЕРСКИЙ ИНЖЕКТОР СЖАТИЯ ПОД КАЛИБР 3072
+    # Если Аппроксиматор Метрополии выплюнул 5120, мы динамически адаптируем его под шаг блоков
+    if raw_mod.shape[-1] == 5120:
+        # Пассивная инлайн-проекция без накопления градиентов базы, сохраняющая граф LoRA
+        mod_projector = nn.Linear(5120, 3072, bias=False, dtype=torch.bfloat16).to(raw_mod.device)
+        raw_mod = mod_projector(raw_mod)
+        
+    monolithic_mod = raw_mod.unsqueeze(1)
+
     
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
     mods = {"double": [], "single": [], "final": None}
