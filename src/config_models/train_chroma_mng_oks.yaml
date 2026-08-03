@@ -34,7 +34,7 @@ config:
         
       # Сектор 4: Изолированное FP8-ядро Метрополии
       model:
-        name_or_path: "Z:\\flowch\\models_core\\transformer\\chroma-unlocked-v50-annealed float8 e4m3fn learned svd.safetensors"
+        name_or_path: "Z:\\flowch\\models_core\\transformer\\Chroma1-HD.safetensors"
         vae_path: "Z:\\flowch\\models_core\\vae\\flux-vae-bf16.safetensors"
         quantize: true  # Включение TorchAO Hooks фильтрации
         train_text_encoder: false  # Полное вымывание T5 из VRAM
