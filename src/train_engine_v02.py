@@ -140,6 +140,19 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     torch.cuda.empty_cache()
     return loss.item()
 
+# ШОВ-ПЕРЕХВАТЧИК: Принудительный вывод каждой исполняемой строки ядра
+def trace_lines(frame, event, arg):
+    if event == "line":
+        code = frame.f_code
+        filename = code.co_filename
+        if "chroma_core" in filename or "train_engine" in filename:
+            print(f" [TRACE] {filename}:{frame.f_lineno} -> {code.co_name}")
+    return trace_lines
+
+import sys
+sys.settrace(trace_lines)
+
+
 def run_reactor_forge():
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
