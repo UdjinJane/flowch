@@ -95,14 +95,18 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
     monolithic_mod = approximator(t_vec)
     
-    # ШОВ №3: Построение структурированной иерархии для обхода KeyError
+    # ШОВ №3: Построение структурированной иерархии в строгом соответствии с layers_clean.py
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
     mods = {"double": [], "single": [], "final": None}
     for i in range(19):
-        mods["double"].append([flat_mods[f"double_blocks.{i}.img_mod.lin"], flat_mods[f"double_blocks.{i}.txt_mod.lin"]])
+        # Передаем список списков: [[img_mod1, img_mod2], [txt_mod1, txt_mod2]]
+        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]
+        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]
+        mods["double"].append([img_mod_pair, txt_mod_pair])
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
     mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
+
 
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
