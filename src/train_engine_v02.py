@@ -210,13 +210,11 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
-
 #---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
     """
     Декомпозированный маршевый трансформер Chroma.
-    Полностью очищен от ошибок распаковки кортежей и ловушек мерности.
+    Полностью очищен от ошибок распаковки кортежей и С++ заносов памяти.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -252,7 +250,10 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
 
-        # 1. Проход по спаренным блокам (Принимаем строго 2 элемента из очищенного ядра layers_clean!)
+        # Вычисляем жесткую длину отсека текста для безопасного среза памяти
+        txt_len = txt_tokens.shape[1]
+
+        # 1. Проход по спаренным链 (Принимаем строго 2 элемента из очищенного ядра layers_clean!)
         for i, block in enumerate(self.double_blocks):
             txt_tokens, img_tokens = block(
                 txt=txt_tokens, img=img_tokens, pe=None, distill_vec=mods["double"][i]
@@ -265,8 +266,8 @@ class ChromaMMDiT(nn.Module):
                 x=x_combined, pe=None, distill_vec=mods["single"][i]
             )
 
-        # 3. Восстановление исходной 4D-геометрии латентного отсека
-        pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
+        # 3. Восстановление исходной 4D-геометрии с герметизацией non-contiguous памяти
+        pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
         B, C_raw, H_raw, W_raw = x_latent.shape
@@ -275,6 +276,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 #---------------- Старт Блока 5 (Контур Инициализации и Точка Входа Реактора) ----------------
 def run_reactor_forge():
     """
