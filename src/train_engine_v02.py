@@ -93,7 +93,9 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     # ШОВ №1: Нативный сквозной Autograd для шины модуляции (Взвод градиентов)
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
-    monolithic_mod = approximator(t_vec)
+    # Перехватываем 2D выхлоп Аппроксиматора Метрополии и принудительно кастим в 3D [B, 1, D]
+    monolithic_mod = approximator(t_vec).unsqueeze(1)
+
     
     # ШОВ №3: Построение структурированной иерархии в строгом соответствии с layers_clean.py
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
