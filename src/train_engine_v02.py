@@ -79,6 +79,10 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module) -> float:
     """Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow."""
+def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module) -> float:
+    import sys
+    sys.settrace(trace_lines)  # Включаем прицельный перехват только на время шага плавки
+
     x1 = batch["latent"].cuda()
     clip_hidden = batch["clip_hidden"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
@@ -94,7 +98,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         
     ChromaTelemetry.verify(x1, "train_step.latents", 4)
 
-
     optimizer.zero_grad(set_to_none=True)
 
     x0 = torch.randn_like(x1)
@@ -106,8 +109,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
     # Перехватываем 2D выхлоп Аппроксиматора Метрополии и принудительно кастим в 3D [B, 1, D]
     monolithic_mod = approximator(t_vec).unsqueeze(1)
-
-    
+  
     # ШОВ №3: Построение структурированной иерархии в строгом соответствии с layers_clean.py
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
     mods = {"double": [], "single": [], "final": None}
@@ -119,7 +121,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
     mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
-
 
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
@@ -148,9 +149,10 @@ def trace_lines(frame, event, arg):
         if "chroma_core" in filename or "train_engine" in filename:
             print(f" [TRACE] {filename}:{frame.f_lineno} -> {code.co_name}")
     return trace_lines
-
-import sys
-sys.settrace(trace_lines)
+    sys.settrace(None)  # Гасим трассировщик, шаг завершен успешно
+    return loss.item()
+# import sys
+# sys.settrace(trace_lines)
 
 
 def run_reactor_forge():
