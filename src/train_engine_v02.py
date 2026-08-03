@@ -123,14 +123,13 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро со сквозной приборной панелью) -------------
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро под заводской устав Chroma1-HD) ------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
-    Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Полностью очищен от ошибок вложенности списков и утечек VRAM в Shared RAM Windows.
+    Выполняет один боевой шаг плавки LoRA строго по заводской топологии Chroma1-HD.
+    Полностью очищен от фантомных слоев модуляции AdaLN.
     """
     x1 = batch["latent"].cuda()
-    clip_hidden = batch["clip_hidden"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
 
     # ШОВ ВЫРАВНИВАНИЯ КОНТЕНТА: Добиваем текстовый кэш T5 до эталонных 512 токенов
@@ -150,47 +149,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
-    # Расчет векторов модуляции через Аппроксиматор Метрополии
-    t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
-    raw_mod = approximator(t_vec)
-
-    # Проекция шины модуляции через статический узел (Защита VRAM от мусорных Autograd-копий)
-    if raw_mod.shape[-1] == 5120:
-        raw_mod = mod_projector(raw_mod)
-
-    monolithic_mod = raw_mod.unsqueeze(1)
-    flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
-
-    mods = {"double": [], "single": [], "final": None}
-    
-    # СНАЙПЕРСКАЯ СБОРКА ПАКЕТОВ: упаковываем пары списков строго под устав ядра [0] и [1]
-    for i in range(19):
-        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2] (длина 2)
-        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2] (длина 2)
-        
-        # Нативный двухкомпонентный вектор: элемент [0] для графики, элемент [1] для текста
-        native_double_vec = [img_mod_pair, txt_mod_pair]
-        mods["double"].append(native_double_vec)
-        
-    for i in range(38):
-        mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
-        
-    mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
+    # По заводскому уставу Chroma1-HD передаем пустую маску модов, так как AdaLN слоев нет
+    mods = {"double": None, "single": None, "final": None}
 
     # ==========================================================================
-    # ПРИБОРНАЯ ПАНЕЛЬ ТЕЛЕМЕТРИИ ПЕРЕД ПОДЖИГОМ (Прямой рентген памяти)
+    # ПРИБОРНАЯ ПАНЕЛЬ ЗАВОДСКОГО СТЫКА (Рентген CUDA-памяти)
     # ==========================================================================
     print("\n" + "="*60)
-    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Срез параметров перед маршевым проходом:")
+    print("[ЗАВОДСКОЙ КОНТУР]: Срез параметров Chroma1-HD:")
     print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Контейнер mods['double']     : Длина списка блоков = {len(mods['double'])}")
-    if len(mods['double']) > 0:
-        print(f"    * Структура пакета Блока №0 : {type(mods['double'][0]).__name__} | Длина = {len(mods['double'][0])} (Должна быть равна 2!)")
-        print(f"    * Внутренний индекс [0]     : {type(mods['double'][0][0]).__name__} | Длина = {len(mods['double'][0][0])}")
-        print(f"    * Внутренний индекс [1]     : {type(mods['double'][0][1]).__name__} | Длина = {len(mods['double'][0][1])}")
-    print(f" -> Контейнер mods['single']     : Длина списка = {len(mods['single'])}")
-    print(f" -> Финальный контейнер mods['final']: Длина списка = {len(mods['final'])}")
+    print(f" -> Аппроксимация AdaLN модов    : ОТКЛЮЧЕНА (Топология Chroma соответсвует дамп-логу)")
     print("="*60 + "\n")
     # ==========================================================================
 
@@ -211,6 +180,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
