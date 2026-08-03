@@ -1,20 +1,19 @@
-# Блок №1: Инициализация окружения и маршевые импорты train_engine_v02.py
 import os
 import sys
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.checkpoint import checkpoint
 
 # Фиксация WDDM-политики Windows против утечек во внешнюю RAM
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 # Прямой линк на изолированные узлы очищенного ядра реактора
 sys.path.append(os.path.abspath("./src"))
-from chroma_core.layers_clean import ChromaModulationBus, ChromaTelemetry
+from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_modulations
 from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
 
-#-------------------- Блок №2 (АБСОЛЮТНАЯ ЗАЩИТА): Кастомный инжектор ChromaInlineLoRA --------------------
 class ChromaInlineLoRA(nn.Module):
     """
     Кастомный шов LoRA. Отказ от PEFT. Врезается напрямую в линейные слои [2.2].
@@ -25,172 +24,124 @@ class ChromaInlineLoRA(nn.Module):
         self.base_layer = base_layer
         self.rank = rank
         self.scale = alpha / rank
-        
         in_features = base_layer.in_features
         out_features = base_layer.out_features
         
-        # Жесткая привязка к девайсу базового замороженного слоя для исключения CPU-шума
         target_device = base_layer.weight.device
-        
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
 
     def __getattr__(self, name: str):
-        """Проброс системных атрибутов (.weight, .bias) к базовому слою для обхода проверок в ядрах."""
         try:
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.base_layer, name)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Телеметрия входного потока
         ChromaTelemetry.verify(x, f"LoRA_In_{self.rank}")
-        
-        # Базовый прогон через замороженное FP8/BF16 ядро
         base_out = self.base_layer(x)
-        
-        # Жесткий контекст вычислений адаптера для изоляции от шума
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            # Формула шва: Y = Base(X) + ((X * A) * B) * scale
             lora_out = torch.matmul(x.to(torch.bfloat16), self.lora_A)
             lora_out = torch.matmul(lora_out, self.lora_B) * self.scale
-            
-        out = base_out + lora_out.to(base_out.dtype)
+            out = base_out + lora_out.to(base_out.dtype)
         ChromaTelemetry.verify(out, f"LoRA_Out_{self.rank}")
         return out
 
     def verify_gradients(self, layer_name: str):
-        """Авторитарный контроль градиентов на шаге backward."""
         for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
             if param.grad is None:
                 print(f" [WARN] МЕРТВЫЙ ГРАДИЕНТ [{layer_name}.{name}]: Обновление отсутствует!")
             elif torch.isnan(param.grad).any():
                 print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]: Обнаружен NaN!")
-#-------------------- Окончание блока №2 --------------------
 
-#-------------------- Блок №3: Снайперский инжектор patch_chroma_reactor --------------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
-    """
-    Сканирует граф весов Chroma v50 и врезает ChromaInlineLoRA [3.3].
-    Отказ от PEFT исключает разрушение монолитной шины модуляции.
-    """
     patched_count = 0
     print("# === ИНИЦИАЛИЗАЦИЯ ИНЖЕКЦИИ АДАПТЕРОВ В ЯДРО RECTOR ===")
-    
-    # Рекурсивный обход всех подмодулей 57 блоков MMDiT
     for name, module in model.named_modules():
-        # Таргеты плавки по Платиновой Книге [3.3]: внимание Double и Single блоков
         if any(target in name for target in ["txt_attn", "img_attn", "linear1"]):
             if isinstance(module, nn.Linear):
-                # Извлекаем родительский модуль и имя слоя для inline-подмены
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
                 parent = model.get_submodule(parent_name) if parent_name else model
                 
-                # Замораживаем базу наглухо, очищая граф Autograd
                 module.weight.requires_grad = False
                 if module.bias is not None:
                     module.bias.requires_grad = False
                 
-                # Врезка кастомного шва LoRA
                 lora_wrapper = ChromaInlineLoRA(module, rank=rank)
                 setattr(parent, child_name, lora_wrapper)
                 patched_count += 1
-                
                 print(f" -> [OK] Инжектирован шов: {name} | База заморожена.")
-                
     if patched_count == 0:
-        raise RuntimeError("[АВАРИЯ] Точки инжекции LoRA не найдены! Проверь топологию весов.")
-        
+        raise RuntimeError("[АВАРИЯ] Точки инжекции LoRA не найдены!")
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
-#-------------------- Окончание блока №3 --------------------
 
-#-------------------- Блок №4 (ОГНЕУПОРНЫЙ БОЕВОЙ): Маршевое ядро train_step_core --------------------
-def train_step_core(batch: dict, model: nn.Module, bus: ChromaModulationBus, optimizer: AdamW8bit, approximator: nn.Module) -> float:
-    """
-    Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Обеспечивает жесткое удержание градиентов в пределах физической VRAM чипа.
-    """
-    # 1. Извлечение и сквозной контроль геометрии сырого 4D-потока данных
-    x1 = batch["latent"].cuda()              # Иходный латент 4D: [B, 16, 128, 128]
-    clip_hidden = batch["clip_hidden"].cuda()  # Текст CLIP
-    t5_hidden = batch["t5_hidden"].cuda()      # Текст T5
-    
+def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module) -> float:
+    """Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow."""
+    x1 = batch["latent"].cuda()
+    clip_hidden = batch["clip_hidden"].cuda()
+    t5_hidden = batch["t5_hidden"].cuda()
     ChromaTelemetry.verify(x1, "train_step.latents", 4)
-    
-    # 2. Изоляция и принудительное обнуление градиентов ДО начала вычислений
+
     optimizer.zero_grad(set_to_none=True)
-    
-    # 3. Generation траектории Rectified Flow в исходном 4D пространстве латентов
+
     x0 = torch.randn_like(x1)
     t = torch.rand((x1.shape[0],), device=x1.device, dtype=x1.dtype)
-    
-    # Линейный транспортный путь (4D)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
+
+    # ШОВ №1: Нативный сквозной Autograd для шины модуляции (Взвод градиентов)
+    t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
+    monolithic_mod = approximator(t_vec)
     
-    # 4. Расчет монолитной шины модуляции векторов управления
-    monolithic_mod = approximator(t, clip_hidden, t5_hidden)
-    mods = bus.distribute_modulations(monolithic_mod)
-    
-    # 5. Прямой проход через ядро модели (активирован Gradient Checkpointing внутри модели)
+    # ШОВ №3: Построение структурированной иерархии для обхода KeyError
+    flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
+    mods = {"double": [], "single": [], "final": None}
+    for i in range(19):
+        mods["double"].append([flat_mods[f"double_blocks.{i}.img_mod.lin"], flat_mods[f"double_blocks.{i}.txt_mod.lin"]])
+    for i in range(38):
+        mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
+    mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
+
     pred_velocity = model(xt, t5_hidden, mods)
-    
-    # Расчет ошибки между истинным полем скоростей и предсказанным
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss свалился в NaN! Рантайм остановлен.")
-        
-    # 6. Обратный проход и прокалка градиентов Master Weights
-    loss.backward()
-    
-    # Жесткий барьер против микро-взрывов латентного пространства
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    
-    # Шаг 8-битного оптимизатора градиентов
-    optimizer.step()
-    
-    # 7. ТОТАЛЬНОЕ ШЛАКООТДЕЛЕНИЕ: немедленное уничтожение градиентов после шага
-    optimizer.zero_grad(set_to_none=True)
-    
-    # Полная принудительная очистка кэша аллокатора CUDA под Windows
-    torch.cuda.empty_cache()
-    
-    return loss.item()
-#-------------------- Окончание блока №4 --------------------
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss свалился в NaN!")
 
-#-------------------- Блок №5 (ОГНЕУПОРНЫЙ СИНХРОНИЗИРОВАННЫЙ): Маршевый пуск и Управляющий Цикл --------------------
-from torch.utils.checkpoint import checkpoint
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    optimizer.step()
+
+    # ШОВ №2: Сбор логов ДО флашинга градиентов, за которым следует тотальная очистка VRAM
+    for name, module in model.named_modules():
+        if hasattr(module, "verify_gradients"):
+            module.verify_gradients(name)
+
+    optimizer.zero_grad(set_to_none=True)
+    torch.cuda.empty_cache()
+    return loss.item()
 
 def run_reactor_forge():
-    """
-    Главный пульт управления процессом плавки LoRA на хосте APEX.
-    Полное уничтожение Shared RAM: прямой инлайн-проброс тензоров в checkpoint [22.2].
-    """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     hidden_size = 3072
     num_double = 19
     num_single = 38
-    
+
     from chroma_core.layers_clean import DoubleStreamBlock, SingleStreamBlock
-    
+
     class ChromaMMDiT(nn.Module):
         def __init__(self):
             super().__init__()
-            # Входные проекторы Метрополии согласно физической карте весов
             self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
             self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
             self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
-            
             self.double_blocks = nn.ModuleList([DoubleStreamBlock(hidden_size) for _ in range(num_double)])
             self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
-            
+
         def pack_latents(self, x: torch.Tensor) -> torch.Tensor:
-            """Снайперское схлопывание блоков 2х2 по уставу Метрополии: [B, 16, 128, 128] -> [B, 4096, 64]"""
             B, C, H, W = x.shape
             x = x.view(B, C, H // 2, 2, W // 2, 2)
             x = x.permute(0, 2, 4, 1, 3, 5)
@@ -199,80 +150,50 @@ def run_reactor_forge():
         def forward(self, x_latent, txt_hidden, mods):
             if len(txt_hidden.shape) == 4:
                 txt_hidden = txt_hidden.squeeze(1)
-                
             x_latent = x_latent.to(torch.bfloat16)
             txt_hidden = txt_hidden.to(torch.bfloat16)
-            
-            # 1. Сжатие геометрии латентов и проекция через img_in
+
             xt_flat = self.pack_latents(x_latent)
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
-            
-            # [КРИТИЧЕСКИЙ ТРИГГЕР МЕТРОПОЛИИ]: Взводим градиенты до чекпоинта
-            img_tokens = img_tokens.detach().requires_grad_(True)
-            txt_tokens = txt_tokens.detach().requires_grad_(True)
-            
-            # 2. Прямой прогон через Double-блоки без CPU-замыканий
+
+            # ШОВ №4: Полное сохранение графа Autograd. Никаких .detach() перед входом в чекпоинты!
             for i, block in enumerate(self.double_blocks):
-                # Передаем forward и тензоры напрямую. Чекпоинт видит requires_grad!
                 txt_tokens, img_tokens = checkpoint(
-                    block, 
-                    txt_tokens, 
-                    img_tokens, 
-                    mods["double"][i],
-                    use_reentrant=False,
-                    preserve_rng_state=False
+                    block, txt_tokens, img_tokens, mods["double"][i],
+                    use_reentrant=False, preserve_rng_state=False
                 )
-                
-            x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             
-            # 3. Прямой прогон через Single-блоки без CPU-замыканий
+            x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             for i, block in enumerate(self.single_blocks):
                 x_combined = checkpoint(
-                    block,
-                    x_combined,
-                    mods["single"][i],
-                    use_reentrant=False,
-                    preserve_rng_state=False
+                    block, x_combined, mods["single"][i],
+                    use_reentrant=False, preserve_rng_state=False
                 )
-                
-            # 4. Обратная декомпрессия и распаковка векторов скоростей в 4D
+
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
             
             B, C_raw, H_raw, W_raw = x_latent.shape
             H, W = H_raw // 2, W_raw // 2
-            
             out = pred_img_flat.view(B, H, W, 16, 2, 2)
             out = out.permute(0, 3, 1, 4, 2, 5)
             return out.reshape(B, 16, H_raw, W_raw)
 
     model = ChromaMMDiT()
-    
-    # Врезка кастомных швов LoRA в CPU-каркас
     patched_count = patch_chroma_reactor(model, rank=16)
-    
-    # Подъем всего герметичного комплекса на CUDA в один чистый приём
     model = model.to(device)
-    
-    class DummyApproximator(nn.Module):
-        def __init__(self, out_features):
-            super().__init__()
-            self.linear = nn.Linear(1, out_features, dtype=torch.bfloat16)
-        def forward(self, t, clip, t5):
-            return self.linear(t.to(torch.bfloat16).view(-1, 1))
 
-    bus = ChromaModulationBus(hidden_size=hidden_size, num_double=num_double, num_single=num_single)
-    approximator = DummyApproximator(bus.expected_features).to(device)
-    
+    # Инициализация Аппроксиматора Метрополии под 5120 каналов
+    approximator = Approximator(in_dim=1, out_dim=5120, hidden_dim=5120, n_layers=4).to(device)
     optimizer = AdamW8bit(model.parameters(), lr=1e-4)
     print(" -> [OK] 8-битный оптимизатор градиентов AdamW8bit зафиксирован.")
-    
+
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
-    
+
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
-        print(" [WARN] Карантинные зоны кэша отсутствуют. Холодная симуляция на фантом-батче.")
+        print(" [WARN] Холодная симуляция на фантом-батче.")
         batch = {
             "latent": torch.randn(1, 16, 128, 128, dtype=torch.bfloat16),
             "clip_hidden": torch.randn(1, 77, 768, dtype=torch.bfloat16),
@@ -283,26 +204,18 @@ def run_reactor_forge():
         from chroma_core.init import ChromaDataset
         dataset = ChromaDataset(latent_dir=LATENT_DIR, text_dir=TEXT_DIR)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
-        
+
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЦИКЛА ПЛАВКИ ===")
     for step, batch in enumerate(dataloader):
         try:
-            loss = train_step_core(batch, model, bus, optimizer, approximator)
+            loss = train_step_core(batch, model, optimizer, approximator)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
-            
-            for name, module in model.named_modules():
-                if hasattr(module, "verify_gradients"):
-                    module.verify_gradients(name)
-                    
-            if step >= 1: 
+            if step >= 1:
                 break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
-            
     print("# === ДВИЖОК ВЕРИФИЦИРОВАН. ВСЕ ШВЫ ДЕРЖАТ УДАР. КОНЕЦ СЕССИИ ===")
 
 if __name__ == "__main__":
     run_reactor_forge()
-#-------------------- Окончание кода Блока №5 --------------------
-
