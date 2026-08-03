@@ -163,17 +163,17 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
 
-            # ШОВ №4: Полное сохранение графа Autograd. Никаких .detach() перед входом в чекпоинты!
+            # ШОВ №4: Полное сохранение графа Autograd и выравнивание позиционных аргументов (вставка None для pe)
             for i, block in enumerate(self.double_blocks):
                 txt_tokens, img_tokens = checkpoint(
-                    block, txt_tokens, img_tokens, mods["double"][i],
+                    block, txt_tokens, img_tokens, None, mods["double"][i],
                     use_reentrant=False, preserve_rng_state=False
                 )
             
             x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             for i, block in enumerate(self.single_blocks):
                 x_combined = checkpoint(
-                    block, x_combined, mods["single"][i],
+                    block, x_combined, None, mods["single"][i],
                     use_reentrant=False, preserve_rng_state=False
                 )
 
