@@ -238,80 +238,54 @@ class DoubleStreamBlock(nn.Module):
             nn.Linear(mlp_hidden_dim, hidden_size, bias=True, dtype=torch.bfloat16),
         )
 
-#---------------- Старт Текстового Шва Ядра (Герметичный forward DoubleStreamBlock без .shape срезов) -
     def forward(self, txt: torch.Tensor, img: torch.Tensor, pe: torch.Tensor, distill_vec: list = None, mask: torch.Tensor = None) -> tuple[torch.Tensor, torch.Tensor]:
         ChromaTelemetry.verify(img, "DoubleStreamBlock.img_in")
         target_dtype = self.txt_attn.qkv.weight.dtype
         img = img.to(target_dtype)
         txt = txt.to(target_dtype)
         
-        # ОБВОДНОЙ ШУНТ: Если векторов модуляции нет, пускаем чистый BF16 поток без AdaLN
-        if distill_vec is None:
-            img_modulated = self.img_norm1(img)
-            txt_modulated = self.txt_norm1(txt)
-            
-            img_qkv = self.img_attn.qkv(img_modulated).contiguous()
-            txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
-            
-            # Нативный аппаратный .chunk() вместо капризной Einops-распаковки K=3
-            img_q, img_k, img_v = img_qkv.chunk(3, dim=-1)
-            txt_q, txt_k, txt_v = txt_qkv.chunk(3, dim=-1)
-            
-            # Извлекаем жесткие числовые длины последовательностей для безопасного среза памяти
-            B, L_img, _ = img_q.shape
-            _, L_txt, _ = txt_q.shape
-            
-            # Восстанавливаем стандартную CUDA-геометрию тензоров под SDPA [B, H, L, D]
-            img_q = img_q.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            img_k = img_k.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            img_v = img_v.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            
-            txt_q = txt_q.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            txt_k = txt_k.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            txt_v = txt_v.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            
-            q = torch.cat((txt_q, img_q), dim=2)
-            k = torch.cat((txt_k, img_k), dim=2)
-            v = torch.cat((txt_v, img_v), dim=2)
-            
-            # Вызов внимания возвращает форму [B, H, L, D]
-            attn = attention(q, k, v, pe=pe, mask=mask)
-            
-            # СНАЙПЕРСКИЙ СРЕЗ: Вырезаем строго по целочисленным координатам осей (dim=2)
-            txt_attn, img_attn = attn[:, :, :L_txt], attn[:, :, L_txt:]
-            
-            # Возвращаем оси [B, H, L, D] -> [B, L, H*D] перед линейной проекцией
-            txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
-            img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
-            
-            img = img + self.img_attn.proj(img_attn)
-            img = img + self.img_mlp(self.img_norm2(img))
-            txt = txt + self.txt_attn.proj(txt_attn)
-            txt = txt + self.txt_mlp(self.txt_norm2(txt))
-            return txt, img
-
-        # Ванильный контур кузнецов (остается без изменений для совместимости)
-        img_mod1, img_mod2 = distill_vec
-        txt_mod1, txt_mod2 = distill_vec
-        img_modulated = (1 + img_mod1.scale.squeeze(1).to(target_dtype)) * self.img_norm1(img) + img_mod1.shift.squeeze(1).to(target_dtype)
-        txt_modulated = (1 + txt_mod1.scale.squeeze(1).to(target_dtype)) * self.txt_norm1(txt) + txt_mod1.shift.squeeze(1).to(target_dtype)
-        img_qkv = self.img_attn.qkv(img_modulated)
-        txt_qkv = self.txt_attn.qkv(txt_modulated)
-        img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        # Наш огнеупорный обводной шунт Bypass:
+        img_modulated = self.img_norm1(img)
+        txt_modulated = self.txt_norm1(txt)
+        
+        img_qkv = self.img_attn.qkv(img_modulated).contiguous()
+        txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
+        
+        # Нативный аппаратный .chunk() монолита QKV на 3 равных вектора
+        img_q, img_k, img_v = img_qkv.chunk(3, dim=-1)
+        txt_q, txt_k, txt_v = txt_qkv.chunk(3, dim=-1)
+        
+        B, L_img, _ = img_q.shape
+        _, L_txt, _ = txt_q.shape
+        
+        # Выравнивание CUDA-геометрии строго под нативный устав SDPA [B, H, L, D]
+        img_q = img_q.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        img_k = img_k.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        img_v = img_v.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        
+        txt_q = txt_q.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        txt_k = txt_k.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        txt_v = txt_v.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
+        
         attn = attention(q, k, v, pe=pe, mask=mask)
-        txt_attn, img_attn = attn[:, :txt.shape], attn[:, txt.shape:]
-        img = img + img_mod1.gate.squeeze(1).to(target_dtype) * self.img_attn.proj(img_attn)
-        img = img + img_mod2.gate.squeeze(1).to(target_dtype) * self.img_mlp((1 + img_mod2.scale.squeeze(1).to(target_dtype)) * self.img_norm2(img) + img_mod2.shift.squeeze(1).to(target_dtype))
-        txt = txt + txt_mod1.gate.squeeze(1).to(target_dtype) * self.txt_attn.proj(txt_attn)
-        txt = txt + txt_mod2.gate.squeeze(1).to(target_dtype) * self.txt_mlp((1 + txt_mod2.scale.squeeze(1).to(target_dtype)) * self.txt_norm2(txt) + txt_mod2.shift.squeeze(1).to(target_dtype))
+        
+        # Числовой целочисленный срез по третьей оси (dim=2)
+        txt_attn, img_attn = attn[:, :, :L_txt], attn[:, :, L_txt:]
+        
+        # Перекладываем оси [B, H, L, D] -> [B, L, H*D] перед линейной проекцией Метрополии
+        txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
+        img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
+        
+        img = img + self.img_attn.proj(img_attn)
+        img = img + self.img_mlp(self.img_norm2(img))
+        txt = txt + self.txt_attn.proj(txt_attn)
+        txt = txt + self.txt_mlp(self.txt_norm2(txt))
         return txt, img
-#---------------- Конец Текстового Шва Ядра -----------------
 
-#---------------- Старт Текстового Шва Ядра (Тотальная очистка SingleStreamBlock от Einops) ---------
 class SingleStreamBlock(nn.Module):
     """Маршевый одиночный блок с обводным шунтом для безопасного сухого пуска LoRA."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
@@ -320,6 +294,7 @@ class SingleStreamBlock(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        
         self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim, dtype=torch.bfloat16)
         self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size, dtype=torch.bfloat16)
         self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -330,45 +305,26 @@ class SingleStreamBlock(nn.Module):
         target_dtype = self.linear1.weight.dtype
         x = x.to(target_dtype)
         
-        # 1. ОБВОДНОЙ ШУНТ: Если модов нет, считаем чистую классическую геометрию без Einops
-        if distill_vec is None:
-            x_mod = self.pre_norm(x)
-            linear_out = self.linear1(x_mod).contiguous()
-            
-            # Четко отделяем QKV-часть от MLP-части по уставной маске Метрополии
-            qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
-            
-            # Снайперский .chunk() монолита QKV на 3 равных вектора
-            q, k, v = qkv.chunk(3, dim=-1)
-            
-            B, L, _ = q.shape
-            q = q.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-            
-            attn = attention(q, k, v, pe=pe, mask=mask)
-            attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
-            
-            output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
-            return x + output
-
-        # 2. ВАНИЛЬНЫЙ КОНТУР: Очищен от С++ капканов Einops. Выравнивание восстановлено.
-        mod = distill_vec
-        x_mod = (1 + mod.scale.squeeze(1).to(target_dtype)) * self.pre_norm(x) + mod.shift.squeeze(1).to(target_dtype)
+        # Наш огнеупорный обводной шунт Bypass:
+        x_mod = self.pre_norm(x)
         linear_out = self.linear1(x_mod).contiguous()
         
+        # Разделение монолита по уставной маске Метрополии
         qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
         
-        # Замена ломаного rearrange на безопасный аппаратный .chunk()
+        # Безопасный аппаратный .chunk() вместо Einops-распаковок
         q, k, v = qkv.chunk(3, dim=-1)
+        
         B, L, _ = q.shape
         q = q.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         
         attn = attention(q, k, v, pe=pe, mask=mask)
+        
+        # Перекладываем оси из [B, H, L, D] строго в [B, L, H, D] перед склейкой шины
         attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
         
         output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
-        return x + mod.gate.squeeze(1).to(target_dtype) * output
+        return x + output
 #---------------- Конец Блока №4_ЯДРО -----------------
