@@ -1,41 +1,53 @@
+#---------------- Старт Блока 1 (Динамический сборщик и валидатор манифеста реального кэша мангала)---
 import os
 import json
 
-DATA_DIR = "./dataset"
+DATA_DIR = r"Z:\flowch\dataset"
+MNG_DIR = os.path.join(DATA_DIR, "mng_oks_bl")
 OUTPUT_FILE = os.path.join(DATA_DIR, "metadata.jsonl")
 
-# Наш мини-пакет промптов для калибровки Flux/Chroma
-RAW_DATA = [
-    {"image": "001.png", "text": "Chroma-fp8 style photorealistic starship bridge, detailed cyber-gothic console"},
-    {"image": "002.png", "text": "Chroma-fp8 sci-fi reactor core, glowing plasma, high contrast volumetric light"}
-]
-
 def build_and_validate_dataset():
-    """Сборщик датасета: проверяет плацдарм и штампует валидный JSONL."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    """Сборщик датасета: парсит реальный плацдарм мангала и штампует валидный JSONL."""
+    if not os.path.exists(MNG_DIR):
+        print(f"[CRIT] Каталог мангала не найден по адресу: {MNG_DIR}")
+        return
+
+    print(f"[RUN] Сканирую директорию мангала {MNG_DIR}...")
+    
+    # Снайперски собираем только валидные пары JPG+TXT
+    jpg_files = [f for f in os.listdir(MNG_DIR) if f.lower().endswith('.jpg')]
     valid_count = 0
-    
-    print(f"[RUN] Формирую технический датасет в {OUTPUT_FILE}...")
-    
+
+    print(f"[RUN] Формирую маршевый манифест в {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for entry in RAW_DATA:
-            # Снайперская проверка на пустые значения, чтобы трейнер не выпал в NaN
-            if not entry["image"] or not entry["text"].strip():
-                print(f"[WARN] Пропуск битого токена: {entry}")
+        for jpg_name in jpg_files:
+            base_name = os.path.splitext(jpg_name)[0]
+            txt_name = base_name + ".txt"
+            txt_path = os.path.join(MNG_DIR, txt_name)
+            
+            # Читаем промпт из парного файла, если он существует
+            if os.path.exists(txt_path):
+                with open(txt_path, "r", encoding="utf-8") as txt_f:
+                    prompt_text = txt_f.read().strip()
+            else:
+                print(f"[WARN] Пропуск: отсутствует парный txt-файл для {jpg_name}")
                 continue
-                
-            # Запись строго в формате JSONL (одна строка — один объект)
+
+            # Страховочный фильтр на пустые токены против NaN
+            if not prompt_text:
+                print(f"[WARN] Пропуск битого токена (пустой промпт): {txt_name}")
+                continue
+
+            # Запись строго по уставу JSONL (одна строка — один объект)
+            entry = {
+                "image": jpg_name,
+                "text": prompt_text
+            }
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             valid_count += 1
-            
-    print(f"[OK] Контур датасета запечатан. Успешно записано строк: {valid_count}")
+
+    print(f"[OK] Контур датасета запечатан. Успешно привязано физических пар: {valid_count}")
 
 if __name__ == "__main__":
-    # Проверка: если в папке пусто, создаем заглушки для картинок
     build_and_validate_dataset()
-    for item in RAW_DATA:
-        img_path = os.path.join(DATA_DIR, item["image"])
-        if not os.path.exists(img_path):
-            with open(img_path, "wb") as empty_img:
-                empty_img.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR") # Мини-заголовок PNG
-            print(f"[INFO] Выплавлен тестовый фантом-файл: {item['image']}")
+#---------------- Конец Блока 1 -----------------
