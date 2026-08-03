@@ -259,51 +259,55 @@ class ChromaMMDiT(nn.Module):
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
 
-
-#---------------- Старт Блока 5 (Контур Инициализации Заводских Весов и Точка Входа Реактора) --------
+#---------------- Старт Блока 5 (Контур Инициализации Заводских Весов и Квантования Базы) -----------
 def run_reactor_forge():
     """
-    Управляет запуском реактора: разворачивает топологию под чистокровный монолит,
-    загружает веса из safetensors и подает силовое напряжение на 76 LoRA-узлов.
+    Управляет запуском реактора: разворачивает топологию, динамически 
+    квантует базу в 8 бит для защиты от OOM и состыкует веса LoRA.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Твинг путей: жесткая привязка к новому тяжелому монолиту Chroma1-HD
     CHROMA_MODEL_PATH = r"Z:\flowch\models_core\transformer\Chroma1-HD.safetensors"
     
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
         
-    # 1. Сборка и патчинг маршевого трансформера
+    # 1. Сборка маршевого трансформера
     model = ChromaMMDiT()
+    
+    # Снайперское квантование базовых слоев в int8 для освобождения 8 ГБ VRAM (Защита от WDDM-спиллинга)
+    print("[RUN] Динамически поджимаю базовую геометрию трансформера в INT8...")
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear) and not any(x in name for x in ["img_in", "txt_in", "final_layer"]):
+            # Зажимаем только тяжелые маршевые слои 57 блоков
+            module.to(dtype=torch.int8)
+
+    # 2. Инжекция LoRA-электродов поверх поджатой базы (Сохраняем Master Weights в bfloat16)
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
-    # 2. Низкоуровневая подгрузка чистокровных весов safetensors напрямую в CUDA
+    # 3. Подгрузка чистокровных весов safetensors напрямую в CUDA
     print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
     try:
         from safetensors.torch import load_file
         state_dict = load_file(CHROMA_MODEL_PATH, device="cuda")
-        # Безопасная инжекция весов с отключенным строгим соответствием для LoRA-оберток
         model.load_state_dict(state_dict, strict=False)
         print(" -> [OK] Заводской граф весов успешно состыкован с металлом трансформера.")
-        del state_dict # Мгновенное выжигание временного словаря из VRAM
+        del state_dict
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
     
-    # 3. Аппроксиматор и mod_projector заморожены в пассивном режиме (Путь Б)
     approximator = None
     mod_projector = None
     
     # 4. Привязка автономного 8-битного оптимизатора AdamW строго к Master Weights адаптера
     optimizer = AdamW8bit(model.parameters(), lr=1e-4)
-    print(" -> [OK] Автономный 8-битный оптимизатор AdamW8bit зафиксирован на LoRA-узлах.")
+    print(" -> [OK] Автономный 8-битного оптимизатор AdamW8bit зафиксирован.")
 
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
     
-    # Контур автоматического переключения трюмов данных
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
         print(" [WARN] Холодная симуляция на тестовом фантом-батче.")
         batch = {
@@ -322,7 +326,7 @@ def run_reactor_forge():
         try:
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Маршевый Loss: {loss:.6f}")
-            if step >= 1:  # Ограничение тестового прогрева для контроля удержания WDDM
+            if step >= 1:
                 break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
