@@ -182,11 +182,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 #---------------- Конец Блока 3 -----------------
 
 
-#---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Autograd-Броней Чекпоинтинга) -----------
+from torch.utils.checkpoint import checkpoint
+
 class ChromaMMDiT(nn.Module):
     """
     Декомпозированный маршевый трансформер Chroma.
     Полностью очищен от ошибок распаковки кортежей и С++ заносов памяти.
+    Защищен градиентным чекпоинтингом для блокировки аварийного спиллинга WDDM.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -209,8 +212,6 @@ class ChromaMMDiT(nn.Module):
         x = x.permute(0, 2, 4, 1, 3, 5)
         return x.reshape(B, (H // 2) * (W // 2), C * 4)
 
-#---------------- Старт Текстового Шва Блока 4 (Герметичный forward ChromaMMDiT без AdaLN итераторов) -
-
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
         Маршевый проход трансформера Chroma1-HD.
@@ -231,20 +232,23 @@ class ChromaMMDiT(nn.Module):
         # Жесткая фиксация длины отсека текста для безопасного среза памяти
         txt_len = txt_tokens.shape[1]
 
-        # 1. Каскад спаренных блоков (Передаем None вместо фантомного distill_vec)
+        # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Передаем None вместо модов)
         for i, block in enumerate(self.double_blocks):
-            txt_tokens, img_tokens = block(
-                txt=txt_tokens, img=img_tokens, pe=None, distill_vec=None, mask=None
+            # Чекпоинтинг пересчитывает forward внутри бэкварда, освобождая VRAM на RTX 3090
+            txt_tokens, img_tokens = checkpoint(
+                block, txt_tokens, img_tokens, None, None, None, 
+                use_reentrant=False
             )
 
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         for i, block in enumerate(self.single_blocks):
-            x_combined = block(
-                x=x_combined, pe=None, distill_vec=None, mask=None
+            x_combined = checkpoint(
+                block, x_combined, None, None, None, 
+                use_reentrant=False
             )
 
-        # 3. Восстановление исходной 4D-геометрии латентов с герметизацией памяти
+        # 3. Восстановление исходной 4D-геометрии латентов с герметизацией non-contiguous памяти
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -253,9 +257,8 @@ class ChromaMMDiT(nn.Module):
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
-#---------------- Конец Текстового Шва Блока 4 -----------------
-
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации Заводских Весов и Точка Входа Реактора) --------
 def run_reactor_forge():
