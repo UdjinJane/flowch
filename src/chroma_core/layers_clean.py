@@ -238,6 +238,7 @@ class DoubleStreamBlock(nn.Module):
             nn.Linear(mlp_hidden_dim, hidden_size, bias=True, dtype=torch.bfloat16),
         )
 
+#---------------- Старт Текстового Шва Ядра (Герметичный forward DoubleStreamBlock без .shape срезов) -
     def forward(self, txt: torch.Tensor, img: torch.Tensor, pe: torch.Tensor, distill_vec: list = None, mask: torch.Tensor = None) -> tuple[torch.Tensor, torch.Tensor]:
         ChromaTelemetry.verify(img, "DoubleStreamBlock.img_in")
         target_dtype = self.txt_attn.qkv.weight.dtype
@@ -256,10 +257,11 @@ class DoubleStreamBlock(nn.Module):
             img_q, img_k, img_v = img_qkv.chunk(3, dim=-1)
             txt_q, txt_k, txt_v = txt_qkv.chunk(3, dim=-1)
             
-            # Восстанавливаем стандартную CUDA-геометрию тензоров под SDPA [B, H, L, D]
+            # Извлекаем жесткие числовые длины последовательностей для безопасного среза памяти
             B, L_img, _ = img_q.shape
             _, L_txt, _ = txt_q.shape
             
+            # Восстанавливаем стандартную CUDA-геометрию тензоров под SDPA [B, H, L, D]
             img_q = img_q.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             img_k = img_k.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             img_v = img_v.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
@@ -272,21 +274,18 @@ class DoubleStreamBlock(nn.Module):
             k = torch.cat((txt_k, img_k), dim=2)
             v = torch.cat((txt_v, img_v), dim=2)
             
+            # Вызов внимания возвращает форму [B, H, L, D]
             attn = attention(q, k, v, pe=pe, mask=mask)
-#---------------- Старт Текстового Шва Ядра (Выравнивание ванильного каскада DoubleStreamБлока) ------
-            # Исправление ломаного ванильного среза кузнецов Метрополии:
-            # Перекладываем оси под стандартный устав, чтобы срез шел по оси последовательности
-            txt_attn, img_attn = attn[:, :, :txt.shape], attn[:, :, txt.shape:]
             
-            # Возвращаем оси из формата [K, B, H, L, D] -> [B, L, H*D] перед проекцией
-            txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, txt.shape, self.hidden_size).contiguous()
-            img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, img.shape, self.hidden_size).contiguous()
-#---------------- Конец Текстового Шва Ядра -----------------
-
+            # СНАЙПЕРСКИЙ СРЕЗ: Вырезаем строго по целочисленным координатам осей (dim=2)
+            txt_attn, img_attn = attn[:, :, :L_txt], attn[:, :, L_txt:]
+            
+            # Возвращаем оси [B, H, L, D] -> [B, L, H*D] перед линейной проекцией
+            txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
+            img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
             
             img = img + self.img_attn.proj(img_attn)
             img = img + self.img_mlp(self.img_norm2(img))
-            
             txt = txt + self.txt_attn.proj(txt_attn)
             txt = txt + self.txt_mlp(self.txt_norm2(txt))
             return txt, img
@@ -294,29 +293,23 @@ class DoubleStreamBlock(nn.Module):
         # Ванильный контур кузнецов (остается без изменений для совместимости)
         img_mod1, img_mod2 = distill_vec
         txt_mod1, txt_mod2 = distill_vec
-        
         img_modulated = (1 + img_mod1.scale.squeeze(1).to(target_dtype)) * self.img_norm1(img) + img_mod1.shift.squeeze(1).to(target_dtype)
         txt_modulated = (1 + txt_mod1.scale.squeeze(1).to(target_dtype)) * self.txt_norm1(txt) + txt_mod1.shift.squeeze(1).to(target_dtype)
-        
         img_qkv = self.img_attn.qkv(img_modulated)
         txt_qkv = self.txt_attn.qkv(txt_modulated)
-        
         img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
         txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
-        
         attn = attention(q, k, v, pe=pe, mask=mask)
         txt_attn, img_attn = attn[:, :txt.shape], attn[:, txt.shape:]
-        
         img = img + img_mod1.gate.squeeze(1).to(target_dtype) * self.img_attn.proj(img_attn)
         img = img + img_mod2.gate.squeeze(1).to(target_dtype) * self.img_mlp((1 + img_mod2.scale.squeeze(1).to(target_dtype)) * self.img_norm2(img) + img_mod2.shift.squeeze(1).to(target_dtype))
-        
         txt = txt + txt_mod1.gate.squeeze(1).to(target_dtype) * self.txt_attn.proj(txt_attn)
         txt = txt + txt_mod2.gate.squeeze(1).to(target_dtype) * self.txt_mlp((1 + txt_mod2.scale.squeeze(1).to(target_dtype)) * self.txt_norm2(txt) + txt_mod2.shift.squeeze(1).to(target_dtype))
         return txt, img
+#---------------- Конец Текстового Шва Ядра -----------------
 
 #---------------- Старт Текстового Шва Ядра (Исправление выравнивания осей SingleStreamBlock) -------
 class SingleStreamBlock(nn.Module):
