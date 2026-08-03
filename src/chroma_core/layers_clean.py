@@ -318,6 +318,7 @@ class DoubleStreamBlock(nn.Module):
         txt = txt + txt_mod2.gate.squeeze(1).to(target_dtype) * self.txt_mlp((1 + txt_mod2.scale.squeeze(1).to(target_dtype)) * self.txt_norm2(txt) + txt_mod2.shift.squeeze(1).to(target_dtype))
         return txt, img
 
+#---------------- Старт Текстового Шва Ядра (Исправление выравнивания осей SingleStreamBlock) -------
 class SingleStreamBlock(nn.Module):
     """Маршевый одиночный блок с обводным шунтом для безопасного сухого пуска LoRA."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
@@ -326,7 +327,6 @@ class SingleStreamBlock(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        
         self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim, dtype=torch.bfloat16)
         self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size, dtype=torch.bfloat16)
         self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -353,9 +353,10 @@ class SingleStreamBlock(nn.Module):
             k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             
+            # Вызов внимания возвращает форму [B, H, L, D]
             attn = attention(q, k, v, pe=pe, mask=mask)
             
-            # Восстанавливаем оси выхлопа внимания [B, H, L, D] -> [B, L, H*D]
+            # ГЕРМЕТИЗАЦИЯ ШВА: Перекладываем оси из [B, H, L, D] строго в [B, L, H, D] перед склейкой
             attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
             
             output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
@@ -368,4 +369,4 @@ class SingleStreamBlock(nn.Module):
         attn = attention(q, k, v, pe=pe, mask=mask)
         output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), dim=-1))
         return x + mod.gate.squeeze(1).to(target_dtype) * output
-#---------------- Конец Блока №4_ЯДРО ----------------
+#---------------- Конец Блока №4_ЯДРО -----------------
