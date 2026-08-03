@@ -249,44 +249,31 @@ class DoubleStreamBlock(nn.Module):
             img_modulated = self.img_norm1(img)
             txt_modulated = self.txt_norm1(txt)
             
-            img_qkv = self.img_attn.qkv(img_modulated)
-            txt_qkv = self.txt_attn.qkv(txt_modulated)
-            
-            img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-            txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-            
-            q = torch.cat((txt_q, img_q), dim=2)
-            k = torch.cat((txt_k, img_k), dim=2)
-            v = torch.cat((txt_v, img_v), dim=2)
-            
-            attn = attention(q, k, v, pe=pe, mask=mask)
-            txt_attn, img_attn = attn[:, :txt.shape], attn[:, txt.shape:]
-            
-            img = img + self.img_attn.proj(img_attn)
-            img = img + self.img_mlp(self.img_norm2(img))
-            
-            txt = txt + self.txt_attn.proj(txt_attn)
-            txt = txt + self.txt_mlp(self.txt_norm2(txt))
-            return txt, img
-
-        # Ванильный контур кузнецов (активируется только при подаче реального пакета модов)
-        img_mod1, img_mod2 = distill_vec
-        txt_mod1, txt_mod2 = distill_vec
+#---------------- Старт Текстового Шва Ядра (Герметичный распил QKV через .chunk вместо Einops) ------
+        # Внутри DoubleStreamBlock.forward (в зоне нашего обводного шунта):
+        img_qkv = self.img_attn.qkv(img_modulated).contiguous()
+        txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
         
-        img_modulated = (1 + img_mod1.scale.squeeze(1).to(target_dtype)) * self.img_norm1(img) + img_mod1.shift.squeeze(1).to(target_dtype)
-        txt_modulated = (1 + txt_mod1.scale.squeeze(1).to(target_dtype)) * self.txt_norm1(txt) + txt_mod1.shift.squeeze(1).to(target_dtype)
+        # Надежный аппаратный распил монолита на 3 равные части (Q, K, V) без Einops-капризов
+        img_q, img_k, img_v = img_qkv.chunk(3, dim=-1)
+        txt_q, txt_k, txt_v = txt_qkv.chunk(3, dim=-1)
         
-        img_qkv = self.img_attn.qkv(img_modulated)
-        txt_qkv = self.txt_attn.qkv(txt_modulated)
+        # Приводим к стандарту SDPA [B, H, L, D]
+        img_q = img_q.view(img_q.shape[0], img_q.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
+        img_k = img_k.view(img_k.shape[0], img_k.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
+        img_v = img_v.view(img_v.shape[0], img_v.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
         
-        img_q, img_k, img_v = rearrange(img_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        txt_q, txt_k, txt_v = rearrange(txt_qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        txt_q = txt_q.view(txt_q.shape[0], txt_q.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
+        txt_k = txt_k.view(txt_k.shape[0], txt_k.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
+        txt_v = txt_v.view(txt_v.shape[0], txt_v.shape[1], self.num_heads, -1).permute(0, 2, 1, 3).contiguous()
         
         q = torch.cat((txt_q, img_q), dim=2)
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
         
         attn = attention(q, k, v, pe=pe, mask=mask)
+#---------------- Конец Текстового Шва Ядра -----------------
+
         txt_attn, img_attn = attn[:, :txt.shape], attn[:, txt.shape:]
         
         img = img + img_mod1.gate.squeeze(1).to(target_dtype) * self.img_attn.proj(img_attn)
