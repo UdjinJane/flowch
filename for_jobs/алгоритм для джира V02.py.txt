@@ -1,66 +1,54 @@
-# =============================================
-# АЛГОРИТМ ПРЕОБРАЗОВАНИЯ (V02) 
-# УТОЧНЕНИЯ: 
-# 1. Исключение дублирующихся хотфиксов.
-# 2. Толька строгий поиск версии в скобках.
-# =============================================
+## ⚙️ ALGORITHM: CONTEXTUAL DATA INTEGRATION & RELEASE PIPELINE (V5.0)
 
-def parse_releases(file_path):
-    """
-    Функция для парсинга файла с исходными данными и разделения на:
-    - Хотфиксы (-hf-)
-    - Релизы (product-release)
+### I. OBJECTIVE
+To process highly fragmented, redundant, and semi-structured log data from multiple source fragments sharing a single logical identifier. The goal is to consolidate all release/hotfix pairs into a single, canonical dataset, eliminating redundancy while preserving the context of the changes.
 
-    Уточнения:
-    * Исключение дубликатов хотфиксов.
-    * Толька строгий поиск версии в скобках.
-    """
+### II. INPUT STRUCTURE & ASSUMPTIONS
+*   **Input:** A collection of XML `<source>` tags (`Context_Data`).
+*   **Critical Assumption (V5.0 Improvement):** If multiple `<source>` tags share the same logical source ID or resource identifier, they must be treated as a single stream of data for parsing, rather than independent events. All extracted information will cite this unified source `[1]`.
 
-    # 1. Прочитать файл и разделить на строки
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            lines = file.readlines()
-    except Exception as e:
-        print(f"Ошибка при чтении файла: {e}")
-        return None, None
+### III. CORE FUNCTIONS & STEPS
 
-    # 2. Очистка данных от лишних символов и пробелов
-    cleaned_lines = []
-    for line in lines:
-        stripped_line = line.strip()
-        if not stripped_line or stripped_line.startswith(('Операции', 'Изменить порядок версий')):
-            continue  # Пропустить пустые строки и метаинформацию
-        cleaned_lines.append(stripped_line)
+#### 1. FUNCTION: `CONSOLIDATE_CONTEXT(Context_Data)`
+*   **Input:** List of `<source>` elements.
+*   **Output:** A single, cleaned string buffer (`Consolidated_Log`).
+*   **Process:**
+    *   Initialize `Consolidated_Log = ""`.
+    *   Iterate through all `<source>` tags in `Context_Data`.
+    *   Append the raw text content of each source to `Consolidated_Log`, ensuring that structural separators (e.g., newlines, headers) are maintained for readability during parsing.
 
-    # 3. Разделение на хотфиксы и релиза
-    hotfixes = []
-    releases = []
-    seen_hotfixes = set()  # Для исключения дубликатов
+#### 2. FUNCTION: `PARSE_AND_EXTRACT(Consolidated_Log)`
+*   **Input:** The unified log string (`Consolidated_Log`).
+*   **Output:** A dictionary mapping unique Release IDs to their associated Hotfix/Product ID and Date Range (Dictionary[str, Dict]).
+*   **Process:**
+    *   Initialize `Canonical_Registry = {}`.
+    *   Apply a comprehensive Regular Expression pattern designed to capture the core relationship:
+        `rvr-release-(?P<ReleaseVersion>[\d\.]+)-[a-z]+.*?Хотфикс Выпущено в бой \((?P<HotfixID>[a-zA-Z0-9-]+)\)`
+    *   For every match:
+        *   Extract `ReleaseVersion` and `HotfixID`.
+        *   Identify the associated date (if available).
+        *   If the pair (`ReleaseVersion`, `HotfixID`) is already in `Canonical_Registry`, *skip* or update only with newer metadata. Otherwise, store the full record: `Canonical_Registry[ReleaseVersion] = { 'hotfix': HotfixID, 'date': Date }`.
+    *   *(Self-Correction:* Special handling must be implemented for non-standard pairings, such as "Mini релиз ЦГУ" or direct product release names without a preceding `rvr-release-*` structure.)
 
-    for line in cleaned_lines:
-        parts = line.split()
-        if len(parts) < 2:
-            continue  # Пропустить строки без необходимой информации
+#### 3. FUNCTION: `STRUCTURE_OUTPUT(Canonical_Registry)`
+*   **Input:** The clean, unique record set (`Canonical_Registry`).
+*   **Output:** A structured list ready for display.
+*   **Process:**
+    *   Initialize two lists: `Hotfix_List` and `Release_List`.
+    *   Iterate through the keys of `Canonical_Registry`:
+        *   If the entry represents a modular patch (e.g., `atg`, `szn`), add it to `Hotfix_List`.
+        *   If the entry represents a major product grouping or mini-release, add it to `Release_List`.
 
-        release_name = parts[0]
-        version_type = None
-
-        # Поиск версии в скобках (строгий поиск)
-        for part in parts:
-            if '(' in part and ')' in part:
-                version_type = part.replace('(', '').replace(')', '')
-                break  # Берем первую найденную версию
-
-        if not version_type:
-            continue  # Пропустить, если тип версии не определен
-
-        # Определение типа версии
-        if '-hf-' in version_type.lower() or '-HF-' in version_type.lower():
-            if f"{release_name} ({version_type})" not in seen_hotfixes:
-                hotfixes.append(f"{release_name} ({version_type})")
-                seen_hotfixes.add(f"{release_name} ({version_type})")
-        elif 'product-release' in version_type.lower():
-            releases.append(f"{release_name} ({version_type})")
-
-    # 4. Возврат результатов
-    return hotfixes, releases
+### IV. EXECUTION FLOW DIAGRAM
+```mermaid
+graph TD
+    A[Start] --> B(Input Context Data: Multiple Sources);
+    B --> C{CONSOLIDATE_CONTEXT};
+    C --> D[Unified Log Stream];
+    D --> E{PARSE_AND_EXTRACT};
+    E --> F[Canonical Registry (Unique Pairs)];
+    F --> G{STRUCTURE_OUTPUT};
+    G --> H1[Hotfix List: Modular Patches];
+    G --> H2[Release List: Major/Product Releases];
+    H1 & H2 --> I(Final Report Generation);
+    I --> J[Structured Output with Citation [1]];
