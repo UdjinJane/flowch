@@ -163,19 +163,18 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
 
-            # ШОВ №4: Полное сохранение графа Autograd и выравнивание позиционных аргументов (вставка None для pe)
+            # ВРЕМЕННЫЙ ДЕБАГ-ШОВ: Прямой вызов блоков без чекпоинтов для раскрытия истинной строки ошибки
             for i, block in enumerate(self.double_blocks):
-                txt_tokens, img_tokens = checkpoint(
-                    block, txt_tokens, img_tokens, None, mods["double"][i],
-                    use_reentrant=False, preserve_rng_state=False
+                txt_tokens, img_tokens = block(
+                    txt_tokens, img_tokens, None, mods["double"][i]
                 )
             
             x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             for i, block in enumerate(self.single_blocks):
-                x_combined = checkpoint(
-                    block, x_combined, None, mods["single"][i],
-                    use_reentrant=False, preserve_rng_state=False
+                x_combined = block(
+                    x_combined, None, mods["single"][i]
                 )
+
 
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
