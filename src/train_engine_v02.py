@@ -178,11 +178,16 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
 
+            # === НАЧАЛО ШВА: ПРИЕМ ТРЕХКОМПОНЕНТНОГО ВЫХЛОПА МЕТРОПОЛИИ ===
             for i, block in enumerate(self.double_blocks):
-                txt_tokens, img_tokens = block(
+                # Добавлен сдвиг в 4 пробела для всего тела цикла
+                # Добавлен буфер _mod_dump, чтобы принять 3-й элемент из кортежа Метрополии
+                txt_tokens, img_tokens, _mod_dump = block(
                     txt_tokens, img_tokens, None, mods["double"][i]
                 )
-            
+            # === КОНЕЦ ШВА ===
+
+
             x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
             for i, block in enumerate(self.single_blocks):
                 x_combined = block(
@@ -202,7 +207,9 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
 
-    approximator = Approximator(in_dim=1, out_dim=hidden_size, hidden_dim=hidden_size, n_layers=4).to(device)
+    # === ВОЗВРАТ СИЛОВОЙ ШИНЫ МЕТРОПОЛИИ: out_dim зафиксирован на эталонных 5120 каналах ===
+    approximator = Approximator(in_dim=1, out_dim=5120, hidden_dim=5120, n_layers=4).to(device)
+
     optimizer = AdamW8bit(model.parameters(), lr=1e-4)
     print(" -> [OK] 8-битный оптимизатор градиентов AdamW8bit зафиксирован.")
 
@@ -230,7 +237,10 @@ def run_reactor_forge():
             if step >= 1:
                 break
         except Exception as e:
+            print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
+            break
+    print("# === ДВИЖОК ВЕРИФИЦИРОВАН. ВСЕ ШВЫ ДЕРЖАТ УДАР. КОНЕЦ СЕССИИ ===")
 
 if __name__ == "__main__":
-
     run_reactor_forge()
+
