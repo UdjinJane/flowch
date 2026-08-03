@@ -161,22 +161,21 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     monolithic_mod = raw_mod.unsqueeze(1)
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
 
-#---------------- Старт Текстового Шва Блока 3 (Исправление вложенности Double-пакета под expected 3) ---
     mods = {"double": [], "single": [], "final": None}
     
-    # Снайперская сборка пакетов: упаковываем строго 3 компонента под С++ устав Метрополии
+    # СНАЙПЕРСКАЯ СБОРКА ПАКЕТОВ: упаковываем пары списков строго под устав ядра [0] и [1]
     for i in range(19):
-        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2]
-        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2]
+        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2] (длина 2)
+        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2] (длина 2)
         
-        # Передаем кортеж из 3-х элементов: Графика, Текст и Пустой вектор модуляции финала
-        triple_double_vec = [img_mod_pair, txt_mod_pair, None]
-        mods["double"].append(triple_double_vec)
+        # Нативный двухкомпонентный вектор: элемент [0] для графики, элемент [1] для текста
+        native_double_vec = [img_mod_pair, txt_mod_pair]
+        mods["double"].append(native_double_vec)
         
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
-#---------------- Конец Текстового Шва Блока 3 -----------------
-
+        
+    mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
 
     # ==========================================================================
     # ПРИБОРНАЯ ПАНЕЛЬ ТЕЛЕМЕТРИИ ПЕРЕД ПОДЖИГОМ (Прямой рентген памяти)
@@ -185,10 +184,11 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print("[ПРИБОРНАЯ ПАНЕЛЬ]: Срез параметров перед маршевым проходом:")
     print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Контейнер mods['double']     : Длина списка = {len(mods['double'])}")
+    print(f" -> Контейнер mods['double']     : Длина списка блоков = {len(mods['double'])}")
     if len(mods['double']) > 0:
-        print(f"    * Длина тройного вектора Блока №0 : {len(mods['double'][0])} (Обязана быть равна 3!)")
-        print(f"    * Компоненты пакета Блока №0     : {[type(x).__name__ for x in mods['double'][0]]}")
+        print(f"    * Структура пакета Блока №0 : {type(mods['double'][0]).__name__} | Длина = {len(mods['double'][0])} (Должна быть равна 2!)")
+        print(f"    * Внутренний индекс [0]     : {type(mods['double'][0][0]).__name__} | Длина = {len(mods['double'][0][0])}")
+        print(f"    * Внутренний индекс [1]     : {type(mods['double'][0][1]).__name__} | Длина = {len(mods['double'][0][1])}")
     print(f" -> Контейнер mods['single']     : Длина списка = {len(mods['single'])}")
     print(f" -> Финальный контейнер mods['final']: Длина списка = {len(mods['final'])}")
     print("="*60 + "\n")
@@ -211,6 +211,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
     """
