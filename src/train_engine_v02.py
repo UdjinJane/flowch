@@ -161,21 +161,22 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     monolithic_mod = raw_mod.unsqueeze(1)
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
 
+#---------------- Старт Текстового Шва Блока 3 (Исправление вложенности Double-пакета под expected 3) ---
     mods = {"double": [], "single": [], "final": None}
     
-    # Снайперская сборка пакетов: выпрямляем структуру под устав DoubleStreamBlock ядра
+    # Снайперская сборка пакетов: упаковываем строго 3 компонента под С++ устав Метрополии
     for i in range(19):
         img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2]
         txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2]
         
-        # Разворачиваем в плоский уставной список из 4-х изолированных объектов ModulationOut
-        flat_double_vec = [img_mod_pair[0], img_mod_pair[1], txt_mod_pair[0], txt_mod_pair[1]]
-        mods["double"].append(flat_double_vec)
+        # Передаем кортеж из 3-х элементов: Графика, Текст и Пустой вектор модуляции финала
+        triple_double_vec = [img_mod_pair, txt_mod_pair, None]
+        mods["double"].append(triple_double_vec)
         
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
-        
-    mods["final"] = flat_mods["final_layer.adaLN_modulation.1"]
+#---------------- Конец Текстового Шва Блока 3 -----------------
+
 
     # ==========================================================================
     # ПРИБОРНАЯ ПАНЕЛЬ ТЕЛЕМЕТРИИ ПЕРЕД ПОДЖИГОМ (Прямой рентген памяти)
@@ -186,8 +187,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
     print(f" -> Контейнер mods['double']     : Длина списка = {len(mods['double'])}")
     if len(mods['double']) > 0:
-        print(f"    * Длина плоского вектора Блока №0 : {len(mods['double'][0])} (Обязана быть равна 4!)")
-        print(f"    * Тип элемента 0 (Графика)       : {type(mods['double'][0][0]).__name__}")
+        print(f"    * Длина тройного вектора Блока №0 : {len(mods['double'][0])} (Обязана быть равна 3!)")
+        print(f"    * Компоненты пакета Блока №0     : {[type(x).__name__ for x in mods['double'][0]]}")
     print(f" -> Контейнер mods['single']     : Длина списка = {len(mods['single'])}")
     print(f" -> Финальный контейнер mods['final']: Длина списка = {len(mods['final'])}")
     print("="*60 + "\n")
