@@ -14,11 +14,17 @@ from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_m
 from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
 
+# ШОВ-ПЕРЕХВАТЧИК: Вывод каждой исполняемой строки ядра геометрии
+def trace_lines(frame, event, arg):
+    if event == "line":
+        code = frame.f_code
+        filename = code.co_filename
+        if "chroma_core" in filename or "train_engine" in filename:
+            print(f" [TRACE] {filename}:{frame.f_lineno} -> {code.co_name}")
+    return trace_lines
+
 class ChromaInlineLoRA(nn.Module):
-    """
-    Кастомный шов LoRA. Отказ от PEFT. Врезается напрямую в линейные слои [2.2].
-    Матрицы инициализируются строго в bfloat16 на девайсе базового слоя.
-    """
+    """Кастомный шов LoRA. Врезается напрямую в линейные слои."""
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
         self.base_layer = base_layer
@@ -79,15 +85,14 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module) -> float:
     """Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow."""
-def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module) -> float:
-    import sys
-    sys.settrace(trace_lines)  # Включаем прицельный перехват только на время шага плавки
-
+    # ПРИЦЕЛЬНЫЙ ПУСК ДЕФЕКТΟΣΚОПА
+    sys.settrace(trace_lines)
+    
     x1 = batch["latent"].cuda()
     clip_hidden = batch["clip_hidden"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
     
-    # ШОВ ВЫРАВНИВАНИЯ КОНТЕНТА: Добиваем T5-контекст нулями до эталонных 512 токенов Метрополии
+    # ШОВ ВЫРАВНИВАНИЯ КОНТЕНТА: Добиваем T5-контекст нулями до 512 токенов
     B_pad, L_pad, D_pad = t5_raw.shape
     if L_pad < 512:
         padding_size = 512 - L_pad
@@ -97,7 +102,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         t5_hidden = t5_raw[:, :512, :]
         
     ChromaTelemetry.verify(x1, "train_step.latents", 4)
-
     optimizer.zero_grad(set_to_none=True)
 
     x0 = torch.randn_like(x1)
@@ -105,16 +109,12 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
-    # ШОВ №1: Нативный сквозной Autograd для шины модуляции (Взвод градиентов)
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
-    # Перехватываем 2D выхлоп Аппроксиматора Метрополии и принудительно кастим в 3D [B, 1, D]
     monolithic_mod = approximator(t_vec).unsqueeze(1)
-  
-    # ШОВ №3: Построение структурированной иерархии в строгом соответствии с layers_clean.py
+    
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
     mods = {"double": [], "single": [], "final": None}
     for i in range(19):
-        # Передаем список списков: [[img_mod1, img_mod2], [txt_mod1, txt_mod2]]
         img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]
         txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]
         mods["double"].append([img_mod_pair, txt_mod_pair])
@@ -126,34 +126,23 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
+        sys.settrace(None)
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Loss свалился в NaN!")
 
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
-    # ШОВ №2: Сбор логов ДО флашинга градиентов, за которым следует тотальная очистка VRAM
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name)
 
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
+    
+    # ОТКЛЮЧЕНИЕ ПЕРЕХВАТЧИКА
+    sys.settrace(None)
     return loss.item()
-
-# ШОВ-ПЕРЕХВАТЧИК: Принудительный вывод каждой исполняемой строки ядра
-def trace_lines(frame, event, arg):
-    if event == "line":
-        code = frame.f_code
-        filename = code.co_filename
-        if "chroma_core" in filename or "train_engine" in filename:
-            print(f" [TRACE] {filename}:{frame.f_lineno} -> {code.co_name}")
-    return trace_lines
-    sys.settrace(None)  # Гасим трассировщик, шаг завершен успешно
-    return loss.item()
-# import sys
-# sys.settrace(trace_lines)
-
 
 def run_reactor_forge():
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
@@ -189,24 +178,16 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
 
-            # ВРЕМЕННЫЙ ДЕБАГ-ШОВ: Ловушка для вскрытия точной строки внутри layers_clean.py
-            try:
-                for i, block in enumerate(self.double_blocks):
-                    txt_tokens, img_tokens = block(
-                        txt_tokens, img_tokens, None, mods["double"][i]
-                    )
-                
-                # ВОССТАНОВЛЕНИЕ КОНТУРА: Сборка монолитного пространства и прогон сингл-блоков
-                x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
-                for i, block in enumerate(self.single_blocks):
-                    x_combined = block(
-                        x_combined, None, mods["single"][i]
-                    )
-            except Exception as block_error:
-                import traceback
-                print("# === КРАХ ВНУТРИ ГЕОМЕТРИИ LAYERS_CLEAN.PY === ")
-                traceback.print_exc()
-                raise block_error
+            for i, block in enumerate(self.double_blocks):
+                txt_tokens, img_tokens = block(
+                    txt_tokens, img_tokens, None, mods["double"][i]
+                )
+            
+            x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
+            for i, block in enumerate(self.single_blocks):
+                x_combined = block(
+                    x_combined, None, mods["single"][i]
+                )
 
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
@@ -221,7 +202,6 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
 
-    # Инициализация Аппроксиматора Метрополии: out_dim должен строго соответствовать скрытому слою ядра трансформера
     approximator = Approximator(in_dim=1, out_dim=hidden_size, hidden_dim=hidden_size, n_layers=4).to(device)
     optimizer = AdamW8bit(model.parameters(), lr=1e-4)
     print(" -> [OK] 8-битный оптимизатор градиентов AdamW8bit зафиксирован.")
@@ -250,9 +230,7 @@ def run_reactor_forge():
             if step >= 1:
                 break
         except Exception as e:
-            print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
-            break
-    print("# === ДВИЖОК ВЕРИФИЦИРОВАН. ВСЕ ШВЫ ДЕРЖАТ УДАР. КОНЕЦ СЕССИИ ===")
+
 
 if __name__ == "__main__":
     run_reactor_forge()
