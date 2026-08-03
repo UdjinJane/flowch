@@ -311,7 +311,7 @@ class DoubleStreamBlock(nn.Module):
         return txt, img
 #---------------- Конец Текстового Шва Ядра -----------------
 
-#---------------- Старт Текстового Шва Ядра (Исправление выравнивания осей SingleStreamBlock) -------
+#---------------- Старт Текстового Шва Ядра (Тотальная очистка SingleStreamBlock от Einops) ---------
 class SingleStreamBlock(nn.Module):
     """Маршевый одиночный блок с обводным шунтом для безопасного сухого пуска LoRA."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
@@ -330,7 +330,7 @@ class SingleStreamBlock(nn.Module):
         target_dtype = self.linear1.weight.dtype
         x = x.to(target_dtype)
         
-        # ОБВОДНОЙ ШУНТ: Если модов нет, считаем чистую классическую геометрию без Einops
+        # 1. ОБВОДНОЙ ШУНТ: Если модов нет, считаем чистую классическую геометрию без Einops
         if distill_vec is None:
             x_mod = self.pre_norm(x)
             linear_out = self.linear1(x_mod).contiguous()
@@ -346,20 +346,29 @@ class SingleStreamBlock(nn.Module):
             k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
             
-            # Вызов внимания возвращает форму [B, H, L, D]
             attn = attention(q, k, v, pe=pe, mask=mask)
-            
-            # ГЕРМЕТИЗАЦИЯ ШВА: Перекладываем оси из [B, H, L, D] строго в [B, L, H, D] перед склейкой
             attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
             
             output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
             return x + output
 
+        # 2. ВАНИЛЬНЫЙ КОНТУР: Очищен от С++ капканов Einops. Выравнивание восстановлено.
         mod = distill_vec
         x_mod = (1 + mod.scale.squeeze(1).to(target_dtype)) * self.pre_norm(x) + mod.shift.squeeze(1).to(target_dtype)
-        qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
-        q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
+        linear_out = self.linear1(x_mod).contiguous()
+        
+        qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
+        
+        # Замена ломаного rearrange на безопасный аппаратный .chunk()
+        q, k, v = qkv.chunk(3, dim=-1)
+        B, L, _ = q.shape
+        q = q.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        
         attn = attention(q, k, v, pe=pe, mask=mask)
-        output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), dim=-1))
+        attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
+        
+        output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
         return x + mod.gate.squeeze(1).to(target_dtype) * output
 #---------------- Конец Блока №4_ЯДРО -----------------
