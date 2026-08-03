@@ -174,18 +174,24 @@ def run_reactor_forge():
             img_tokens = self.img_in(xt_flat)
             txt_tokens = self.txt_in(txt_hidden)
 
-            # ВРЕМЕННЫЙ ДЕБАГ-ШОВ: Прямой вызов блоков без чекпоинтов для раскрытия истинной строки ошибки
-            for i, block in enumerate(self.double_blocks):
-                txt_tokens, img_tokens = block(
-                    txt_tokens, img_tokens, None, mods["double"][i]
-                )
-            
-            x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
-            for i, block in enumerate(self.single_blocks):
-                x_combined = block(
-                    x_combined, None, mods["single"][i]
-                )
-
+            # ВРЕМЕННЫЙ ДЕБАГ-ШОВ: Ловушка для вскрытия точной строки внутри layers_clean.py
+            try:
+                for i, block in enumerate(self.double_blocks):
+                    txt_tokens, img_tokens = block(
+                        txt_tokens, img_tokens, None, mods["double"][i]
+                    )
+                
+                # ВОССТАНОВЛЕНИЕ КОНТУРА: Сборка монолитного пространства и прогон сингл-блоков
+                x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
+                for i, block in enumerate(self.single_blocks):
+                    x_combined = block(
+                        x_combined, None, mods["single"][i]
+                    )
+            except Exception as block_error:
+                import traceback
+                print("# === КРАХ ВНУТРИ ГЕОМЕТРИИ LAYERS_CLEAN.PY === ")
+                traceback.print_exc()
+                raise block_error
 
             pred_img_flat = x_combined[:, txt_tokens.shape[1]:]
             pred_img_flat = self.final_layer(pred_img_flat)
