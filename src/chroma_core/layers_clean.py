@@ -127,7 +127,7 @@ class NerfEmbedder(nn.Module):
             out = self.embedder.float()(combined)
         return out.to(original_dtype)
 #-------------------- Конец блока №2 ----------------------------
-#-------------------- Блок №3: Монолитный Аппроксиматор и Распределитель Шины Модуляции --------------------
+#---------------- Старт Блока 3 (Оригинальный Аппроксиматор и Пассивный Распределитель Шины Модуляции)---
 class Approximator(nn.Module):
     """Многослойный Аппроксиматор Метрополии для генерации векторов управления."""
     def __init__(self, in_dim: int, out_dim: int, hidden_dim: int, n_layers: int = 4):
@@ -150,52 +150,52 @@ class Approximator(nn.Module):
 def distribute_modulations(tensor: torch.Tensor, depth_single_blocks: int, depth_double_blocks: int) -> dict:
     """
     Снайперски нарезает монолитный тензор Аппроксиматора на строго
-    именованные контейнеры ModulationOut для всех 57 слоев [4.1].
+    именованные контейнеры ModulationOut для всех 57 слоев.
+    Вычищен от С++ дедлоков chunk(). Нарезка идет по жестким физическим срезам.
     """
     ChromaTelemetry.verify(tensor, "distribute_modulations.input", 3)
     batch_size, vectors, dim = tensor.shape
     block_map = {}
-
-    # Построение жесткой топологической карты ключей
-    for i in range(depth_single_blocks):
-        block_map[f"single_blocks.{i}.modulation.lin"] = None
-    for i in range(depth_double_blocks):
-        block_map[f"double_blocks.{i}.img_mod.lin"] = None
-    for i in range(depth_double_blocks):
-        block_map[f"double_blocks.{i}.txt_mod.lin"] = None
-    block_map["final_layer.adaLN_modulation.1"] = None
-
+    
     idx = 0
-    for key in block_map.keys():
-        if "single_blocks" in key:
-            block_map[key] = ModulationOut(
-                shift=tensor[:, idx : idx + 1, :],
-                scale=tensor[:, idx + 1 : idx + 2, :],
-                gate=tensor[:, idx + 2 : idx + 3, :],
-            )
-            idx += 3
-        elif "img_mod" in key or "txt_mod" in key:
-            double_block_mods = []
-            for _ in range(2):
-                double_block_mods.append(
-                    ModulationOut(
-                        shift=tensor[:, idx : idx + 1, :],
-                        scale=tensor[:, idx + 1 : idx + 2, :],
-                        gate=tensor[:, idx + 2 : idx + 3, :],
-                    )
-                )
-                idx += 3
-            block_map[key] = double_block_mods
-        elif "final_layer" in key:
-            block_map[key] = [
-                tensor[:, idx : idx + 1, :],
-                tensor[:, idx + 1 : idx + 2, :],
-            ]
-            idx += 2
+    
+    # 1. Нарезка для одиночных блоков (SingleStreamBlocks): 38 блоков по 1 контейнеру
+    for i in range(depth_single_blocks):
+        block_map[f"single_blocks.{i}.modulation.lin"] = ModulationOut(
+            shift=tensor[:, idx : idx + 1, :],
+            scale=tensor[:, idx + 1 : idx + 2, :],
+            gate=tensor[:, idx + 2 : idx + 3, :]
+        )
+        idx += 3
 
+    # 2. Нарезка для спаренных блоков (DoubleStreamBlocks): 19 блоков по 2 контейнера (img и txt)
+    for i in range(depth_double_blocks):
+        # Графический поток управления (2 набора векторов AdaLN-Zero)
+        img_mods = [
+            ModulationOut(shift=tensor[:, idx : idx + 1, :], scale=tensor[:, idx + 1 : idx + 2, :], gate=tensor[:, idx + 2 : idx + 3, :]),
+            ModulationOut(shift=tensor[:, idx + 3 : idx + 4, :], scale=tensor[:, idx + 4 : idx + 5, :], gate=tensor[:, idx + 5 : idx + 6, :])
+        ]
+        idx += 6
+        block_map[f"double_blocks.{i}.img_mod.lin"] = img_mods
+
+        # Текстовый поток управления (2 набора векторов AdaLN-Zero)
+        txt_mods = [
+            ModulationOut(shift=tensor[:, idx : idx + 1, :], scale=tensor[:, idx + 1 : idx + 2, :], gate=tensor[:, idx + 2 : idx + 3, :]),
+            ModulationOut(shift=tensor[:, idx + 3 : idx + 4, :], scale=tensor[:, idx + 4 : idx + 5, :], gate=tensor[:, idx + 5 : idx + 6, :])
+        ]
+        idx += 6
+        block_map[f"double_blocks.{i}.txt_mod.lin"] = txt_mods
+
+    # 3. Финальный слой нормализации AdaLN
+    block_map["final_layer.adaLN_modulation.1"] = [
+        tensor[:, idx : idx + 1, :],
+        tensor[:, idx + 1 : idx + 2, :]
+    ]
+    
     return block_map
-#-------------------- Конец блока №3 ----------------------------
-#-------------------- Блок №4 (МАРШЕВЫЙ ГЕОМЕТРИЧЕСКИЙ): DoubleStreamBlock и SingleStreamBlock --------------------
+#---------------- Конец Блока 3 -----------------
+
+#---------------- Маршевый Блок №4 (МАРШЕВЫЙ ГЕОМЕТРИЧЕСКИЙ): DoubleStreamBlock и SingleStreamBlock ----------------
 class SelfAttention(nn.Module):
     """Изолированный узел внимания блоков Метрополии."""
     def __init__(self, dim: int, num_heads: int = 24, qkv_bias: bool = True):
@@ -206,7 +206,6 @@ class SelfAttention(nn.Module):
         self.proj = nn.Linear(dim, dim, dtype=torch.bfloat16)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Внимание рассчитывается через внешний маршевый attention() во float32/Flash
         return x
 
 class DoubleStreamBlock(nn.Module):
@@ -214,6 +213,7 @@ class DoubleStreamBlock(nn.Module):
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
         super().__init__()
         self.num_heads = num_heads
+        self.hidden_size = hidden_size
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         
         self.img_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -236,8 +236,6 @@ class DoubleStreamBlock(nn.Module):
 
     def forward(self, txt: torch.Tensor, img: torch.Tensor, pe: torch.Tensor, distill_vec: list, mask: torch.Tensor = None) -> tuple[torch.Tensor, torch.Tensor]:
         ChromaTelemetry.verify(img, "DoubleStreamBlock.img_in")
-        
-        # Защитные инлайн-хуки типов Альтеров против краха mat1/mat2
         target_dtype = self.txt_attn.qkv.weight.dtype
         img = img.to(target_dtype)
         txt = txt.to(target_dtype)
@@ -245,9 +243,9 @@ class DoubleStreamBlock(nn.Module):
         img_mod1, img_mod2 = distill_vec[0]
         txt_mod1, txt_mod2 = distill_vec[1]
         
-        # 1. Точечная модуляция контуров AdaLN-Zero
-        img_modulated = (1 + img_mod1.scale.to(target_dtype)) * self.img_norm1(img) + img_mod1.shift.to(target_dtype)
-        txt_modulated = (1 + txt_mod1.scale.to(target_dtype)) * self.txt_norm1(txt) + txt_mod1.shift.to(target_dtype)
+        # Модуляция AdaLN-Zero со сжатием размерности по оси векторов (.squeeze(1) убирает фальшивый шаг)
+        img_modulated = (1 + img_mod1.scale.squeeze(1).to(target_dtype)) * self.img_norm1(img) + img_mod1.shift.squeeze(1).to(target_dtype)
+        txt_modulated = (1 + txt_mod1.scale.squeeze(1).to(target_dtype)) * self.txt_norm1(txt) + txt_mod1.shift.squeeze(1).to(target_dtype)
         
         img_qkv = self.img_attn.qkv(img_modulated)
         txt_qkv = self.txt_attn.qkv(txt_modulated)
@@ -259,46 +257,44 @@ class DoubleStreamBlock(nn.Module):
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
         
-        # Вызов внешнего огнеупорного контура внимания с поддержкой Flash-Attn 2
         attn = attention(q, k, v, pe=pe, mask=mask)
         txt_attn, img_attn = attn[:, :txt.shape[1]], attn[:, txt.shape[1]:]
         
-        # 2. Сборка выхлопа Double-блока
-        img = img + img_mod1.gate.to(target_dtype) * self.img_attn.proj(img_attn)
-        img = img + img_mod2.gate.to(target_dtype) * self.img_mlp((1 + img_mod2.scale.to(target_dtype)) * self.img_norm2(img) + img_mod2.shift.to(target_dtype))
+        # Сборка выхлопа Double-блока (Строго 2 элемента кортежа на выходе по уставу Метрополии)
+        img = img + img_mod1.gate.squeeze(1).to(target_dtype) * self.img_attn.proj(img_attn)
+        img = img + img_mod2.gate.squeeze(1).to(target_dtype) * self.img_mlp((1 + img_mod2.scale.squeeze(1).to(target_dtype)) * self.img_norm2(img) + img_mod2.shift.squeeze(1).to(target_dtype))
         
-        txt = txt + txt_mod1.gate.to(target_dtype) * self.txt_attn.proj(txt_attn)
-        txt = txt + txt_mod2.gate.to(target_dtype) * self.txt_mlp((1 + txt_mod2.scale.to(target_dtype)) * self.txt_norm2(txt) + txt_mod2.shift.to(target_dtype))
-        
+        txt = txt + txt_mod1.gate.squeeze(1).to(target_dtype) * self.txt_attn.proj(txt_attn)
+        txt = txt + txt_mod2.gate.squeeze(1).to(target_dtype) * self.txt_mlp((1 + txt_mod2.scale.squeeze(1).to(target_dtype)) * self.txt_norm2(txt) + txt_mod2.shift.squeeze(1).to(target_dtype))
         return txt, img
 
 class SingleStreamBlock(nn.Module):
-    """Маршевый одиночный блок (MLP-параллель по уставу Метрополии)."""
+    """Маршевый одиночный блок с исправленным распилом MLP Метрополии."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
         
-        self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim, dtype=torch.bfloat16)
-        self.linear2 = nn.Linear(hidden_size + mlp_hidden_dim, hidden_size, dtype=torch.bfloat16)
+        self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim, dtype=torch.bfloat16)
+        self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size, dtype=torch.bfloat16)
         self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.mlp_act = nn.GELU(approximate="tanh")
 
     def forward(self, x: torch.Tensor, pe: torch.Tensor, distill_vec: list, mask: torch.Tensor = None) -> torch.Tensor:
         ChromaTelemetry.verify(x, "SingleStreamBlock.x_in")
-        
         target_dtype = self.linear1.weight.dtype
         x = x.to(target_dtype)
         mod = distill_vec
         
-        x_mod = (1 + mod.scale.to(target_dtype)) * self.pre_norm(x) + mod.shift.to(target_dtype)
+        x_mod = (1 + mod.scale.squeeze(1).to(target_dtype)) * self.pre_norm(x) + mod.shift.squeeze(1).to(target_dtype)
         
-        qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, x_mod.shape[-1] * 4], dim=-1)
+        # Жесткая фиксация сплита по эталонной маске кузнецов Метрополии (3*H и mlp_hidden_dim)
+        qkv, mlp = torch.split(self.linear1(x_mod), [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
+        
         q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
-        
         attn = attention(q, k, v, pe=pe, mask=mask)
-        output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), dim=-1))
         
-        return x + mod.gate.to(target_dtype) * output
-#-------------------- Конец блока №4 -----------------
+        output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), dim=-1))
+        return x + mod.gate.squeeze(1).to(target_dtype) * output
+#---------------- Конец Блока №4 ----------------
