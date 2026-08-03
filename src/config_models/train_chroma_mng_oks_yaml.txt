@@ -1,0 +1,47 @@
+# ==============================================================================
+# БОЕВОЙ ПОЛЕТНЫЙ ЛИСТ: КУЗНЯ CHROMA (CORE SPEC V03)
+# БУНТ ПРИНЯТ. ТЕКСТОВЫЙ ЭНКОДЕР АМПУТИРОВАН ИЗ VRAM ДЛЯ ЗАЩИТЫ ОТ ОВЕРСВАПА
+# ==============================================================================
+
+job: extension
+config:
+  name: "chroma_mng_oks_v1"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "Z:\\flowch\\run"
+      device: cuda:0
+      
+      # Сектор 1: Настройки LoRA-матрицы по канону Kohya
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+        
+      # Сектор 2: Датасет и тотальный пре-кэш текстового пространства на диск Z
+      datasets:
+        - folder_path: "Z:\\flowch\\dataset\\mng_oks_bl"
+          caption_ext: "txt"
+          cache_latents_to_disk: true  # Кэш геометрии
+          cache_text_encoder_to_disk: true  # ЗАКОН ВЫЖЖЕННОЙ ЗЕМЛИ ДЛЯ T5XXL
+          
+      # Сектор 3: Контур стабилизации и оптимизаторы
+      train:
+        batch_size: 1
+        steps: 2000
+        gradient_checkpointing: true  # Autograd защита WDDM
+        optimizer: "adamw8bit"
+        dtype: bf16  # Вычисления строго в bfloat16 (Защита AdaLN)
+        
+      # Сектор 4: Изолированное FP8-ядро Метрополии
+      model:
+        name_or_path: "Z:\\flowch\\models_core\\transformer\\Chroma1-HD.safetensors"
+        vae_path: "Z:\\flowch\\models_core\\vae\\flux-vae-bf16.safetensors"
+        quantize: true  # Включение TorchAO Hooks фильтрации
+        train_text_encoder: false  # Полное вымывание T5 из VRAM
+        
+      # Сектор 5: Контур безопасного тест-сэмплинга (без шага 0)
+      sample:
+        sample_every: 250
+        sample_start_step: 250  # Защита от краша на старте
+        width: 1024
+        height: 1024

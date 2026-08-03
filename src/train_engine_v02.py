@@ -181,70 +181,61 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Autograd-Броней Чекпоинтинга) -----------
+from torch.utils.checkpoint import checkpoint
 
-#---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
     """
     Декомпозированный маршевый трансформер Chroma.
-    Полностью очищен от ошибок распаковки кортежей и С++ заносов памяти.
+    Защищен градиентным чекпоинтингом для блокировки аварийного спиллинга WDDM.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
         from chroma_core.layers_clean import DoubleStreamBlock, SingleStreamBlock
         self.hidden_size = hidden_size
         
-        # Маршевые входные сенсоры последовательностей
         self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
         
-        # Двухконтурные ModuleList под жесткую топологию Метрополии
         self.double_blocks = nn.ModuleList([DoubleStreamBlock(hidden_size) for _ in range(num_double)])
         self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
 
     def pack_latents(self, x: torch.Tensor) -> torch.Tensor:
-        """Трансформирует 4D латентный кадр в плоскую 3D маршевую последовательность (Pixel Shuffle 2x2)."""
         B, C, H, W = x.shape
         x = x.view(B, C, H // 2, 2, W // 2, 2)
         x = x.permute(0, 2, 4, 1, 3, 5)
         return x.reshape(B, (H // 2) * (W // 2), C * 4)
 
-#---------------- Старт Текстового Шва Блока 4 (Герметичный forward ChromaMMDiT без AdaLN итераторов) -
-
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
-        """
-        Маршевый проход трансформера Chroma1-HD.
-        Полностью очищен от итераторов AdaLN нормализации. Активации выровнены.
-        """
-        # Снайперский срез фантомной оси DataLoader [B, 1, L, D] -> [B, L, D]
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
             
         x_latent = x_latent.to(torch.bfloat16)
         txt_hidden = txt_hidden.to(torch.bfloat16)
         
-        # Сборка первичных токенов через маршевые сенсоры последовательностей
         xt_flat = self.pack_latents(x_latent)
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
+        txt_len = txt_tokens.shape
 
-        # Жесткая фиксация длины отсека текста для безопасного среза памяти
-        txt_len = txt_tokens.shape[1]
-
-        # 1. Каскад спаренных блоков (Передаем None вместо фантомного distill_vec)
+        # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга
         for i, block in enumerate(self.double_blocks):
-            txt_tokens, img_tokens = block(
-                txt=txt_tokens, img=img_tokens, pe=None, distill_vec=None, mask=None
+            # Чекпоинтинг пересчитывает forward внутри бэкварда, освобождая VRAM
+            txt_tokens, img_tokens = checkpoint(
+                block, txt_tokens, img_tokens, None, None, None, 
+                use_reentrant=False
             )
 
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         for i, block in enumerate(self.single_blocks):
-            x_combined = block(
-                x=x_combined, pe=None, distill_vec=None, mask=None
+            x_combined = checkpoint(
+                block, x_combined, None, None, None, 
+                use_reentrant=False
             )
 
-        # 3. Восстановление исходной 4D-геометрии латентов с герметизацией памяти
+        # 3. Восстановление 4D-геометрии латентов с герметизацией выравнивания памяти
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -253,9 +244,8 @@ class ChromaMMDiT(nn.Module):
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
-#---------------- Конец Текстового Шва Блока 4 -----------------
-
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации Заводских Весов и Точка Входа Реактора) --------
 def run_reactor_forge():
