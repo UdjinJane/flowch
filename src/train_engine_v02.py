@@ -81,8 +81,19 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     """Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow."""
     x1 = batch["latent"].cuda()
     clip_hidden = batch["clip_hidden"].cuda()
-    t5_hidden = batch["t5_hidden"].cuda()
+    t5_raw = batch["t5_hidden"].cuda()
+    
+    # ШОВ ВЫРАВНИВАНИЯ КОНТЕНТА: Добиваем T5-контекст нулями до эталонных 512 токенов Метрополии
+    B_pad, L_pad, D_pad = t5_raw.shape
+    if L_pad < 512:
+        padding_size = 512 - L_pad
+        zero_padding = torch.zeros((B_pad, padding_size, D_pad), dtype=t5_raw.dtype, device=t5_raw.device)
+        t5_hidden = torch.cat([t5_raw, zero_padding], dim=1)
+    else:
+        t5_hidden = t5_raw[:, :512, :]
+        
     ChromaTelemetry.verify(x1, "train_step.latents", 4)
+
 
     optimizer.zero_grad(set_to_none=True)
 
