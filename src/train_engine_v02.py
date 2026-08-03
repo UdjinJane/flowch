@@ -65,20 +65,19 @@ class ChromaInlineLoRA(nn.Module):
                 print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]: Обнаружен NaN!")
 #---------------- Конец Блока 1 -----------------
 
-#---------------- Старт Блока 2 (Динамический Инжектор и Менеджер Заморозки Базы) ----------------
+#---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
     Динамически обходит граф весов трансформера и врезает LoRA-электроды.
-    Полностью изолирует оригинальные веса FP8 кузнецов Метрополии от градиентов.
+    Жестко фильтрует проекции .proj, перехватывая только монолитные QKV-матрицы.
     """
     patched_count = 0
     print("# === ИНИЦИАЛИЗАЦИЯ ИНЖЕКЦИИ АДАПТЕРОВ В ЯДРО RECTOR ===")
     
-    # Парсим named_modules() на наличие целевых слоев внимания и MLP-параллели
     for name, module in model.named_modules():
-        if any(target in name for target in ["txt_attn", "img_attn", "linear1"]):
+        # Строгий фильтр: перехватываем только .qkv слои внимания и .linear1 блоки одиночного каскада
+        if any(target in name for target in ["txt_attn.qkv", "img_attn.qkv", "linear1"]):
             if isinstance(module, nn.Linear):
-                # Извлекаем родительский модуль для безопасного замещения
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
                 parent = model.get_submodule(parent_name) if parent_name else model
@@ -100,13 +99,13 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Боевое Ядро тренировочного шага train_step_core) ----------------
+#---------------- Старт Блока 3 (Монолитное Очищенное Боевое Ядро train_step_core) ----------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки LoRA по траекториям Rectified Flow.
-    Полностью изолирован статический проектор модуляции от раздувания Autograd.
+    Полностью вычищен от ошибок вложенности списков и утечек VRAM в Shared RAM Windows.
     """
-    # Активация дефектоскопа для сквозного контроля рантайма
+    # Активация дефектоскопа для сквозного построчного контроля рантайма
     sys.settrace(trace_lines)
     
     x1 = batch["latent"].cuda()
@@ -131,7 +130,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
-    # Расчет векторов модуляции через Аппроксиматор
+    # Расчет векторов модуляции через Аппроксиматор Метрополии
     t_vec = t.view(-1, 1).to(torch.bfloat16).requires_grad_(True)
     raw_mod = approximator(t_vec)
 
@@ -142,12 +141,16 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     monolithic_mod = raw_mod.unsqueeze(1)
     flat_mods = distribute_modulations(monolithic_mod, depth_single_blocks=38, depth_double_blocks=19)
 
-    # Сборка пакетов модуляции под устав очищенного геометрического ядра
     mods = {"double": [], "single": [], "final": None}
+    
+    # Снайперская сборка пакетов под устав распаковки DoubleStreamBlock ядра
     for i in range(19):
-        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]
-        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]
-        mods["double"].append([img_mod_pair, txt_mod_pair])
+        img_mod_pair = flat_mods[f"double_blocks.{i}.img_mod.lin"]  # Список [img_mod1, img_mod2]
+        txt_mod_pair = flat_mods[f"double_blocks.{i}.txt_mod.lin"]  # Список [txt_mod1, txt_mod2]
+        
+        # Разворачиваем в плоский уставной список из 4-х изолированных объектов ModulationOut
+        flat_double_vec = [img_mod_pair[0], img_mod_pair[1], txt_mod_pair[0], txt_mod_pair[1]]
+        mods["double"].append(flat_double_vec)
         
     for i in range(38):
         mods["single"].append(flat_mods[f"single_blocks.{i}.modulation.lin"])
@@ -171,13 +174,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name)
 
-    # Тотальная зачистка и выжигание следов бэкварда из VRAM до инспекции CPU
+    # Тотальная зачистка и выжигание следов бэкварда: спасаем VRAM от Shared-течи WDDM
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     sys.settrace(None)
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Маршевый Очищенный Трансформер ChromaMMDiT) ----------------
 class ChromaMMDiT(nn.Module):
     """
