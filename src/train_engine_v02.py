@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 
 # Жесткая блокировка утечек градиентов во внешнюю Shared RAM Windows WDDM
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-
 sys.path.append(os.path.abspath("./src"))
+
 from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_modulations
 from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
@@ -26,13 +26,9 @@ def trace_lines(frame, event, arg):
             print(f"[ТОТАЛЬНЫЙ ПЕРЕХВАТ С++ АВАРИИ]: Исключение {exc_type.__name__}")
             print(f"Системный маркер: {exc_value}")
             print("!"*80)
-            
-            # Распечатываем полный сквозной стек вызовов PyTorch и внешних Си-либ
             print("[СКВОЗНОЙ СТЕК ВСЕХ СИСТЕМНЫХ БИБЛИОТЕК]:")
             traceback.print_exception(exc_type, exc_value, exc_traceback)
             print("!"*80)
-            
-            # Тотальный дамп всех локальных объектов во всех доступных кадрах стека
             print("[ИНСПЕКЦИЯ ПАМЯТИ КАДРА ПАДЕНИЯ]:")
             curr_frame = frame
             while curr_frame:
@@ -41,10 +37,10 @@ def trace_lines(frame, event, arg):
                     if any(x in key.lower() for x in ["mod", "vec", "tensor", "args", "shape"]):
                         try:
                             if hasattr(val, "shape"):
-                                print(f"    * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
+                                print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
                             elif isinstance(val, (list, tuple)):
-                                print(f"    * Контейнер [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
-                                if len(val) > 0: print(f"      - Элемент 0: {type(val[0]).__name__}")
+                                print(f" * Контейнер [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
+                                if len(val) > 0: print(f" - Элемент 0: {type(val[0]).__name__}")
                         except:
                             pass
                 curr_frame = curr_frame.f_back
@@ -58,7 +54,6 @@ class ChromaInlineLoRA(nn.Module):
         self.base_layer = base_layer
         self.rank = rank
         self.scale = alpha / rank
-        
         in_features = base_layer.in_features
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
@@ -88,7 +83,6 @@ class ChromaInlineLoRA(nn.Module):
                 print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]")
 #---------------- Конец Блока 1 -----------------
 
-
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
@@ -97,21 +91,17 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
     patched_count = 0
     print("# === ИНИЦИАЛИЗАЦИЯ ИНЖЕКЦИИ АДАПТЕРОВ В ЯДРО RECTOR ===")
-    
     for name, module in model.named_modules():
-        # Строгий фильтр: перехватываем только .qkv слои внимания и .linear1 блоки одиночного каскада
         if any(target in name for target in ["txt_attn.qkv", "img_attn.qkv", "linear1"]):
             if isinstance(module, nn.Linear):
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
                 parent = model.get_submodule(parent_name) if parent_name else model
                 
-                # Блокируем Autograd оригинальной базы Метрополии (Жесткое удержание VRAM)
                 module.weight.requires_grad = False
                 if module.bias is not None:
                     module.bias.requires_grad = False
                 
-                # Ввариваем кастомный шов LoRA строго под калибр ранга сессии
                 lora_wrapper = ChromaInlineLoRA(module, rank=rank)
                 setattr(parent, child_name, lora_wrapper)
                 patched_count += 1
@@ -119,7 +109,6 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
                 
     if patched_count == 0:
         raise RuntimeError("[АВАРИЯ] Ошибка сканирования: точки инжекции LoRA не обнаружены!")
-        
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
@@ -127,17 +116,15 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки) --------------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
-    Выполняет один боевой шаг плавки строго по заводской топологии Chroma1-HD.
+    Выполняет один боевой шаг плавки строго по заводской topology Chroma1-HD.
     Контур Autograd LoRA активирован, реализован жесткий клиппинг и тотальный флашинг VRAM.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
     
-    # ГЕРМЕТИЗАЦИЯ ШВА: Сжимаем 4D текстовую шину до уставного 3D-формата [B, L, D]
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
         
-    # Чистая распаковка осей без С++ заносов
     B_pad, L_pad, D_pad = t5_raw.shape
     if L_pad < 512:
         padding_size = 512 - L_pad
@@ -146,16 +133,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
         
-    # Сброс градиентов перед шагом
     optimizer.zero_grad(set_to_none=True)
     
-    # ИСПРАВЛЕНИЕ ЗАНОСА: Генерация шумового поля по форме x1
     x0 = torch.randn_like(x1)
     t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
-    # Создаем фиктивный тройной пакет модуляции под Си-устав финального AdaLN
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -165,9 +149,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         "final": [fake_shift, fake_scale, fake_gate]
     }
     
-    # ==========================================================================
-    # ПРИБОРНАЯ ПАНЕЛЬ СЛЕДСТВЕННОГО КОНТУРА (Рентген CUDA-памяти)
-    # ==========================================================================
     print("\n" + "="*60)
     print("[ПРИБОРНАЯ ПАНЕЛЬ]: Параметры полностью выровнены под металл:")
     print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
@@ -176,46 +157,33 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
     print("="*60 + "\n")
     
-    # ==========================================================================
-    # МАРШЕВЫЙ АКТИВНЫЙ Forward-Проход (no_grad СНЯТ, Autograd строит граф для LoRA)
-    # ==========================================================================
+    # Боевой маршевый проход Autograd
     pred_velocity = model(xt, t5_hidden, mods)
     
-    # Расчет чистой MSE потери вектора скорости Rectified Flow
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
         
-    # МАРШЕВАЯ ПРОКАЧКА ГРАДИЕНТОВ ПО ГРАФУ АДАПТЕРОВ
     loss.backward()
-    
-    # ЗАЩИТА МАНТИССЫ: Срезаем пиковые Gradient Spikes
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    
-    # Обновление весов 8-битного оптимизатора
     optimizer.step()
     
-    # Телеметрия градиентов инжектированных электродов
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name)
             
-    # ТОТАЛЬНЫЙ ФЛАШИНГ КЭША WDDM И ССЫЛОК (Очистка Shared RAM до 0.0 ГБ)
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
-
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Изолированной Autograd-Броней) -----------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
     """
     Декомпозированный маршевый трансформер Chroma.
-    Полностью очищен от С++ капканов чекпоинтинга на одиночных каскадах.
     Спаренные блоки удерживаются checkpoint для тотальной защиты VRAM.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
@@ -255,26 +223,24 @@ class ChromaMMDiT(nn.Module):
         xt_flat = self.pack_latents(x_latent)
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
-
+        
         # ГЕРМЕТИЗАЦИЯ ШВА: Извлекаем строго целочисленную длину текстовой оси (индекс 1)
         txt_len = txt_tokens.shape[1]
-
+        
         # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Держит полку памяти VRAM)
         for i, block in enumerate(self.double_blocks):
             txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-                block, txt_tokens, img_tokens, None, None, None, 
+                block, txt_tokens, img_tokens, None, None, None,
                 use_reentrant=False
             )
-
+            
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         
         # Пускаем одиночные блоки напрямую, минуя капризный С++ Си-контур checkpoint
         for i, block in enumerate(self.single_blocks):
-            x_combined = block(
-                x=x_combined, pe=None, distill_vec=None, mask=None
-            )
-
+            x_combined = block(x=x_combined, pe=None, distill_vec=None, mask=None)
+            
         # 3. Восстановление исходной 4D-геометрии латентов с чистым целочисленным срезом инта
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
@@ -298,7 +264,7 @@ def run_reactor_forge():
     
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
-    
+        
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
@@ -328,7 +294,7 @@ def run_reactor_forge():
         del state_dict # Мгновенное выжигание временного словаря из VRAM
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
-    
+        
     # ==========================================================================
     # СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальное принудительное выжигание левых градиентов базы
     # ==========================================================================
@@ -338,7 +304,7 @@ def run_reactor_forge():
             param.requires_grad = False
         else:
             param.requires_grad = True # Гарантируем стабильный BF16-ток для адаптеров
-    
+            
     approximator = None
     mod_projector = None
     
@@ -364,15 +330,20 @@ def run_reactor_forge():
         dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
         
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЧИСТОГО ЦИКЛА ПЛАВКИ ===")
+    import sys
+    sys.settrace(trace_lines) # Активация Супер-Боровика
+    
     for step, batch in enumerate(dataloader):
         try:
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector)
-            print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Маршевый Loss: {loss:.6f}")
-            if step >= 0: # Фиксация успеха на первой итерации прогона
-                break
+            print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
+            # Для выхода в длительный марш на 2000 шагов — просто закомментируйте 'break' ниже!
+            break 
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
+            
+    sys.settrace(None) # Отключение Супер-Боровика
     print("# === ДВИЖОК ВЕРИФИЦИРОВАН. СУХОЙ ПУСК LORA ПРОШЕЛ УСПЕШНО. КОНЕЦ СЕССИИ ===")
 
 if __name__ == "__main__":
