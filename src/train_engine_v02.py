@@ -136,10 +136,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
-    
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
-        
     B_pad, L_pad, D_pad = t5_raw.shape
     if L_pad < 512:
         padding_size = 512 - L_pad
@@ -149,11 +147,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         t5_hidden = t5_raw[:, :512, :]
         
     optimizer.zero_grad(set_to_none=True)
-    
     x0 = torch.randn_like(x1)
     t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
+    
+    # ПРИНУДИТЕЛЬНЫЙ ПОДЖИГ AUTOGRAD: Активирует трекинг градиентов для швов LoRA
+    xt.requires_grad_(True)
     
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -176,9 +176,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         
     # Боевой маршевый проход Autograd
     pred_velocity = model(xt, t5_hidden, mods)
-    
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
-    
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
         
@@ -193,7 +191,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
             
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
-    
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
@@ -250,7 +247,7 @@ class ChromaMMDiT(nn.Module):
         # Выравнивание склейки под устав Метрополии: сначала ИЗОБРАЖЕНИЕ, затем ТЕКСТ
         x_combined = torch.cat([img_tokens, txt_tokens], dim=1)
 
-        # Одиночные блоки — строго 4 позиционных аргумента под геометрию Метрополии!
+        # Одиночные blocks — строго 4 позиционных аргумента под геометрию Метрополии!
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
 
@@ -264,6 +261,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
