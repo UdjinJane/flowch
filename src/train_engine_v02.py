@@ -69,11 +69,14 @@ class ChromaInlineLoRA(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
-        base_out = self.base_layer(x)
+        # Заставляем тензор быть непрерывным ДО матричного умножения!
+        x_cont = x.contiguous().to(torch.bfloat16) 
+        base_out = self.base_layer(x_cont)
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            lora_out = torch.matmul(x.to(torch.bfloat16), self.lora_A)
+            lora_out = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_out, self.lora_B) * self.scale
         return base_out + lora_out.to(base_out.dtype)
+
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """
@@ -194,13 +197,15 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Изолированной Autograd-Броней) -----------
+
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
     """
-    Декомпозированный маршевый трансформер Chroma.
-    Спаренные блоки удерживаются checkpoint для тотальной защиты VRAM.
+    Модернизированный маршевый трансформер Chroma.
+    19 спаренных блоков сгруппированы в 4 укрупненных каскада чекпоинтинга.
+    Это снижает нагрузку на Autograd-граф и полностью выжигает WDDM Shared RAM оверсвап.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -223,41 +228,57 @@ class ChromaMMDiT(nn.Module):
         x = x.permute(0, 2, 4, 1, 3, 5)
         return x.reshape(B, (H // 2) * (W // 2), C * 4)
 
+    def _run_cascade(self, start_idx: int, end_idx: int, txt_tokens: torch.Tensor, img_tokens: torch.Tensor):
+        """Внутренний маршевый изолятор для прогона локальной группы блоков внутри чекпоинта."""
+        for idx in range(start_idx, end_idx):
+            txt_tokens, img_tokens = self.double_blocks[idx](
+                txt_tokens, img_tokens, None, None, None
+            )
+        return txt_tokens, img_tokens
+
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый проход трансформера Chroma1-HD.
-        Полностью очищен от итераторов AdaLN нормализации. Активации выровнены.
+        Маршевый проход трансформера Chroma1-HD с подавлением PCIe-спиллинга.
         """
-        # Снайперский срез фантомной оси DataLoader [B, 1, L, D] -> [B, L, D]
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
             
         x_latent = x_latent.to(torch.bfloat16)
         txt_hidden = txt_hidden.to(torch.bfloat16)
         
-        # Сборка первичных токенов через маршевые сенсоры последовательностей
+        # Инициализация токенов через входные сенсоры
         xt_flat = self.pack_latents(x_latent)
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
-        # ГЕРМЕТИЗАЦИЯ ШВА: Извлекаем строго целочисленную длину текстовой оси (индекс 1)
         txt_len = txt_tokens.shape[1]
         
-        # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Держит полку памяти VRAM)
-        for i, block in enumerate(self.double_blocks):
-            txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-                block, txt_tokens, img_tokens, None, None, None,
-                use_reentrant=False
-            )
+        # ==========================================================================
+        # КАСКАДНАЯ СБОРКА АВТОГРАДА: Нарезаем 19 блоков на 4 крупные зоны контроля
+        # ==========================================================================
+        # Зона 1: Блоки 0-5 (6 блоков)
+        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
+            self._run_cascade, 0, 6, txt_tokens, img_tokens, use_reentrant=False
+        )
+        # Зона 2: Блоки 6-11 (6 блоков)
+        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
+            self._run_cascade, 6, 12, txt_tokens, img_tokens, use_reentrant=False
+        )
+        # Зона 3: Блоки 12-16 (5 блоков)
+        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
+            self._run_cascade, 12, 17, txt_tokens, img_tokens, use_reentrant=False
+        )
+        # Зона 4: Блоки 17-18 (Финал, 2 блока) - Пускаем напрямую без чекпоинта для выравнивания хвостов градиентов
+        txt_tokens, img_tokens = self._run_cascade(17, 19, txt_tokens, img_tokens)
             
-        # 2. Склеивание потоков для одиночного параллельного каскада
+        # Склеивание очищенных потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         
-        # Пускаем одиночные блоки напрямую, минуя капризный С++ Си-контур checkpoint
+        # Одиночные блоки идут напрямую в кремнии
         for i, block in enumerate(self.single_blocks):
             x_combined = block(x=x_combined, pe=None, distill_vec=None, mask=None)
             
-        # 3. Восстановление исходной 4D-геометрии латентов с чистым целочисленным срезом инта
+        # Восстановление исходной 4D-геометрии латентов
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
