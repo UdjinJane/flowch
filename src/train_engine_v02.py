@@ -5,11 +5,9 @@ import traceback
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
 # Жесткая блокировка утечек градиентов во внешнюю Shared RAM Windows WDDM
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 sys.path.append(os.path.abspath("./src"))
-
 from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_modulations
 from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
@@ -57,7 +55,6 @@ class ChromaInlineLoRA(nn.Module):
         in_features = base_layer.in_features
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
-        
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
 
@@ -69,14 +66,18 @@ class ChromaInlineLoRA(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
-        # Заставляем тензор быть непрерывным ДО матричного умножения!
-        x_cont = x.contiguous().to(torch.bfloat16) 
-        base_out = self.base_layer(x_cont)
+        x_cont = x.contiguous().to(torch.bfloat16)
+        
+        # Базовый слой рассчитывается без Autograd трекинга
+        with torch.no_grad():
+            base_out = self.base_layer(x_cont)
+            
+        # Граф строится СТРОГО для электродов LoRA
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             lora_out = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_out, self.lora_B) * self.scale
+            
         return base_out + lora_out.to(base_out.dtype)
-
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """
@@ -84,9 +85,7 @@ class ChromaInlineLoRA(nn.Module):
         Выдает рапорт строго на ШАГЕ №1 и строго для первых трех блоков модели,
         чтобы не засорять консоль Кэпа портянками логов.
         """
-        # Проверяем, входит ли слой в первые три блока double_blocks (0, 1, 2)
         is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
-        
         if current_step == 0 and is_first_block:
             print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
             for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
@@ -97,8 +96,7 @@ class ChromaInlineLoRA(nn.Module):
                 else:
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
-#---------------- Конец Блока 1 -----------------
-
+#---------------- Конец Блока 1 ...
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
@@ -200,25 +198,20 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 #---------------- Конец Блока 3 -----------------
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
-from torch.utils.checkpoint import checkpoint
-
 class ChromaMMDiT(nn.Module):
     """
     Модернизированный маршевый трансформер Chroma.
-    Использует классический послойный реентерабельный чекпоинтинг (use_reentrant=True).
-    Это принудительно очищает активации Autograd на C++ уровне сразу после прохода блока,
-    полностью уничтожая спиллинг Windows WDDM в Shared RAM.
+    Полностью избавлен от укрупненного и послойного чекпоинтинга.
+    Работает в режиме прямой трансляции тензоров в чистом кремнии.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
         from chroma_core.layers_clean import DoubleStreamBlock, SingleStreamBlock
         self.hidden_size = hidden_size
-        
         # Маршевые входные сенсоры последовательностей
         self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
-        
         # Двухконтурные ModuleList под жесткую топологию Метрополии
         self.double_blocks = nn.ModuleList([DoubleStreamBlock(hidden_size) for _ in range(num_double)])
         self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
@@ -242,37 +235,27 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
-        # ==========================================================================
-        # ИСПРАВЛЕНИЕ ЗАНОСА: Искусственный поджиг Autograd графа для use_reentrant=True
-        # Скрытый маркер заставит PyTorch строить граф LoRA внутри чекпоинтов!
-        # ==========================================================================
-        img_tokens.requires_grad_(True) 
-        txt_len = txt_tokens.shape[1]
+        img_len = img_tokens.shape[1]
 
-        
-        # ==========================================================================
-        # ЖЕСТКАЯ РЕЕНТЕРАБЕЛЬНАЯ БРОНЯ: Послойная очистка памяти на C++ уровне
-        # Передаем уставные аргументы Метрополии сквозь классический чекпоинт
-        # ==========================================================================
+        # Прямой каскад спаренных блоков Метрополии (без лямбда-костылей и сплитов)
         for block in self.double_blocks:
-            # Движок use_reentrant=True требует, чтобы функция возвращала и принимала тензоры.
-            # Обертка-лямбда жестко изолирует контекст выполнения каждого спаренного блока.
-            txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-                lambda t, i: block(t, i, None, None, None),
-                txt_tokens,
-                img_tokens,
-                use_reentrant=True
+            img_tokens, txt_tokens = block(
+                img=img_tokens, 
+                txt=txt_tokens, 
+                pe=None, 
+                distill_vec=mods["double"], 
+                mask=None
             )
-            
-        # Склеивание очищенных потоков для одиночного параллельного каскада
-        x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
-        
-        # Одиночные блоки идут напрямую в чистом кремнии
+
+        # Выравнивание склейки под устав Метрополии: сначала ИЗОБРАЖЕНИЕ, затем ТЕКСТ
+        x_combined = torch.cat([img_tokens, txt_tokens], dim=1)
+
+        # Одиночные блоки — строго 4 позиционных аргумента под геометрию Метрополии!
         for block in self.single_blocks:
-            x_combined = block(x=x_combined, pe=None, distill_vec=None, mask=None)
-            
-        # Восстановление исходной 4D-геометрии латентов
-        pred_img_flat = x_combined[:, txt_len:].contiguous()
+            x_combined = block(x_combined, None, mods["single"], None)
+
+        # Снайперское отсечение: берем строго первые img_len токенов графики!
+        pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
         B, C_raw, H_raw, W_raw = x_latent.shape
@@ -280,7 +263,8 @@ class ChromaMMDiT(nn.Module):
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
-#---------------- Конец Блока 4 -----------------
+#---------------- Конец Блока 4 ...
+
 
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
