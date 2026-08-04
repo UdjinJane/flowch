@@ -372,7 +372,7 @@ def run_reactor_forge():
     
     for step, batch in enumerate(dataloader):
         try:
-            loss = train_step_core(batch, model, optimizer, approximator, mod_projector)
+            loss = train_step_core(batch, model, optimizer, approximator, mod_projector, step=step)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
             # Для выхода в длительный марш на 2000 шагов — просто закомментируйте 'break' ниже!
             break 
