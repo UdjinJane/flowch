@@ -255,8 +255,8 @@ class ChromaMMDiT(nn.Module):
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
     """
-    Управляет запуском реактора: разворачивает топологию, сжимает базу весов в INT8 через TorchAO,
-    динамически блокирует Autograd базовой модели и запирает оптимизатор на LoRA-параметрах.
+    Управляет запуском реактора: разворачивает топологию, заливает заводские веса,
+    сжимает базу в INT8 через TorchAO, инжектирует LoRA и запускает цикл плавки.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -268,47 +268,43 @@ def run_reactor_forge():
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
-    # ==========================================================================
-    # СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Выполняется строго ДО инжекции LoRA слоев)
-    # ==========================================================================
+    # 2. ПОДГРУЗКА ЗАВОДСКОЙ ПЛАЗМЫ (Выполняется строго ДО квантования)
+    print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
+    try:
+        from safetensors.torch import load_file
+        state_dict = load_file(CHROMA_MODEL_PATH, device="cpu") # Буферизируем в CPU
+        model.load_state_dict(state_dict, strict=False)
+        print(" -> [OK] Заводской граф весов успешно состыкован со структурами трансформера.")
+        del state_dict # Мгновенное выжигание временного словаря из памяти
+    except Exception as s_err:
+        raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
+    
+    # 3. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Перенесено на рабочее место после заливки весов)
     print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов в INT8...")
     try:
         from torchao.quantization import quantize_, int8_weight_only
-        # Пакуем замороженное ядро Метрополии, высвобождая ~8 ГБ VRAM
+        # Безопасно пакуем заполненный монолит, высвобождая ~8 ГБ VRAM без вылета copy_
         quantize_(model, int8_weight_only())
         print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
     except Exception as ao_err:
         print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
 
-    # 2. Инжекция LoRA-электродов поверх сжатой базы (Сварит ровно 76 швов)
+    # 4. Инжекция LoRA-электродов поверх сжатой и заполненной базы (76 швов)
     patched_count = patch_chroma_reactor(model, rank=16)
-    model = model.to(device)
-    
-    # 3. Подгрузка чистокровных весов safetensors напрямую в CUDA
-    print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
-    try:
-        from safetensors.torch import load_file
-        state_dict = load_file(CHROMA_MODEL_PATH, device="cuda")
-        model.load_state_dict(state_dict, strict=False)
-        print(" -> [OK] Заводской граф весов успешно состыкован с металлом трансформера.")
-        del state_dict # Мгновенное выжигание временного словаря из VRAM
-    except Exception as s_err:
-        raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
+    model = model.to(device) # Финальный маршевый перенос всей системы в CUDA
         
-    # ==========================================================================
-    # СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальное принудительное выжигание левых градиентов базы
-    # ==========================================================================
+    # 5. СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальная блокировка Autograd для базового ядра
     print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базы...")
     for name, param in model.named_parameters():
         if "lora_" not in name:
             param.requires_grad = False
         else:
-            param.requires_grad = True # Гарантируем стабильный BF16-ток для адаптеров
+            param.requires_grad = True # Гарантируем стабильный поток для адаптеров
             
     approximator = None
     mod_projector = None
     
-    # 4. Запираем AdamW8bit СТРОГО на эталонных 152 LoRA-параметрах (76 швов * 2 матрицы)
+    # 6. Фиксация 8-битного оптимизатора строго на 152 LoRA-параметрах
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
@@ -331,7 +327,7 @@ def run_reactor_forge():
         
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЧИСТОГО ЦИКЛА ПЛАВКИ ===")
     import sys
-    sys.settrace(trace_lines) # Активация Супер-Боровика
+    sys.settrace(trace_lines) # Включаем инспектора "Супер-Боровик"
     
     for step, batch in enumerate(dataloader):
         try:
@@ -343,7 +339,7 @@ def run_reactor_forge():
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
             
-    sys.settrace(None) # Отключение Супер-Боровика
+    sys.settrace(None) # Деактивация инспектора
     print("# === ДВИЖОК ВЕРИФИЦИРОВАН. СУХОЙ ПУСК LORA ПРОШЕЛ УСПЕШНО. КОНЕЦ СЕССИИ ===")
 
 if __name__ == "__main__":
