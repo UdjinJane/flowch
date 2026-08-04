@@ -405,10 +405,11 @@ def run_reactor_forge():
     
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
         print(" [WARN] Холодная симуляция на тестовом фантом-батче.")
+        # ЖЕСТКИЙ ФИКС: Инициализация строго во float32 для исключения аварий Си-генератора CPU
         batch = {
-            "latent": torch.randn(1, 16, 128, 128, dtype=torch.bfloat16),
-            "clip_hidden": torch.randn(1, 77, 768, dtype=torch.bfloat16),
-            "t5_hidden": torch.randn(1, 256, 4096, dtype=torch.bfloat16)
+            "latent": torch.randn(1, 16, 128, 128, dtype=torch.float32).to(torch.bfloat16),
+            "clip_hidden": torch.randn(1, 77, 768, dtype=torch.float32).to(torch.bfloat16),
+            "t5_hidden": torch.randn(1, 256, 4096, dtype=torch.float32).to(torch.bfloat16)
         }
         dataloader = [batch]
     else:
