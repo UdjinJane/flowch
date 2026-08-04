@@ -46,10 +46,25 @@ def trace_lines(frame, event, arg):
             print("!"*80 + "\n")
     return trace_lines
 
+class ZeroBaseAutogradShunt(torch.autograd.Function):
+    """
+    Абсолютный автоград-шунт Омниссии.
+    Склеивает результаты форварда, но полностью стирает базовую модель из памяти бэкварда.
+    """
+    @staticmethod
+    def forward(ctx, lora_out_in, base_out_detached_in):
+        return lora_out_in + base_out_detached_in
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Базовая квантованная модель для Autograd — это ПУСТОЕ МЕСТО.
+        # Градиентный ток транслируется только на ветку LoRA.
+        return grad_output, None
+
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая броня Метрополии: Нативный шов LoRA со сквозной изоляцией квантованной базы.
-    Удерживает эталонную форму тензоров и полностью отсекает backward TorchAO.
+    Высшая броня Метрополии: Нативный шов LoRA с автоград-шунтированием базового монолита.
+    Удерживает эталонную форму тензоров и аппаратно выжигает Shared RAM.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -60,7 +75,7 @@ class ChromaInlineLoRA(nn.Module):
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
         
-        # Единственные живые обучаемые параметры в контуре плавки
+        # Обучаемые параметры шва в чистом bfloat16
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
 
@@ -74,20 +89,18 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # ГЛУХАЯ ИЗОЛЯЦИЯ БАЗЫ НА УРОВНЕ ФОРВАРДА: Квантованное Си++ ядро считает без Autograd
+        # 1. БАЗА СЧИТАЕТСЯ БЕЗ ГРАДИЕНТОВ И МГНОВЕННО ОТДЕЛЯЕТСЯ ОТ ГРАФА
         with torch.no_grad():
             base_out_raw = self.base_layer(x_cont)
-            
-        # Принудительно отрываем результат базы от графа, исключая ее из бэкварда на 100%
         base_out = base_out_raw.detach()
         
-        # НА ТИВНЫЙ AUTOGRAD-ТОК: Считаем LoRA-аппендикс с удержанием истории для входа x
+        # 2. РАСЧЕТ ОДНОКОНТУРНОЙ LORA (Параметры lora_A и lora_B нативно трекаются Autograd)
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             lora_mid = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
             
-        # Сложение сохраняет сквозной граф для LoRA, но база остается стерильным листом
-        return base_out + lora_out.to(base_out.dtype)
+        # 3. ПРОПУСКАЕМ ТЕНЗОРЫ ЧЕРЕЗ ШУНТ: Полное уничтожение следов TorchAO в бэкварде
+        return ZeroBaseAutogradShunt.apply(lora_out, base_out)
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """Умная телеметрия шва."""
