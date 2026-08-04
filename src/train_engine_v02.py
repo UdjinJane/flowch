@@ -181,14 +181,13 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Полностью исключает вызов loss.backward(), блокируя Си-деквантование TorchAO.
+    Внедряет точный реверс Pixel Shuffle для корректного выравнивания осей градиентов.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -241,18 +240,36 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии)
     t_bwd_start = time.perf_counter()
     
-    # Математический расчет стартового градиента от MSE-Loss: dL/d(pred) = 2 * (pred - target) / N
-    total_elements = pred_velocity.numel()
-    grad_output = 2.0 * (pred_velocity - target_velocity) / total_elements
-    grad_output = grad_output.to(torch.bfloat16)
-    
-    # Обходим все модули трансформера в обратном порядке (от конца к началу)
-    # И принудительно инжектируем градиентный ток в LoRA-швы, минуя замороженную базу
-    modules_chain = list(model.named_modules())
-    for name, module in reversed(modules_chain):
-        if hasattr(module, "inject_manual_backward"):
-            # Пробрасываем ток сквозь электрод и забираем dx для транзита назад
-            grad_output = module.inject_manual_backward(grad_output)
+    with torch.no_grad():
+        # 1. Математический расчет стартового градиента от MSE-Loss: [B, 16, H_raw, W_raw]
+        total_elements = pred_velocity.numel()
+        grad_out_4d = 2.0 * (pred_velocity - target_velocity) / total_elements
+        grad_out_4d = grad_out_4d.to(torch.bfloat16)
+        
+        # 2. РЕВЕРС PIXEL SHUFFLE: Собираем 4D-градиент обратно в плоскую 3D-последовательность 64-канальных токенов
+        B, C_raw, H_raw, W_raw = grad_out_4d.shape
+        H, W = H_raw // 2, W_raw // 2
+        grad_flat_64 = grad_out_4d.view(B, 16, H, 2, W, 2)
+        grad_flat_64 = grad_flat_64.permute(0, 2, 4, 1, 3, 5).contiguous()
+        grad_flat_64 = grad_flat_64.view(B, H * W, 64)
+        
+        # 3. ПРОХОД СКВОЗЬ ТРАНСПОНИРОВАННЫЙ FINAL_LAYER: Перевод из 64 каналов в маршевую шину 3072 признаков
+        # dx = dy @ W -> [B, img_len, 64] @ [64, 3072] -> [B, img_len, 3072]
+        final_weight = model.final_layer.weight.to(torch.bfloat16)
+        grad_output = torch.matmul(grad_flat_64, final_weight)
+        
+        # 4. ВЫРАВНИВАНИЕ СКЛЕЙКИ С ИГНОРИРОВАНИЕМ ТЕКСТА: Расширяем плоский градиент нулями до полной длины (картинка + текст)
+        # Одиночные блоки принимают склеенную шину. Градиент текста обнуляем, так как T5 заморожен.
+        txt_len = 512 # Эталонный инлайн-паддинг T5XXL из Блока 1
+        zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
+        grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
+        
+        # 5. ЦЕПНОЙ ИНЖЕКТОР: Пошаговый марш градиентного тока сквозь все 76 швов LoRA
+        modules_chain = list(model.named_modules())
+        for name, module in reversed(modules_chain):
+            if hasattr(module, "inject_manual_backward"):
+                # Пробрасываем ток сквозь электрод и забираем dx для транзита назад
+                grad_output = module.inject_manual_backward(grad_output)
             
     t_bwd = time.perf_counter() - t_bwd_start
     
