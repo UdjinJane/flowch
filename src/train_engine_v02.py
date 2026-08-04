@@ -39,7 +39,7 @@ def trace_lines(frame, event, arg):
                             if hasattr(val, "shape"):
                                 print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
                             elif isinstance(val, (list, tuple)):
-                                print(f" * Контейнер [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
+                                print(f" * Container [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
                                 if len(val) > 0: print(f" - Элемент 0: {type(val[0]).__name__}")
                         except:
                             pass
@@ -75,13 +75,27 @@ class ChromaInlineLoRA(nn.Module):
             lora_out = torch.matmul(lora_out, self.lora_B) * self.scale
         return base_out + lora_out.to(base_out.dtype)
 
-    def verify_gradients(self, layer_name: str):
-        for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
-            if param.grad is None:
-                print(f" [WARN] МЕРТВЫЙ ГРАДИЕНТ [{layer_name}.{name}]")
-            elif torch.isnan(param.grad).any():
-                print(f" [КРАХ] ВЗРЫВ ГРАДИЕНТА [{layer_name}.{name}]")
+    def verify_gradients(self, layer_name: str, current_step: int = 0):
+        """
+        УМНАЯ СНАЙПЕРСКАЯ ТЕЛЕМЕТРИЯ:
+        Выдает рапорт строго на ШАГЕ №1 и строго для первых трех блоков модели,
+        чтобы не засорять консоль Кэпа портянками логов.
+        """
+        # Проверяем, входит ли слой в первые три блока double_blocks (0, 1, 2)
+        is_first_block = any(f"double_blocks.{i}." in layer_name for i in)
+        
+        if current_step == 0 and is_first_block:
+            print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
+            for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
+                if param.grad is None:
+                    print(f" -> [WARN] МЕРТВЫЙ ГРАДИЕНТ [{name}]")
+                elif torch.isnan(param.grad).any():
+                    print(f" -> [КРАХ] ВЗРЫВ ГРАДИЕНТА [{name}]")
+                else:
+                    grad_mean = param.grad.abs().mean().item()
+                    print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
@@ -169,10 +183,12 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
     
+    # Телеметрия градиентов инжектированных электродов с фильтром слоев
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
-            module.verify_gradients(name)
-            
+            # Передаем ноль (или номер текущего шага), чтобы включить умный фильтр
+            module.verify_gradients(name, current_step=0) 
+
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
