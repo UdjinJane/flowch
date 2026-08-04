@@ -40,33 +40,16 @@ def trace_lines(frame, event, arg):
                                 print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
                             elif isinstance(val, (list, tuple)):
                                 print(f" * Container [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
-                                if len(val) > 0:
-                                    print(f" - Элемент 0: {type(val).__name__}")
                         except:
                             pass
                 curr_frame = curr_frame.f_back
             print("!"*80 + "\n")
     return trace_lines
 
-class ZeroBaseAutogradShunt(torch.autograd.Function):
-    """
-    Абсолютный автоград-шунт Омниссии.
-    Склеивает результаты форварда, но полностью вырезает базовую модель из памяти бэкварда.
-    """
-    @staticmethod
-    def forward(ctx, lora_out_in, base_out_detached_in):
-        return lora_out_in + base_out_detached_in
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Базовая квантованная модель для Autograd — это ПУСТОЕ МЕСТО.
-        # Градиентный ток транслируется исключительно на ветку LoRA.
-        return grad_output, None
-
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая броня Метрополии: Нативный шов LoRA с автоград-шунтированием базового монолита.
-    Удерживает эталонную форму тензоров и аппаратно выжигает Shared RAM.
+    Высшая автономная броня: Нативный шов LoRA с полной изоляцией от глобального Autograd.
+    Инициализирует локальный граф вычислений, предотвращая Си-деквантование TorchAO.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -80,6 +63,10 @@ class ChromaInlineLoRA(nn.Module):
         # Обучаемые параметры шва в чистом bfloat16
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
+        
+        # Локальные буферы для хранения промежуточных активаций форварда
+        self.saved_x = None
+        self.saved_lora_mid = None
 
     def __getattr__(self, name: str):
         try:
@@ -91,18 +78,59 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # 1. БАЗА СЧИТАЕТСЯ В NO_GRAD И НАМЕРТВО ОТДЕЛЯЕТСЯ ОТ ГРАФА
+        # ТОТАЛЬНЫЙ ЭКРАН: Весь проход слоя изолирован от глобального графа PyTorch!
         with torch.no_grad():
-            base_out_raw = self.base_layer(x_cont)
-            base_out = base_out_raw.detach()
+            base_out = self.base_layer(x_cont).detach()
             
-        # 2. РАСЧЕТ ОДНОКОНТУРНОЙ LORA (Параметры lora_A и lora_B нативно трекаются Autograd)
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            # Локальный расчет LoRA без ухода весов в Autograd-градиенты
             lora_mid = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
             
-        # 3. ПРОПУСКАЕМ ТЕНЗОРЫ ЧЕРЕЗ ШУНТ: Полное уничтожение следов TorchAO в бэкварде
-        return ZeroBaseAutogradShunt.apply(lora_out, base_out)
+            # Сохраняем следы активаций для ручной инжекции обратного тока Омниссии
+            if self.training:
+                self.saved_x = x_cont.detach().clone()
+                self.saved_lora_mid = lora_mid.detach().clone()
+                
+        # На выходе — чистый, отвязанный от Autograd маршевый тензор
+        return (lora_out + base_out).detach()
+
+    def inject_manual_backward(self, layer_grad_output: torch.Tensor):
+        """
+        Локальный инжектор Омниссии: рассчитывает градиенты строго для lora_A и lora_B,
+        не задействуя базовую int8 матрицу и полностью обходя С++ аллокатор TorchAO.
+        """
+        if self.saved_x is None or self.saved_lora_mid is None:
+            return
+            
+        with torch.no_grad():
+            # Масштабируем входящий градиент слоя
+            dy = layer_grad_output.to(torch.bfloat16) * self.scale
+            
+            # 1. Расчет градиента для lora_B: d(lora_B) = lora_mid.T @ dy
+            # Выпрямляем пространственные оси для матричного перемножения
+            dy_flat = dy.view(-1, dy.shape[-1])
+            mid_flat = self.saved_lora_mid.view(-1, self.saved_lora_mid.shape[-1])
+            grad_B = torch.matmul(mid_flat.t(), dy_flat)
+            
+            # 2. Расчет градиента для lora_A: d(lora_A) = x.T @ (dy @ lora_B.T)
+            x_flat = self.saved_x.view(-1, self.saved_x.shape[-1])
+            d_mid = torch.matmul(dy_flat, self.lora_B.t())
+            grad_A = torch.matmul(x_flat.t(), d_mid)
+            
+            # Аккумулируем градиенты напрямую в тензоры параметров
+            if self.lora_A.grad is None:
+                self.lora_A.grad = grad_A.view_as(self.lora_A)
+            else:
+                self.lora_A.grad += grad_A.view_as(self.lora_A)
+                
+            if self.lora_B.grad is None:
+                self.lora_B.grad = grad_B.view_as(self.lora_B)
+            else:
+                self.lora_B.grad += grad_B.view_as(self.lora_B)
+                
+        # Очищаем маршевые буферы активаций для экономии VRAM
+        self.saved_x = None
+        self.saved_lora_mid = None
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """Умная телеметрия шва."""
