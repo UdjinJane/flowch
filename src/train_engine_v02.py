@@ -128,73 +128,86 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки строго по заводской топологии Chroma1-HD.
-    Полностью очищен от ошибок вложенности аргументов и фантомных осей.
+    Контур Autograd LoRA активирован, реализован жесткий клиппинг и тотальный флашинг VRAM.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
-
+    
     # ГЕРМЕТИЗАЦИЯ ШВА: Сжимаем 4D текстовую шину до уставного 3D-формата [B, L, D]
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
-
+        
     # Чистая распаковка осей без С++ заносов
     B_pad, L_pad, D_pad = t5_raw.shape
-    
     if L_pad < 512:
         padding_size = 512 - L_pad
         zero_padding = torch.zeros((B_pad, padding_size, D_pad), dtype=t5_raw.dtype, device=t5_raw.device)
         t5_hidden = torch.cat([t5_raw, zero_padding], dim=1)
     else:
         t5_hidden = t5_raw[:, :512, :]
-
+        
+    # Сброс градиентов перед шагом
     optimizer.zero_grad(set_to_none=True)
     
-    # ИСПРАВЛЕНИЕ ЗАНОСА: Генерация шумового поля по четкой форме x1 без лишних кортежей
+    # ИСПРАВЛЕНИЕ ЗАНОСА: Генерация шумового поля по форме x1
     x0 = torch.randn_like(x1)
-    
-    # Генерируем временной вектор t строго по первой батч-оси латента x1
     t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
-    
-    # Разворачиваем оси времени под Rectified Flow траекторию
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
-
+    
     # Создаем фиктивный тройной пакет модуляции под Си-устав финального AdaLN
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
-    
     mods = {
-        "double": None, 
-        "single": None, 
+        "double": None,
+        "single": None,
         "final": [fake_shift, fake_scale, fake_gate]
     }
-
+    
     # ==========================================================================
     # ПРИБОРНАЯ ПАНЕЛЬ СЛЕДСТВЕННОГО КОНТУРА (Рентген CUDA-памяти)
     # ==========================================================================
     print("\n" + "="*60)
     print("[ПРИБОРНАЯ ПАНЕЛЬ]: Параметры полностью выровнены под металл:")
-    print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
+    print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Фактическая 3D-форма шины T5 : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Вектор времени t (длина)    : {t.shape} | Dtype: {t.dtype}")
+    print(f" -> Вектор времени t (длина) : {t.shape} | Dtype: {t.dtype}")
     print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
     print("="*60 + "\n")
+    
     # ==========================================================================
-
-    # Прямой маршевый проход трансформера под no_grad (Изоляция backward активна)
-    with torch.no_grad():
-        pred_velocity = model(xt, t5_hidden, mods)
-        loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
+    # МАРШЕВЫЙ АКТИВНЫЙ Forward-Проход (no_grad СНЯТ, Autograd строит граф для LoRA)
+    # ==========================================================================
+    pred_velocity = model(xt, t5_hidden, mods)
+    
+    # Расчет чистой MSE потери вектора скорости Rectified Flow
+    loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
-
+        
+    # МАРШЕВАЯ ПРОКАЧКА ГРАДИЕНТОВ ПО ГРАФУ АДАПТЕРОВ
+    loss.backward()
+    
+    # ЗАЩИТА МАНТИССЫ: Срезаем пиковые Gradient Spikes
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    
+    # Обновление весов 8-битного оптимизатора
+    optimizer.step()
+    
+    # Телеметрия градиентов инжектированных электродов
+    for name, module in model.named_modules():
+        if hasattr(module, "verify_gradients"):
+            module.verify_gradients(name)
+            
+    # ТОТАЛЬНЫЙ ФЛАШИНГ КЭША WDDM И ССЫЛОК (Очистка Shared RAM до 0.0 ГБ)
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Изолированной Autograd-Броней) -----------
 from torch.utils.checkpoint import checkpoint
