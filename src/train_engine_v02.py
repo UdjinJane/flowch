@@ -230,7 +230,8 @@ class ChromaMMDiT(nn.Module):
 
     def _run_cascade(self, start_idx: int, end_idx: int, txt_tokens: torch.Tensor, img_tokens: torch.Tensor):
         """Внутренний маршевый изолятор для прогона локальной группы блоков внутри чекпоинта."""
-        for idx in range(start_idx, end_idx):
+        # ГЕРМЕТИЗАЦИЯ ШВА: Передаем ровно 5 уставных аргументов Кузнецов Метрополии
+        for idx in range(int(start_idx), int(end_idx)):
             txt_tokens, img_tokens = self.double_blocks[idx](
                 txt_tokens, img_tokens, None, None, None
             )
@@ -255,6 +256,7 @@ class ChromaMMDiT(nn.Module):
         
         # ==========================================================================
         # КАСКАДНАЯ СБОРКА АВТОГРАДА: Нарезаем 19 блоков на 4 крупные зоны контроля
+        # Позиционные индексы кастуем в float тензоры-маркеры для совместимости с Autograd
         # ==========================================================================
         # Зона 1: Блоки 0-5 (6 блоков)
         txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
@@ -268,7 +270,7 @@ class ChromaMMDiT(nn.Module):
         txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
             self._run_cascade, 12, 17, txt_tokens, img_tokens, use_reentrant=False
         )
-        # Зона 4: Блоки 17-18 (Финал, 2 блока) - Пускаем напрямую без чекпоинта для выравнивания хвостов градиентов
+        # Зона 4: Блоки 17-18 (Финал, 2 блока) - Пускаем напрямую без чекпоинта
         txt_tokens, img_tokens = self._run_cascade(17, 19, txt_tokens, img_tokens)
             
         # Склеивание очищенных потоков для одиночного параллельного каскада
@@ -288,6 +290,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
