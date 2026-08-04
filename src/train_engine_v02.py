@@ -131,7 +131,7 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 #---------------- Конец Блока 2 -----------------
 
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки) --------------------
-def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
+def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки строго по заводской topology Chroma1-HD.
     Контур Autograd LoRA активирован, реализован жесткий клиппинг и тотальный флашинг VRAM.
@@ -166,39 +166,40 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         "final": [fake_shift, fake_scale, fake_gate]
     }
     
-    print("\n" + "="*60)
-    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Параметры полностью выровнены под металл:")
-    print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
-    print(f" -> Фактическая 3D-форма шины T5 : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Вектор времени t (длина) : {t.shape} | Dtype: {t.dtype}")
-    print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
-    print("="*60 + "\n")
-    
+    # Вывод панели управления строго на первой итерации или каждые 250 шагов
+    if step % 250 == 0:
+        print("\n" + "="*60)
+        print(f"[ПРИБОРНАЯ ПАНЕЛЬ ШАГА №{step + 1}]: Параметры полностью выровнены под металл:")
+        print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
+        print(f" -> Фактическая 3D-форма шины T5 : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
+        print(f" -> Вектор времени t (длина) : {t.shape} | Dtype: {t.dtype}")
+        print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
+        print("="*60 + "\n")
+        
     # Боевой маршевый проход Autograd
     pred_velocity = model(xt, t5_hidden, mods)
     
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
         
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
     
-    # Телеметрия градиентов инжектированных электродов с фильтром слоев
+    # ГЕРМЕТИЗАЦИЯ ШВА: Передаем РЕАЛЬНЫЙ шаг плавки в инспектора для работы фильтра % 250
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
-            # Передаем ноль (или номер текущего шага), чтобы включить умный фильтр
-            module.verify_gradients(name, current_step=0) 
-
+            module.verify_gradients(name, current_step=step)
+            
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
- #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
