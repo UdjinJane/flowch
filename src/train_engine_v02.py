@@ -123,11 +123,11 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро под заводской устав Chroma1-HD) ------------
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Следственного Выключения Autograd) -
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
-    Выполняет один боевой шаг плавки LoRA строго по заводской топологии Chroma1-HD.
-    Полностью очищен от фантомных слоев модуляции AdaLN.
+    Выполняет один боевой шаг плавки строго по заводской топологии Chroma1-HD.
+    Временно изолирует С++ бэкэнд, отключая backward для проверки герметичности форварда.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
@@ -156,25 +156,27 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     # ПРИБОРНАЯ ПАНЕЛЬ ЗАВОДСКОГО СТЫКА (Рентген CUDA-памяти)
     # ==========================================================================
     print("\n" + "="*60)
-    print("[ЗАВОДСКОЙ КОНТУР]: Срез параметров Chroma1-HD:")
+    print("[СЛЕДСТВЕННЫЙ КОНТУР]: Прогон Блока №3 без обратного шага backward:")
     print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Аппроксимация AdaLN модов    : ОТКЛЮЧЕНА (Топология Chroma соответсвует дамп-логу)")
+    print(f" -> Локализация Autograd-мины   : Изоляция backward включена")
     print("="*60 + "\n")
     # ==========================================================================
 
-    # Прямой маршевый проход трансформера
-    pred_velocity = model(xt, t5_hidden, mods)
-    loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
+    # Прямой маршевый проход трансформера (Оборачиваем в no_grad для полной Си-изоляции)
+    with torch.no_grad():
+        pred_velocity = model(xt, t5_hidden, mods)
+        loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
         
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    optimizer.step()
+    # СНЙПЕРСКИЙ ШАГ: Выключаем backward и step, чтобы сорвать С++ маску с форварда блоков
+    # loss.backward()
+    # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    # optimizer.step()
 
-    # Тотальная зачистка и выжигание следов бэкварда: спасаем VRAM от Shared-течи WDDM
+    # Тотальная зачистка и выжигание следов: спасаем VRAM от Shared-течи WDDM
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
