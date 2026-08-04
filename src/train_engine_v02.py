@@ -181,14 +181,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Autograd-Броней Чекпоинтинга) -----------
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Изолированной Autograd-Броней) -----------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
     """
     Декомпозированный маршевый трансформер Chroma.
-    Полностью очищен от ошибок распаковки кортежей и С++ заносов памяти.
-    Защищен градиентным чекпоинтингом для блокировки аварийного спиллинга WDDM.
+    Полностью очищен от С++ капканов чекпоинтинга на одиночных каскадах.
+    Спаренные блоки удерживаются checkpoint для тотальной защиты VRAM.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -229,9 +229,9 @@ class ChromaMMDiT(nn.Module):
         txt_tokens = self.txt_in(txt_hidden)
 
         # Жесткая фиксация длины отсека текста для безопасного среза памяти
-        txt_len = txt_tokens.shape[1]
+        txt_len = txt_tokens.shape[1] if hasattr(txt_tokens, "shape") else txt_tokens.shape
 
-        # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга
+        # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Держит полку памяти VRAM)
         for i, block in enumerate(self.double_blocks):
             txt_tokens, img_tokens = checkpoint(
                 block, txt_tokens, img_tokens, None, None, None, 
@@ -240,11 +240,11 @@ class ChromaMMDiT(nn.Module):
 
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
+        
+        # ГЕРМЕТИЗАЦИЯ ШВА: Пускаем одиночные блоки НАПРЯМУЮ, минуя капризный С++ Си-контур checkpoint
         for i, block in enumerate(self.single_blocks):
-            # ВЫРАВНИВАНИЕ ШВА: Передаем ровно ТРИ позиционных аргумента после block (x, pe, distill_vec)
-            x_combined = checkpoint(
-                block, x_combined, None, None, 
-                use_reentrant=False
+            x_combined = block(
+                x=x_combined, pe=None, distill_vec=None, mask=None
             )
 
         # 3. Восстановление исходной 4D-геометрии латентов с герметизацией non-contiguous памяти
@@ -257,8 +257,6 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
-
-
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
