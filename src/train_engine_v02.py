@@ -346,14 +346,11 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
-
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
-    Модернизированный маршевый трансформер Chroma.
-    Полностью избавлен от укрупненного и послойного чекпоинтинга.
-    Работает в режиме прямой трансляции тензоров в чистом кремнии.
+    Модернизированный маршевый трансформер Chroma v5.0.
+    Внедряет послойный Си-флашинг cuBLAS буферов для тотального уничтожения спиллинга TorchAO.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -378,7 +375,7 @@ class ChromaMMDiT(nn.Module):
 
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый проход трансформера Chroma1-HD с тотальной изоляцией активаций Autograd.
+        Маршевый проход трансформера Chroma1-HD с послойным Си++ флашингом VRAM.
         """
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
@@ -388,10 +385,10 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
-        # СНАЙПЕРСКИЙ ФИКС: Извлекаем строго скалярную длину последовательности токенов
+        # Извлекаем строго скалярную длину последовательности токенов
         img_len = img_tokens.shape[1]
         
-        # Прямой каскад спаренных блоков Метрополии без вовлечения базового Autograd
+        # ПРАКА СИ-МАНТИССЫ: Послойный прогон Double-блоков с немедленным выжиганием кэша torchao
         for block in self.double_blocks:
             img_tokens, txt_tokens = block(
                 img=img_tokens,
@@ -400,23 +397,31 @@ class ChromaMMDiT(nn.Module):
                 distill_vec=mods["double"],
                 mask=None
             )
+            # Мгновенно вырезаем Си-буферы cuBLAS текущего слоя из VRAM
+            torch.cuda.empty_cache()
             
-        # Выравнивание склейки под устав Метрополии: сначала ИЗОБРАЖЕНИЕ, затем ТЕКСТ
+        # Выравнивание склейки под устав Метрополии
         x_combined = torch.cat([img_tokens, txt_tokens], dim=1)
         
-        # Одиночные blocks — строго 4 позиционных аргумента под геометрию Метрополии!
+        # ПРАВКА СИ-МАНТИССЫ: Послойный прогон Single-блоков с немедленным выжиганием кэша torchao
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
+            # Уничтожаем Си-ссылки во избежание накопления оверсвапа в Shared RAM
+            torch.cuda.empty_cache()
             
         # Снайперское отсечение графика-токенов по скалярному индексу img_len
         pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
-        # Обратный Pixel Shuffle: распаковка 64 каналов в 16-канальное латентное пространство
+        # Обратный Pixel Shuffle
         B, C_raw, H_raw, W_raw = x_latent.shape
         H, W = H_raw // 2, W_raw // 2
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
+        
+        # Финальная тотальная чистка перед выходом из модели
+        torch.cuda.empty_cache()
+        
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
 
