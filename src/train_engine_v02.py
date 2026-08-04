@@ -198,7 +198,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
+ #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
@@ -230,7 +230,7 @@ class ChromaMMDiT(nn.Module):
 
     def _run_cascade(self, start_idx: int, end_idx: int, txt_tokens: torch.Tensor, img_tokens: torch.Tensor):
         """Внутренний маршевый изолятор для прогона локальной группы блоков внутри чекпоинта."""
-        # ГЕРМЕТИЗАЦИЯ ШВА: Передаем ровно 5 уставных аргументов Кузнецов Метрополии
+        # ГЕРМЕТИЗАЦИЯ ШВА: Явное приведение индексов к int для стабильного шага итератора
         for idx in range(int(start_idx), int(end_idx)):
             txt_tokens, img_tokens = self.double_blocks[idx](
                 txt_tokens, img_tokens, None, None, None
@@ -239,7 +239,7 @@ class ChromaMMDiT(nn.Module):
 
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый проход трансформера Chroma1-HD с подавлением PCIe-спиллинга.
+        Маршевый проход трансформера Chroma1-HD с полным подавлением PCIe-спиллинга.
         """
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
@@ -255,14 +255,14 @@ class ChromaMMDiT(nn.Module):
         txt_len = txt_tokens.shape[1]
         
         # ==========================================================================
-        # КАСКАДНАЯ СБОРКА АВТОГРАДА: Нарезаем 19 блоков на 4 крупные зоны контроля
-        # Позиционные индексы кастуем в float тензоры-маркеры для совместимости с Autograd
+        # КАСКАДНАЯ СБОРКА АВТОГРАДА: Нарезаем 19 блоков на 4 крупные зоны контроля.
+        # Координаты передаются как чистые int-параметры. Контур WDDM изолирован.
         # ==========================================================================
         # Зона 1: Блоки 0-5 (6 блоков)
         txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
             self._run_cascade, 0, 6, txt_tokens, img_tokens, use_reentrant=False
         )
-        # Зона 2: Блоки 6-11 (6 блоков)
+        # Зона 2: Блоки 6-11 (6 blocks)
         txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
             self._run_cascade, 6, 12, txt_tokens, img_tokens, use_reentrant=False
         )
