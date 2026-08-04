@@ -174,13 +174,14 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
+
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Тотально изолирует тензор предсказаний через жесткий клон, уничтожая С++ триггер деквантования TorchAO.
+    Тотально выжигает метаданные torchao из контура Loss через жесткую float32-стерилизацию.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -220,7 +221,9 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     x0 = torch.randn_like(x1)
     t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
-    target_velocity = x1 - x0
+    
+    # МАРШЕВАЯ МОДИФИКАЦИЯ: target_velocity запечатывается в чистый float32 намертво, минуя bfloat16
+    target_velocity = (x1.float() - x0.float()).detach()
     
     # Полная изоляция от глобального Autograd
     xt.requires_grad_(False)
@@ -242,11 +245,11 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     with torch.no_grad():
         pred_velocity_raw = model(xt, t5_hidden, mods)
         
-        # ЖЕСТКАЯ СИ-ИЗОЛЯЦИЯ ОМНИССИИ: Полностью отвязываем тензор от С++ метаданных TorchAO
-        pred_velocity = pred_velocity_raw.detach().clone()
+        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ: Выдергиваем тензор через CPU обратно в CUDA, полностью стирая С++ указатели torchao
+        pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
         
-        # Теперь кастинг во float32 стерилен и не вызовет аварийного Си-выделения 128 Гигов
-        loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
+        # Расчет Loss на стерильных float32-тензорах
+        loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
@@ -272,7 +275,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # Пред-расчет изолированных источников токенов
+        # Пред-расчет источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
         static_txt_tokens = model.txt_in(t5_hidden).detach()
@@ -314,10 +317,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         torch.cuda.empty_cache()
     t_clean = time.perf_counter() - t_clean_start
     
-    # Итоговое полетное время одного полного тика реактора
-    t_total = t_io + t_fwd + t_bwd + t_opt + t_clean
-    
     # РАСЧЕТ И ВЫВОД МАРШЕВОЙ ПСЕВДОГРАФИКИ НА ТАБЛО КОНСОЛИ
+    t_total = t_io + t_fwd + t_bwd + t_opt + t_clean
     total_sec = max(t_total, 0.001)
     p_io = int((t_io / total_sec) * 40)
     p_fwd = int((t_fwd / total_sec) * 40)
@@ -343,7 +344,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
