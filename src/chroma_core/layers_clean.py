@@ -249,8 +249,7 @@ class DoubleStreamBlock(nn.Module):
         img_modulated = self.img_norm1(img)
         txt_modulated = self.txt_norm1(txt)
         
-        # Наш LoRA инжектор перехватывает forward внутри img_attn.qkv и txt_attn.qkv,
-        # там Autograd-граф для электродов LoRA построится штатно!
+        # Инжекторы lora_A и lora_B строят Autograd-граф для электродов LoRA внутри qkv
         img_qkv = self.img_attn.qkv(img_modulated).contiguous()
         txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
         
@@ -276,12 +275,14 @@ class DoubleStreamBlock(nn.Module):
         txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
         img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
         
-        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ С ИЗОЛЯЦИЕЙ ТЕНЗОРОВ ЧЕРЕЗ .detach()
+        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Вырезаем Autograd-трекинг только для квантованных тяжелых блоков MLP
         with torch.no_grad():
-            img_proj_out = self.img_attn.proj(img_attn)
             img_mlp_out = self.img_mlp(self.img_norm2(img.detach()))
-            txt_proj_out = self.txt_attn.proj(txt_attn)
             txt_mlp_out = self.txt_mlp(self.txt_norm2(txt.detach()))
+            
+        # ГРАДИЕНТНЫЙ ТОК: Линейные проекции Метрополии рассчитываются в Autograd для поджога LoRA
+        img_proj_out = self.img_attn.proj(img_attn)
+        txt_proj_out = self.txt_attn.proj(txt_attn)
             
         # Восстановление градиентного тока через остаточные связи (Residual Connections)
         img = img + img_proj_out.to(img.dtype)
@@ -309,6 +310,8 @@ class SingleStreamBlock(nn.Module):
         x = x.to(target_dtype)
         
         x_mod = self.pre_norm(x)
+        
+        # Наш LoRA инжектор перехватывает forward внутри linear1, Autograd-граф здесь построится штатно!
         linear_out = self.linear1(x_mod).contiguous()
         
         qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
@@ -322,10 +325,10 @@ class SingleStreamBlock(nn.Module):
         attn = attention(q, k, v, pe=pe, mask=mask)
         attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
         
-        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Линейный слой linear2 заморожен и квантован, глушим Autograd
-        with torch.no_grad():
-            combined_features = torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1)
-            output = self.linear2(combined_features)
+        # ГРАДИЕНТНЫЙ ТОК: Проекция linear2 вынесена из экрана для удержания Autograd-цепи LoRA
+        combined_features = torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1)
+        output = self.linear2(combined_features)
             
         return x + output.to(x.dtype)
 #---------------- Конец Блока №4_ЯДРО -----------------
+
