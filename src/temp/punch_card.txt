@@ -46,10 +46,6 @@ Z:\flowch
     │   └── layers_clean.py         # Геометрия Chroma v50: 19 Double + 38 Single блоков
     │
     ├── temp/                       # Технический отсек для хранения спецификаций и карт весов
-    │   ├── croma-unlocked-v50-anneled-mapa.txt # Истинная топология Метрополии (входы img_in/txt_in)
-    │   ├── empirica.txt            # YAML-пульт конфигурации плавки (2000 шагов, AdamW8bit)
-    │   ├── milestones__wa■_0108.txt # Бортовой журнал: исторические вехи стабилизации слоев
-    │   └── punch_card.txt          # Перфокарта контекста: вводные инструкции ИИ для смены
     │
     ├── ao_optim_monolith.py        # Автономный 8-битный оптимизатор AdamW8bit на TorchAO
     ├── inspect_cache.py            # Авторитарный экспресс-инспектор текстового и VAE кэша
