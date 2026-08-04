@@ -309,8 +309,6 @@ class SingleStreamBlock(nn.Module):
         x = x.to(target_dtype)
         
         x_mod = self.pre_norm(x)
-        
-        # Наш LoRA инжектор перехватывает forward внутри linear1, Autograd-граф здесь построится штатно!
         linear_out = self.linear1(x_mod).contiguous()
         
         qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
