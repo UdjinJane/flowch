@@ -124,20 +124,20 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     return patched_count
 #---------------- Конец Блока 2 -----------------
 
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Выравнивание Входных Осей T5) -----------
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки) --------------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки строго по заводской топологии Chroma1-HD.
-    Снайперски срезает фантомную 4D-ось текстовой шины для ликвидации expected 3.
+    Полностью очищен от ошибок вложенности аргументов и фантомных осей.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
 
-    # ГЕРМЕТИЗАЦИЯ ШВА: Если DataLoader выдал 4D-матрицу [B, 1, L, D], сжимаем её до уставного 3D [B, L, D]
+    # ГЕРМЕТИЗАЦИЯ ШВА: Сжимаем 4D текстовую шину до уставного 3D-формата [B, L, D]
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
 
-    # Теперь распаковка гарантированно получит ровно 3 значения осей от 3D-тензора
+    # Чистая распаковка осей без С++ заносов
     B_pad, L_pad, D_pad = t5_raw.shape
     
     if L_pad < 512:
@@ -149,12 +149,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     optimizer.zero_grad(set_to_none=True)
     
-    # Генерация шумового поля траектории Rectified Flow
+    # ИСПРАВЛЕНИЕ ЗАНОСА: Генерация шумового поля по четкой форме x1 без лишних кортежей
     x0 = torch.randn_like(x1)
-    t = torch.rand((x1.shape,), device=x1.device, dtype=x1.dtype)
+    
+    # Генерируем временной вектор t строго по первой батч-оси латента x1
+    t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
+    
+    # Разворачиваем оси времени под Rectified Flow траекторию
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
+    # Создаем фиктивный тройной пакет модуляции под Си-устав финального AdaLN
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -169,9 +174,10 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     # ПРИБОРНАЯ ПАНЕЛЬ СЛЕДСТВЕННОГО КОНТУРА (Рентген CUDA-памяти)
     # ==========================================================================
     print("\n" + "="*60)
-    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Входные параметры успешно выровнены:")
+    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Параметры полностью выровнены под металл:")
     print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Фактическая 3D-форма шины T5 : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
+    print(f" -> Вектор времени t (длина)    : {t.shape} | Dtype: {t.dtype}")
     print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
     print("="*60 + "\n")
     # ==========================================================================
@@ -189,7 +195,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Изолированной Autograd-Броней) -----------
 from torch.utils.checkpoint import checkpoint
