@@ -170,14 +170,13 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
-    Выполняет один боевой шаг плавки с адаптивным ручным распределением градиентного тока.
-    Полностью изолирует форвард, выводит точную строковую телеметрию без падений кастинга типов.
+    Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
+    Транслирует исходный градиент Loss напрямую во все швы, минуя цепной прожог dx сквозь базу.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -244,7 +243,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
     
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v2.0)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v3.0)
     t_bwd_start = time.perf_counter()
     
     with torch.no_grad():
@@ -262,29 +261,31 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         
         # 3. Проход сквозь транспонированный final_layer
         final_weight = model.final_layer.weight.to(torch.bfloat16)
-        grad_output = torch.matmul(grad_flat_64, final_weight)
+        base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # Пред-расчет изолированных источников токенов
+        # ТОТАЛЬНЫЙ ПАРАНОИДАЛЬНЫЙ ФИКС: Пред-расчет ОБОИХ изолированных источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
         static_txt_tokens = model.txt_in(t5_hidden).detach()
         
-        # 4. Выравнивание склейки под геометрию Одиночных Блоков
+        # Выравнивание склейки под геометрию Одиночных Блоков
         txt_len = 512 
-        zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
-        grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
+        zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
+        combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 5. АДАПТИВНЫЙ ЦЕПНОЙ ИНЖЕКТОР: Снайперский проброс строго целевого контекста активаций
+        # 4. АВТОНОМНЫЙ ЦЕПНОЙ ИНЖЕКТОР v3.0: Швы пьют ток изолированно, dx больше не передается по цепочке
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
+                # Снайперский проброс строго целевого контекста активаций и независимого градиента
                 if "txt_attn" in name:
-                    grad_output = module.inject_manual_backward(grad_output, static_txt_tokens)
+                    module.inject_manual_backward(base_grad_output, static_txt_tokens)
                 elif "img_attn" in name:
-                    grad_output = module.inject_manual_backward(grad_output, static_img_tokens)
+                    module.inject_manual_backward(base_grad_output, static_img_tokens)
                 else:
+                    # Для SingleStreamBlock.linear1 — передаем склеенный маршевый тензор градиента и активаций
                     combined_static = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
-                    grad_output = module.inject_manual_backward(grad_output, combined_static)
+                    module.inject_manual_backward(combined_grad_output, combined_static)
             
     t_bwd = time.perf_counter() - t_bwd_start
     
