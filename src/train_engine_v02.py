@@ -229,7 +229,7 @@ class ChromaMMDiT(nn.Module):
         txt_tokens = self.txt_in(txt_hidden)
 
         # Жесткая фиксация длины отсека текста для безопасного среза памяти
-        txt_len = txt_tokens.shape[1] if hasattr(txt_tokens, "shape") else txt_tokens.shape
+        txt_len = txt_tokens.shape
 
         # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Держит полку памяти VRAM)
         for i, block in enumerate(self.double_blocks):
@@ -257,6 +257,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
