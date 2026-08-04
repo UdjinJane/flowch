@@ -97,7 +97,6 @@ class ChromaInlineLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
-
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
@@ -124,7 +123,6 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки) --------------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
@@ -190,7 +188,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     torch.cuda.empty_cache()
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
@@ -258,7 +255,6 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
-
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) ---
 def save_lora_checkpoint(model: nn.Module, save_path: str):
     """
@@ -328,7 +324,7 @@ def run_reactor_forge():
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
 
     # 3. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Перенесено на рабочее место после заливки весов)
-    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов in INT8...")
+    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов в INT8...")
     try:
         from torchao.quantization import quantize_, int8_weight_only
         quantize_(model, int8_weight_only())
