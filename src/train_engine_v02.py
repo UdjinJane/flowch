@@ -436,17 +436,23 @@ def save_lora_checkpoint(model: nn.Module, save_path: str):
     lora_state_dict = {}
     corrupted_weights = 0
     
-    # Снайперский сбор параметров LoRA
-    for name, param in model.named_parameters():
-        if "lora_" in name:
-            # ЖЕСТКИЙ КЛОН ДЛЯ ОБХОДА БЛОКИРОВКИ КАНАЛА ВВОДА-ВЫВОДА WINDOWS
-            clean_tensor = param.detach().clone().cpu().to(torch.bfloat16)
+    # Снайперский ручной сбор изолированных Си-тензоров LoRA из модулей
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            # Извлекаем сухие тензоры напрямую из шва
+            t_A = module.lora_A.detach().clone().cpu().to(torch.bfloat16)
+            t_B = module.lora_B.detach().clone().cpu().to(torch.bfloat16)
             
             # Проверка гидродинамики весов на NaN и квантовые прожоги
-            if torch.isnan(clean_tensor).any() or torch.isinf(clean_tensor).any():
-                print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Обнаружены поврежденные структуры в слое: {name}")
+            if torch.isnan(t_A).any() or torch.isinf(t_A).any():
+                print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Поврежден lora_A в слое: {name}")
                 corrupted_weights += 1
-            lora_state_dict[name] = clean_tensor
+            if torch.isnan(t_B).any() or torch.isinf(t_B).any():
+                print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Поврежден lora_B в слое: {name}")
+                corrupted_weights += 1
+                
+            lora_state_dict[f"{name}.lora_A"] = t_A
+            lora_state_dict[f"{name}.lora_B"] = t_B
             
     if corrupted_weights > 0:
         print(f" [WARN] Обнаружено поврежденных швов: {corrupted_weights}. Запись заблокирована для защиты ядра!")
@@ -505,23 +511,23 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
-    # 5. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Принудительно гасим Autograd для ВСЕХ базовых слоев без исключения
+    # 5. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Принудительно гасим Autograd для ВСЕХ базовых параметров
     print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базового кремния...")
     for name, param in model.named_parameters():
-        if "lora_" not in name:
-            param.requires_grad = False
-            param.grad = None # Полное Си-стирание следов графов из памяти
-        else:
-            param.requires_grad = True
+        param.requires_grad = False
+        param.grad = None # Полное Си-стирание следов графов из памяти
             
     approximator = None
     mod_projector = None
     
-    # 6. Фиксация 8-битного оптимизатора СТРОГО и ИСКЛЮЧИТЕЛЬНО на параметрах LoRA
+    # 6. ЖЕСТКИЙ РУЧНОЙ СБОР v6.0: Собираем скрытые Си-тензоры напрямую из швов в обход Autograd графа
     trainable_params = []
-    for name, param in model.named_parameters():
-        if "lora_" in name:
-            trainable_params.append(param)
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            # Принудительно взводим флаг Autograd локально на изолированных тензорах
+            module.lora_A.requires_grad_(True)
+            module.lora_B.requires_grad_(True)
+            trainable_params.extend([module.lora_A, module.lora_B])
             
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
@@ -569,3 +575,4 @@ def run_reactor_forge():
 if __name__ == "__main__":
     run_reactor_forge()
 #---------------- Конец Блока 5 -----------------
+
