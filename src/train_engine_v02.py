@@ -187,8 +187,8 @@ import time
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
-    Выполняет один боевой шаг плавки с пофазным хронометражем и выводом псевдографики.
-    Полностью изолирует форвард модели от глобального Autograd-графа PyTorch.
+    Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
+    Полностью исключает вызов loss.backward(), блокируя Си-деквантование TorchAO.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -214,7 +214,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
-    # КРИТИЧЕСКИЙ ФИКС: Полный запрет на поджиг глобального Autograd-графа для хt
+    # Полная изоляция от глобального Autograd
     xt.requires_grad_(False)
     
     # Фантомные заглушки шины модуляции (нарезка отключена по уставу safetensors)
@@ -231,9 +231,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     # Фиксация и запуск фазы прямого прохода (Forward)
     t_fwd_start = time.perf_counter()
-    
-    # МАРШЕВАЯ МОДИФИКАЦИЯ: Форвард всей модели выполняется БЕЗ градиентов базовых слоев!
-    # Градиенты будут жить только локально внутри весов LoRA.
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
@@ -241,9 +238,22 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
     
-    # Фиксация и запуск фазы обратного прохода (Backward)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии)
     t_bwd_start = time.perf_counter()
-    loss.backward()
+    
+    # Математический расчет стартового градиента от MSE-Loss: dL/d(pred) = 2 * (pred - target) / N
+    total_elements = pred_velocity.numel()
+    grad_output = 2.0 * (pred_velocity - target_velocity) / total_elements
+    grad_output = grad_output.to(torch.bfloat16)
+    
+    # Обходим все модули трансформера в обратном порядке (от конца к началу)
+    # И принудительно инжектируем градиентный ток в LoRA-швы, минуя замороженную базу
+    modules_chain = list(model.named_modules())
+    for name, module in reversed(modules_chain):
+        if hasattr(module, "inject_manual_backward"):
+            # Пробрасываем ток сквозь электрод и забираем dx для транзита назад
+            grad_output = module.inject_manual_backward(grad_output)
+            
     t_bwd = time.perf_counter() - t_bwd_start
     
     # Фиксация и запуск фазы оптимизации весов (Optimizer Step)
