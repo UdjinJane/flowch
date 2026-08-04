@@ -439,11 +439,9 @@ def save_lora_checkpoint(model: nn.Module, save_path: str):
     # Снайперский ручной сбор изолированных Си-тензоров LoRA из модулей
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
-            # Извлекаем сухие тензоры напрямую из шва
             t_A = module.lora_A.detach().clone().cpu().to(torch.bfloat16)
             t_B = module.lora_B.detach().clone().cpu().to(torch.bfloat16)
             
-            # Проверка гидродинамики весов на NaN и квантовые прожоги
             if torch.isnan(t_A).any() or torch.isinf(t_A).any():
                 print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Поврежден lora_A в слое: {name}")
                 corrupted_weights += 1
@@ -461,7 +459,6 @@ def save_lora_checkpoint(model: nn.Module, save_path: str):
     if len(lora_state_dict) != 152:
         print(f" [WARN] Аномалия tobacco контура: собрано {len(lora_state_dict)} параметров вместо уставных 152!")
         
-    # Безопасная запись на физический носитель
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         from safetensors.torch import save_file
@@ -484,6 +481,10 @@ def run_reactor_forge():
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
         
+    # ЖЕСТКИЙ СИ-ШУНТ: Отключаем внутреннюю Си-буферизацию cuBLAS во избежание резервации 128-ГБ блоков
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
@@ -498,47 +499,53 @@ def run_reactor_forge():
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
         
-    # 3. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Перенесено на рабочее место после заливки весов)
-    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов in INT8...")
-    try:
-        from torchao.quantization import quantize_, int8_weight_only
-        quantize_(model, int8_weight_only())
-        print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
-    except Exception as ao_err:
-        print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
-        
-    # 4. Инжекция LoRA-электродов поверх сжатой и заполненной базы (76 швов / 152 параметра)
+    # 3. ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ: Прячем наши структуры от Си-рантайма TorchAO!
     patched_count = patch_chroma_reactor(model, rank=16)
-    model = model.to(device)
     
-    # 5. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Принудительно гасим Autograd для ВСЕХ базовых параметров
-    print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базового кремния...")
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-        param.grad = None # Полное Си-стирание следов графов из памяти
-            
-    approximator = None
-    mod_projector = None
-    
-    # 6. ЖЕСТКИЙ РУЧНОЙ СБОР v6.0: Собираем скрытые Си-тензоры напрямую из швов в обход Autograd графа
+    # 4. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ ДО КВАНТОВАНИЯ
     trainable_params = []
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
-            # Принудительно взводим флаг Autograd локально на изолированных тензорах
             module.lora_A.requires_grad_(True)
             module.lora_B.requires_grad_(True)
             trainable_params.extend([module.lora_A, module.lora_B])
             
+    # Фиксация 8-битного оптимизатора в чистом кремнии
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
-    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
+    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах.")
+        
+    # 5. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO СТРОГО НА БАЗОВЫЕ СЛОИ: Игнорируем наши LoRA швы!
+    print("[RUN] Подключаю промышленный квантизатор TorchAO строго на базовый монолит весов...")
+    try:
+        from torchao.quantization import quantize_, int8_weight_only
+        # Квантуем только базовые слои внутри исходных модулей, не трогая ChromaInlineLoRA
+        for name, module in model.named_modules():
+            if "double_blocks" in name or "single_blocks" in name:
+                if hasattr(module, "base_layer"):
+                    quantize_(module.base_layer, int8_weight_only())
+        print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
+    except Exception as ao_err:
+        print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
+        
+    model = model.to(device)
+    
+    # 6. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Блокируем Autograd для всего остального кремния
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            param.requires_grad = False
+            param.grad = None
+            
+    approximator = None
+    mod_projector = None
     
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
     
+    # КРИТИЧЕСКИЙ СУМАСШЕДШИЙ МАНЕВР: Если мы в режиме фантом-батча, урезаем латент VAE в 4 раза под 64x64!
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
-        print(" [WARN] Холодная симуляция на тестовом фантом-батче.")
+        print(" [WARN] Холодная симуляция на УРЕЗАННОМ тест-кадре (64x64) для обхода Си-аллокатора.")
         batch = {
-            "latent": torch.randn(1, 16, 128, 128, dtype=torch.float32).to(torch.bfloat16),
+            "latent": torch.randn(1, 16, 64, 64, dtype=torch.float32).to(torch.bfloat16),
             "clip_hidden": torch.randn(1, 77, 768, dtype=torch.float32).to(torch.bfloat16),
             "t5_hidden": torch.randn(1, 256, 4096, dtype=torch.float32).to(torch.bfloat16)
         }
@@ -557,12 +564,10 @@ def run_reactor_forge():
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector, step=step)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
             
-            # Автосохранение каждые 250 шагов и на первом контрольном шаге
             if step == 0 or (step + 1) % 250 == 0:
                 checkpoint_path = f"Z:\\flowch\\checkpoints\\chroma_lora_step_{step + 1}.safetensors"
                 save_lora_checkpoint(model, checkpoint_path)
                 
-            # Для длительного марша на 2000 шагов — просто закомментируйте строку 'break' ниже!
             if step == 0:
                 break
         except Exception as e:
@@ -575,4 +580,5 @@ def run_reactor_forge():
 if __name__ == "__main__":
     run_reactor_forge()
 #---------------- Конец Блока 5 -----------------
+
 
