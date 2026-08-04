@@ -241,7 +241,7 @@ class ChromaMMDiT(nn.Module):
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         for i, block in enumerate(self.single_blocks):
-            # ГЕРМЕТИЗАЦИЯ ШВА: Передаем ровно ТРИ позиционных аргумента после block (x, pe, distill_vec)
+            # ВЫРАВНИВАНИЕ ШВА: Передаем ровно ТРИ позиционных аргумента после block (x, pe, distill_vec)
             x_combined = checkpoint(
                 block, x_combined, None, None, 
                 use_reentrant=False
@@ -257,6 +257,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 
 
 #---------------- Старт Блока 5 (Контур Инициализации, Изоляции Оптимизатора и Точка Входа) --------
