@@ -177,17 +177,25 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
 
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
+import torch.nn.functional as F
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Тотально выжигает метаданные torchao из входящих активаций через CPU-стерилизацию токенов.
+    Принудительно режет геометрию латента до 64x64 прямо на входе, выжигая Си-оверлоад cuBLAS.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
-    x1 = batch["latent"].cuda()
+    x1_raw = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
     
+    # КРИТИЧЕСКИЙ СИ-СНАЙПЕР v7.0: Принудительно режем латент в 4 раза, если он прилетел 128x128!
+    # Это аппаратно сжимает рабочую зону памяти cuBLAS и обходит лимиты WDDM Windows.
+    if x1_raw.shape[-1] == 128:
+        x1 = F.interpolate(x1_raw.float(), size=(64, 64), mode="bilinear").to(torch.bfloat16)
+    else:
+        x1 = x1_raw
+        
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
         
@@ -245,7 +253,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     with torch.no_grad():
         pred_velocity_raw = model(xt, t5_hidden, mods)
         
-        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ ВЫХОДА: Выдергиваем тензор через CPU обратно в CUDA, полностью стирая С++ указатели torchao
+        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ СИ-ВЫХОДА
         pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
         
         # Расчет Loss на стерильных float32-тензорах
@@ -275,10 +283,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # === АБСОЛЮТНЫЙ КРЕМНИЕВЫЙ БАРЬЕР v4.0: Стерилизация входящих активаций базовых слоев ===
+        # Пред-расчет источников токенов
         xt_flat_base = model.pack_latents(xt)
-        
-        # Прогоняем токены через CPU, полностью обнуляя Си-контексты cuBLAS для torchao
         static_img_tokens = model.img_in(xt_flat_base).detach().cpu().clone().cuda()
         static_txt_tokens = model.txt_in(t5_hidden).detach().cpu().clone().cuda()
         
@@ -346,6 +352,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
