@@ -144,11 +144,18 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро - ... ) --------------------
+
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
+import time
+
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
-    Выполняет один боевой шаг плавки строго по заводской topology Chroma1-HD.
+    Выполняет один боевой шаг плавки с пофазным хронометражем и выводом псевдографики.
+    Полностью вскрывает тайминги прямого, обратного ходов и дискового ввода-вывода.
     """
+    # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
+    t_start = time.perf_counter()
+    
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
     if len(t5_raw.shape) == 4:
@@ -163,14 +170,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         
     optimizer.zero_grad(set_to_none=True)
     x0 = torch.randn_like(x1)
-    
-    # СНАЙПЕРСКИЙ ФИКС: Генерация строго во float32 с последующим кастом в bf16 для CUDA-ядер
-    t = torch.rand(x1.shape[0], device=x1.device, dtype=torch.float32).to(x1.dtype)
-    
+    t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
+    # Принудительный поджиг Autograd графа для LoRA швов
     xt.requires_grad_(True)
+    
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -180,28 +186,69 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         "final": [fake_shift, fake_scale, fake_gate]
     }
     
-    if step % 250 == 0:
-        print("\n" + "="*60)
-        print(f"[ПРИБОРНАЯ ПАНЕЛЬ ШАГА №{step + 1}]: Параметры полностью выровнены под металл:")
-        print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
-        print(f" -> Вектор времени t (длина) : {t.shape} | Dtype: {t.dtype}")
-        print("="*60 + "\n")
-        
+    t_io = time.perf_counter() - t_start
+    
+    # Фиксация и запуск фазы прямого прохода (Forward)
+    t_fwd_start = time.perf_counter()
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
-        
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
+    t_fwd = time.perf_counter() - t_fwd_start
+    
+    # Фиксация и запуск фазы обратного прохода (Backward)
+    t_bwd_start = time.perf_counter()
     loss.backward()
+    t_bwd = time.perf_counter() - t_bwd_start
+    
+    # Фиксация и запуск фазы оптимизации весов (Optimizer Step)
+    t_opt_start = time.perf_counter()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
+    t_opt = time.perf_counter() - t_opt_start
     
+    # Фиксация фазы проверки градиентного тока и снайперской чистки кэша VRAM
+    t_clean_start = time.perf_counter()
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
             
     optimizer.zero_grad(set_to_none=True)
-    torch.cuda.empty_cache()
+    
+    # СНАЙПЕРСКИЙ ФЛАШИНГ: Выполняем тяжелый Си++ сброс кэша СТРОГО циклично раз в 250 шагов,
+    # чтобы не резать тайминги обычных маршевых тиков реактора.
+    if step % 250 == 0:
+        torch.cuda.empty_cache()
+        
+    t_clean = time.perf_counter() - t_clean_start
+    
+    # Итоговое полетное время одного полного тика реактора
+    t_total = t_io + t_fwd + t_bwd + t_opt + t_clean
+    
+    # РАСЧЕТ И ВЫВОД МАРШЕВОЙ ПСЕВДОГРАФИКИ НА ТАБЛО КОНСОЛИ
+    total_sec = max(t_total, 0.001)
+    p_io    = int((t_io / total_sec) * 40)
+    p_fwd   = int((t_fwd / total_sec) * 40)
+    p_bwd   = int((t_bwd / total_sec) * 40)
+    p_opt   = int((t_opt / total_sec) * 40)
+    p_clean = int((t_clean / total_sec) * 40)
+    
+    bar_io    = "▒" * max(p_io, 1)
+    bar_fwd   = "█" * max(p_fwd, 1)
+    bar_bwd   = "▓" * max(p_bwd, 1)
+    bar_opt   = "█" * max(p_opt, 1)
+    bar_clean = "░" * max(p_clean, 1)
+    
+    print(f"\n┌── [МАРШЕВЫЙ ТРЕКЕР ТАЙМИНГОВ СМЕНЫ | ШАГ №{step + 1}] ──────────────────────────────────┐")
+    print(f"│ [I/O & Батч]  : {t_io:6.3f} сек | {bar_io:<40} │")
+    print(f"│ [Форвард]     : {t_fwd:6.3f} сек | {bar_fwd:<40} │")
+    print(f"│ [Бэкворд]     : {t_bwd:6.3f} сек | {bar_bwd:<40} │")
+    print(f"│ [Оптимизатор] : {t_opt:6.3f} сек | {bar_opt:<40} │")
+    print(f"│ [Флашинг VRAM]: {t_clean:6.3f} сек | {bar_clean:<40} │")
+    print(f"├─── ПАСПОРТ СКОРОСТИ РЕАКТОРА ───────────────────────────────────────────────────────┤")
+    print(f"│ -> ПОЛНОЕ ВРЕМЯ ТИКА ЦИКЛА: {t_total:6.3f} сек. Текущий Loss: {loss.item():12.6f}      │")
+    print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
+    
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
