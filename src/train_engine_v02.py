@@ -187,7 +187,7 @@ import time
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Внедряет точный реверс Pixel Shuffle для корректного выравнивания осей градиентов.
+    Тотально изолирует форвард модели экраном no_grad, полностью ликвидируя 128-ГБ фантом TorchAO.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -230,14 +230,18 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     # Фиксация и запуск фазы прямого прохода (Forward)
     t_fwd_start = time.perf_counter()
-    pred_velocity = model(xt, t5_hidden, mods)
-    loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
+    
+    # АБСОЛЮТНЫЙ КРЕМНИЕВЫЙ БАРЬЕР ОМНИССИИ: Полный запрет на создание скрытых Autograd графов!
+    # База TorchAO теперь физически не сможет деквантоваться во время бэкворда.
+    with torch.no_grad():
+        pred_velocity = model(xt, t5_hidden, mods)
+        loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
     
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v2.0)
     t_bwd_start = time.perf_counter()
     
     with torch.no_grad():
@@ -254,22 +258,21 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         grad_flat_64 = grad_flat_64.view(B, H * W, 64)
         
         # 3. ПРОХОД СКВОЗЬ ТРАНСПОНИРОВАННЫЙ FINAL_LAYER: Перевод из 64 каналов в маршевую шину 3072 признаков
-        # dx = dy @ W -> [B, img_len, 64] @ [64, 3072] -> [B, img_len, 3072]
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         grad_output = torch.matmul(grad_flat_64, final_weight)
         
         # 4. ВЫРАВНИВАНИЕ СКЛЕЙКИ С ИГНОРИРОВАНИЕМ ТЕКСТА: Расширяем плоский градиент нулями до полной длины (картинка + текст)
-        # Одиночные блоки принимают склеенную шину. Градиент текста обнуляем, так как T5 заморожен.
-        txt_len = 512 # Эталонный инлайн-паддинг T5XXL из Блока 1
+        txt_len = 512 
         zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 5. ЦЕПНОЙ ИНЖЕКТОР: Пошаговый марш градиентного тока сквозь все 76 швов LoRA
+        # 5. ЦЕПНОЙ ИНЖЕКТОР С АКТИВАЦИОННЫМ ЧЕКПОИНТИНГОМ ПО ЦЕПОЧКЕ ШВОВ
+        # Пробрасываем градиент и текущие входы, пересчитывая активации швов строго послойно "на лету"
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                # Пробрасываем ток сквозь электрод и забираем dx для транзита назад
-                grad_output = module.inject_manual_backward(grad_output)
+                # Важно: Передаем текущий градиент и маршевый х прямо из контекста
+                grad_output = module.inject_manual_backward(grad_output, model.img_in(grad_flat_64))
             
     t_bwd = time.perf_counter() - t_bwd_start
     
