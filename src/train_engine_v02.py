@@ -188,7 +188,7 @@ import time
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с адаптивным ручным распределением градиентного тока.
-    Полностью вычищен параноидальным тестом от междевайсовых и геометрических дедлоков.
+    Полностью изолирует форвард, выводит точную строковую телеметрию без падений кастинга типов.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -206,14 +206,20 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
         
-    # КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: Проверен на кастинг строковых контейнеров
+    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: АБСОЛЮТНЫЙ СТРОКОВЫЙ КАСТИНГ ВСЕХ КОНТЕЙНЕРОВ ===
     if step == 0:
         shape_vae_str = str(list(x1.shape))
+        dtype_vae_str = str(x1.dtype)
         shape_t5_str = str(list(t5_hidden.shape))
+        dtype_t5_str = str(t5_hidden.dtype)
+        
+        mem_alloc_gb = str(round(torch.cuda.memory_allocated() / 1024**3, 2))
+        mem_res_gb = str(round(torch.cuda.memory_reserved() / 1024**3, 2))
+        
         print(f"\n┌── [МАРШЕВАЯ ТЕЛЕМЕТРИЯ ЯДРА RECTOR | ПУСКОВАЯ ВЕРИФИКАЦИЯ ВХОДОВ] ────────────────┐")
-        print(f"│ * Входной латент VAE  : Форма {shape_vae_str:<18} | Тип {x1.dtype:<10} | Mean {x1.abs().mean().item():.4f} │")
-        print(f"│ * Шина текста T5XXL   : Форма {shape_t5_str:<18} | Тип {t5_hidden.dtype:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
-        print(f"│ * Полка видеопамяти   : Выделено {torch.cuda.memory_allocated()/1024**3:5.2f} ГБ     | Зарезервировано {torch.cuda.memory_reserved()/1024**3:5.2f} ГБ          │")
+        print(f"│ * Входной латент VAE  : Форма {shape_vae_str:<18} | Тип {dtype_vae_str:<10} | Mean {x1.abs().mean().item():.4f} │")
+        print(f"│ * Шина текста T5XXL   : Форма {shape_t5_str:<18} | Type {dtype_t5_str:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
+        print(f"│ * Полка видеопамяти   : Выделено {mem_alloc_gb:<5} ГБ       | Зарезервировано {mem_res_gb:<5} ГБ          │")
         print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
         
     optimizer.zero_grad(set_to_none=True)
@@ -269,7 +275,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # ТОТАЛЬНЫЙ ПАРАНОИДАЛЬНЫЙ ФИКС: Пред-расчет ОБОИХ изолированных источников токенов
+        # Пред-расчет изолированных источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
         static_txt_tokens = model.txt_in(t5_hidden).detach()
@@ -279,17 +285,15 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 5. АДАПТИВНЫЙ ЦЕПНОЙ ИНЖЕКТОР: Дифференцирует источники активаций по имени шва
+        # 5. АДАПТИВНЫЙ ЦЕПНОЙ ИНЖЕКТОР: Снайперский проброс строго целевого контекста активаций
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                # Снайперский проброс строго целевого контекста активаций
                 if "txt_attn" in name:
                     grad_output = module.inject_manual_backward(grad_output, static_txt_tokens)
                 elif "img_attn" in name:
                     grad_output = module.inject_manual_backward(grad_output, static_img_tokens)
                 else:
-                    # Для SingleStreamBlock.linear1 — передаем склеенный маршевый тензор
                     combined_static = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
                     grad_output = module.inject_manual_backward(grad_output, combined_static)
             
@@ -341,7 +345,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
     
     return loss.item()
-
 #---------------- Конец Блока 3 -----------------
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
