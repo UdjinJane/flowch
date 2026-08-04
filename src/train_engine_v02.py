@@ -181,13 +181,14 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
+
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
 
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
-    Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Внедряет пред-расчет проекций и выводит полную аппаратную телеметрию входных параметров на старте.
+    Выполняет один боевой шаг плавки с адаптивным ручным распределением градиентного тока.
+    Полностью вычищен параноидальным тестом от междевайсовых и геометрических дедлоков.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -205,7 +206,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
         
-    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: СИНТАКСИЧЕСКИЙ ФИКС КАСТИНГА СТРОК ===
+    # КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: Проверен на кастинг строковых контейнеров
     if step == 0:
         shape_vae_str = str(list(x1.shape))
         shape_t5_str = str(list(t5_hidden.shape))
@@ -268,20 +269,29 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # Стабилизационный маневр: кэшируем проекцию токенов ОДИН РАЗ на входе
+        # ТОТАЛЬНЫЙ ПАРАНОИДАЛЬНЫЙ ФИКС: Пред-расчет ОБОИХ изолированных источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
+        static_txt_tokens = model.txt_in(t5_hidden).detach()
         
         # 4. Выравнивание склейки под геометрию Одиночных Блоков
         txt_len = 512 
         zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 5. ЦЕПНОЙ ИНЖЕКТОР: Ручной марш градиентного тока сквозь все 76 швов LoRA
+        # 5. АДАПТИВНЫЙ ЦЕПНОЙ ИНЖЕКТОР: Дифференцирует источники активаций по имени шва
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                grad_output = module.inject_manual_backward(grad_output, static_img_tokens)
+                # Снайперский проброс строго целевого контекста активаций
+                if "txt_attn" in name:
+                    grad_output = module.inject_manual_backward(grad_output, static_txt_tokens)
+                elif "img_attn" in name:
+                    grad_output = module.inject_manual_backward(grad_output, static_img_tokens)
+                else:
+                    # Для SingleStreamBlock.linear1 — передаем склеенный маршевый тензор
+                    combined_static = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
+                    grad_output = module.inject_manual_backward(grad_output, combined_static)
             
     t_bwd = time.perf_counter() - t_bwd_start
     
@@ -331,6 +341,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
     
     return loss.item()
+
 #---------------- Конец Блока 3 -----------------
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
