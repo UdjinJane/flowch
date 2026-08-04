@@ -96,7 +96,7 @@ class ChromaInlineLoRA(nn.Module):
                 else:
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
-#---------------- Конец Блока 1 ...
+#---------------- Конец Блока 1 -----------------
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
@@ -212,7 +212,7 @@ class ChromaMMDiT(nn.Module):
         self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
-        # Двухконтурные ModuleList под жесткую топологию Метрополии
+        # Двухконтурные ModuleList под жесткую topology Метрополии
         self.double_blocks = nn.ModuleList([DoubleStreamBlock(hidden_size) for _ in range(num_double)])
         self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
 
@@ -237,7 +237,7 @@ class ChromaMMDiT(nn.Module):
         
         img_len = img_tokens.shape[1]
 
-        # Прямой каскад спаренных блоков Метрополии (без лямбда-костылей и сплитов)
+        # Прямой каскад спаренных блоков Метрополии
         for block in self.double_blocks:
             img_tokens, txt_tokens = block(
                 img=img_tokens, 
@@ -254,7 +254,7 @@ class ChromaMMDiT(nn.Module):
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
 
-        # Снайперское отсечение: берем строго первые img_len токенов графики!
+        # Снайперское отсечение графика-токенов: берем строго от 0 до img_len!
         pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -263,9 +263,7 @@ class ChromaMMDiT(nn.Module):
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
-#---------------- Конец Блока 4 ...
-
-
+#---------------- Конец Блока 4 -----------------
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
