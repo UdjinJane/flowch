@@ -123,11 +123,11 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Следственного Выключения Autograd) -
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Заглушки Финальной Модуляции с Телеметрией) ------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module) -> float:
     """
     Выполняет один боевой шаг плавки строго по заводской топологии Chroma1-HD.
-    Временно изолирует С++ бэкэнд, отключая backward для проверки герметичности форварда.
+    Снабжает финальный слой AdaLN фиктивной тройной заглушкой и выводит полную рантайм-телеметрию стыка.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
@@ -143,40 +143,51 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     optimizer.zero_grad(set_to_none=True)
     
-    # Генерация шумового поля траектории Rectified Flow
+    # Generation шумового поля траектории Rectified Flow
     x0 = torch.randn_like(x1)
     t = torch.rand((x1.shape,), device=x1.device, dtype=x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
 
-    # По заводскому уставу Chroma1-HD передаем пустую маску модов, так как AdaLN слоев нет
-    mods = {"double": None, "single": None, "final": None}
+    # ГЕРМЕТИЗАЦИЯ ШВА: Создаем фиктивный тройной пакет [shift, scale, gate] под Си-устав AdaLN
+    fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
+    fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
+    fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
+    
+    # Упаковываем строго 3 уставных Си-компонента, которые ищет С++ бэкэнд на выходе
+    mods = {
+        "double": None, 
+        "single": None, 
+        "final": [fake_shift, fake_scale, fake_gate]
+    }
 
     # ==========================================================================
-    # ПРИБОРНАЯ ПАНЕЛЬ ЗАВОДСКОГО СТЫКА (Рентген CUDA-памяти)
+    # ПРИБОРНАЯ ПАНЕЛЬ СЛЕДСТВЕННОГО КОНТУРА (Рентген CUDA-памяти)
     # ==========================================================================
     print("\n" + "="*60)
-    print("[СЛЕДСТВЕННЫЙ КОНТУР]: Прогон Блока №3 без обратного шага backward:")
+    print("[ПРИБОРНАЯ ПАНЕЛЬ]: Срез параметров перед маршевым проходом:")
     print(f" -> Форма входящего латента xt    : {xt.shape} | Dtype: {xt.dtype}")
     print(f" -> Форма текстовой шины T5      : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
-    print(f" -> Локализация Autograd-мины   : Изоляция backward включена")
+    print(f" -> Контейнер mods['double']     : {mods['double']}")
+    print(f" -> Контейнер mods['single']     : {mods['single']}")
+    print(f" -> Финальный контейнер mods['final']:")
+    print(f"    * Тип контейнера            : {type(mods['final']).__name__}")
+    print(f"    * Длина списка компонентов   : {len(mods['final'])} (Должна быть равна строго 3!)")
+    if isinstance(mods['final'], list) and len(mods['final']) == 3:
+        print(f"    * Компонент 0 [Shift]        : Форма {mods['final'][0].shape} | Dtype: {mods['final'][0].dtype}")
+        print(f"    * Компонент 1 [Scale]        : Форма {mods['final'][1].shape} | Dtype: {mods['final'][1].dtype}")
+        print(f"    * Компонент 2 [Gate]         : Форма {mods['final'][2].shape} | Dtype: {mods['final'][2].dtype}")
     print("="*60 + "\n")
     # ==========================================================================
 
-    # Прямой маршевый проход трансформера (Оборачиваем в no_grad для полной Си-изоляции)
+    # Прямой маршевый проход трансформера под no_grad (Пока держим изоляцию backward)
     with torch.no_grad():
         pred_velocity = model(xt, t5_hidden, mods)
         loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
-        
-    # СНЙПЕРСКИЙ ШАГ: Выключаем backward и step, чтобы сорвать С++ маску с форварда блоков
-    # loss.backward()
-    # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    # optimizer.step()
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
 
-    # Тотальная зачистка и выжигание следов: спасаем VRAM от Shared-течи WDDM
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     
