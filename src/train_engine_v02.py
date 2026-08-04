@@ -243,12 +243,12 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
 
-        # Жесткая фиксация длины отсека текста для безопасного среза памяти
-        txt_len = txt_tokens.shape
+        # ГЕРМЕТИЗАЦИЯ ШВА: Извлекаем строго целочисленную длину текстовой оси (индекс 1)
+        txt_len = txt_tokens.shape[1]
 
         # 1. Каскад спаренных блоков под защитой градиентного чекпоинтинга (Держит полку памяти VRAM)
         for i, block in enumerate(self.double_blocks):
-            txt_tokens, img_tokens = checkpoint(
+            txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
                 block, txt_tokens, img_tokens, None, None, None, 
                 use_reentrant=False
             )
@@ -256,13 +256,13 @@ class ChromaMMDiT(nn.Module):
         # 2. Склеивание потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         
-        # ГЕРМЕТИЗАЦИЯ ШВА: Пускаем одиночные блоки НАПРЯМУЮ, минуя капризный С++ Си-контур checkpoint
+        # Пускаем одиночные блоки напрямую, минуя капризный С++ Си-контур checkpoint
         for i, block in enumerate(self.single_blocks):
             x_combined = block(
                 x=x_combined, pe=None, distill_vec=None, mask=None
             )
 
-        # 3. Восстановление исходной 4D-геометрии латентов с герметизацией non-contiguous памяти
+        # 3. Восстановление исходной 4D-геометрии латентов с чистым целочисленным срезом инта
         pred_img_flat = x_combined[:, txt_len:].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -272,7 +272,6 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
-
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
