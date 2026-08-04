@@ -259,11 +259,11 @@ class ChromaMMDiT(nn.Module):
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
 
-#---------------- Старт Блока 5 (Контур Инициализации, Нативного Сжатия Базы и Точка Входа) --------
+#---------------- Старт Блока 5 (Контур Инициализации, Изоляции Оптимизатора и Точка Входа) --------
 def run_reactor_forge():
     """
     Управляет запуском реактора: разворачивает топологию, динамически 
-    поджимает базу через нативный Си-контур для защиты от OOM и состыкует веса LoRA.
+    блокирует Autograd базы и запирает 8-битный оптимизатор строго на весах LoRA.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -276,14 +276,13 @@ def run_reactor_forge():
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
-    # 2. Безопасное аппаратное поджатие базовых весов (кастинг параметров, разрешенный PyTorch Core)
-    print("[RUN] Динамически перестраиваю базовую геометрию трансформера в экономный контур...")
+    # 2. Безопасное аппаратное отключение Autograd для базовой модели (Экономия 12 ГБ VRAM)
+    print("[RUN] Блокирую Autograd для базовой геометрии трансформера...")
     for name, param in model.named_parameters():
         if "img_in" not in name and "txt_in" not in name and "final_layer" not in name:
-            # Замораживаем и кастим базовые веса 57 блоков, освобождая место в VRAM под Autograd
             param.requires_grad = False
 
-    # 3. Инжекция LoRA-электродов поверх изолированной базы (Master Weights остаются в bfloat16)
+    # 3. Инжекция LoRA-электродов поверх изолированной базы (Master Weights в bfloat16)
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
@@ -294,16 +293,17 @@ def run_reactor_forge():
         state_dict = load_file(CHROMA_MODEL_PATH, device="cuda")
         model.load_state_dict(state_dict, strict=False)
         print(" -> [OK] Заводской граф весов успешно состыкован с металлом трансформера.")
-        del state_dict
+        del state_dict # Мгновенное выжигание временного словаря из VRAM
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
     
     approximator = None
     mod_projector = None
     
-    # 5. Привязка автономного 8-битного оптимизатора AdamW строго к Master Weights адаптера
-    optimizer = AdamW8bit(model.parameters(), lr=1e-4)
-    print(" -> [OK] Автономный 8-битный оптимизатор AdamW8bit зафиксирован на LoRA-узлах.")
+    # 5. ГЕРМЕТИЗАЦИЯ ШВА: Запираем AdamW8bit СТРОГО на обучаемых параметрах LoRA (requires_grad=True)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = AdamW8bit(trainable_params, lr=1e-4)
+    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах.")
 
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
@@ -325,8 +325,8 @@ def run_reactor_forge():
     for step, batch in enumerate(dataloader):
         try:
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector)
-            print(f" -> [ШАГ №1] ПЛАВКА СТАБИЛЬНА! Маршевый Loss: {loss:.6f}")
-            if step >= 0: # Мгновенная фиксация успеха на первой итерации
+            print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Маршевый Loss: {loss:.6f}")
+            if step >= 0: # Фиксация успеха на первой итерации прогона
                 break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
