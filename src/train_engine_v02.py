@@ -38,7 +38,9 @@ def trace_lines(frame, event, arg):
                                 print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
                             elif isinstance(val, (list, tuple)):
                                 print(f" * Container [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
-                                if len(val) > 0: print(f" - Элемент 0: {type(val[0]).__name__}")
+                                # БЕЗОПАСНЫЙ ПЕРЕХВАТ: Защита от IndexError на пустых контейнерах
+                                if len(val) > 0: 
+                                    print(f"   - Элемент 0: {type(val[0]).__name__}")
                         except:
                             pass
                 curr_frame = curr_frame.f_back
@@ -82,8 +84,7 @@ class ChromaInlineLoRA(nn.Module):
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """
         УМНАЯ СНАЙПЕРСКАЯ ТЕЛЕМЕТРИЯ:
-        Выдает рапорт строго на ШАГЕ №1 и строго для первых трех блоков модели,
-        чтобы не засорять консоль Кэпа портянками логов.
+        Выдает рапорт строго на ШАГЕ №1 и строго для первых трех блоков модели.
         """
         is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
         if current_step == 0 and is_first_block:
@@ -97,6 +98,7 @@ class ChromaInlineLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
@@ -123,11 +125,10 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки) --------------------
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро - ... ) --------------------
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки строго по заводской topology Chroma1-HD.
-    Контур Autograd LoRA активирован, реализован жесткий клиппинг и тотальный флашинг VRAM.
     """
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
@@ -143,13 +144,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         
     optimizer.zero_grad(set_to_none=True)
     x0 = torch.randn_like(x1)
-    t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
+    
+    # СНАЙПЕРСКИЙ ФИКС: Генерация строго во float32 с последующим кастом в bf16 для CUDA-ядер
+    t = torch.rand(x1.shape[0], device=x1.device, dtype=torch.float32).to(x1.dtype)
+    
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
-    # ПРИНУДИТЕЛЬНЫЙ ПОДЖИГ AUTOGRAD: Запускает трекинг градиентов для швов LoRA
     xt.requires_grad_(True)
-    
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -159,17 +161,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         "final": [fake_shift, fake_scale, fake_gate]
     }
     
-    # Вывод панели управления строго на первой итерации или каждые 250 шагов
     if step % 250 == 0:
         print("\n" + "="*60)
         print(f"[ПРИБОРНАЯ ПАНЕЛЬ ШАГА №{step + 1}]: Параметры полностью выровнены под металл:")
         print(f" -> Форма входящего латента xt : {xt.shape} | Dtype: {xt.dtype}")
-        print(f" -> Фактическая 3D-форма шины T5 : {t5_hidden.shape} | Dtype: {t5_hidden.dtype}")
         print(f" -> Вектор времени t (длина) : {t.shape} | Dtype: {t.dtype}")
-        print(f" -> Длина финального пакета AdaLN: {len(mods['final'])}")
         print("="*60 + "\n")
         
-    # Боевой маршевый проход Autograd
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     if torch.isnan(loss):
@@ -179,7 +177,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
     
-    # ГЕРМЕТИЗАЦИЯ ШВА: Передаем РЕАЛЬНЫЙ шаг плавки в инспектора для работы фильтра % 250
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
@@ -188,6 +185,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     torch.cuda.empty_cache()
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
@@ -226,6 +224,7 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
+        # ЖЕСТКИЙ ФИКС: Извлекаем скалярную длину оси последовательности токенов
         img_len = img_tokens.shape[1]
 
         # Прямой каскад спаренных блоков Метрополии
@@ -245,7 +244,7 @@ class ChromaMMDiT(nn.Module):
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
 
-        # Снайперское отсечение графика-токенов: берем строго от 0 до img_len!
+        # Снайперское отсечение графика-токенов: берем строго скалярный img_len
         pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -255,6 +254,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) ---
 def save_lora_checkpoint(model: nn.Module, save_path: str):
     """
