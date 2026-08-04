@@ -161,11 +161,12 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
-    
     x1 = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
+    
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
+        
     B_pad, L_pad, D_pad = t5_raw.shape
     if L_pad < 512:
         padding_size = 512 - L_pad
@@ -175,6 +176,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         t5_hidden = t5_raw[:, :512, :]
         
     optimizer.zero_grad(set_to_none=True)
+    
+    # Генерация пространственного шума и траектории Rectified Flow
     x0 = torch.randn_like(x1)
     t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
@@ -183,6 +186,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     # Принудительный поджиг Autograd графа для LoRA швов
     xt.requires_grad_(True)
     
+    # Фантомные заглушки шины модуляции (нарезка отключена по уставу safetensors)
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -198,6 +202,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t_fwd_start = time.perf_counter()
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
+    
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
@@ -219,13 +224,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
             
+    # Перенос зануления градиентов в финальную точку после шага оптимизатора
     optimizer.zero_grad(set_to_none=True)
     
     # СНАЙПЕРСКИЙ ФЛАШИНГ: Выполняем тяжелый Си++ сброс кэша СТРОГО циклично раз в 250 шагов,
     # чтобы не резать тайминги обычных маршевых тиков реактора.
     if step % 250 == 0:
         torch.cuda.empty_cache()
-        
     t_clean = time.perf_counter() - t_clean_start
     
     # Итоговое полетное время одного полного тика реактора
@@ -233,23 +238,23 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     # РАСЧЕТ И ВЫВОД МАРШЕВОЙ ПСЕВДОГРАФИКИ НА ТАБЛО КОНСОЛИ
     total_sec = max(t_total, 0.001)
-    p_io    = int((t_io / total_sec) * 40)
-    p_fwd   = int((t_fwd / total_sec) * 40)
-    p_bwd   = int((t_bwd / total_sec) * 40)
-    p_opt   = int((t_opt / total_sec) * 40)
+    p_io = int((t_io / total_sec) * 40)
+    p_fwd = int((t_fwd / total_sec) * 40)
+    p_bwd = int((t_bwd / total_sec) * 40)
+    p_opt = int((t_opt / total_sec) * 40)
     p_clean = int((t_clean / total_sec) * 40)
     
-    bar_io    = "▒" * max(p_io, 1)
-    bar_fwd   = "█" * max(p_fwd, 1)
-    bar_bwd   = "▓" * max(p_bwd, 1)
-    bar_opt   = "█" * max(p_opt, 1)
+    bar_io = "▒" * max(p_io, 1)
+    bar_fwd = "█" * max(p_fwd, 1)
+    bar_bwd = "▓" * max(p_bwd, 1)
+    bar_opt = "█" * max(p_opt, 1)
     bar_clean = "░" * max(p_clean, 1)
     
     print(f"\n┌── [МАРШЕВЫЙ ТРЕКЕР ТАЙМИНГОВ СМЕНЫ | ШАГ №{step + 1}] ──────────────────────────────────┐")
-    print(f"│ [I/O & Батч]  : {t_io:6.3f} сек | {bar_io:<40} │")
-    print(f"│ [Форвард]     : {t_fwd:6.3f} сек | {bar_fwd:<40} │")
-    print(f"│ [Бэкворд]     : {t_bwd:6.3f} сек | {bar_bwd:<40} │")
-    print(f"│ [Оптимизатор] : {t_opt:6.3f} сек | {bar_opt:<40} │")
+    print(f"│ [I/O & Батч] : {t_io:6.3f} сек | {bar_io:<40} │")
+    print(f"│ [Форвард]    : {t_fwd:6.3f} сек | {bar_fwd:<40} │")
+    print(f"│ [Бэкворд]    : {t_bwd:6.3f} сек | {bar_bwd:<40} │")
+    print(f"│ [Оптимизатор]: {t_opt:6.3f} сек | {bar_opt:<40} │")
     print(f"│ [Флашинг VRAM]: {t_clean:6.3f} сек | {bar_clean:<40} │")
     print(f"├─── ПАСПОРТ СКОРОСТИ РЕАКТОРА ───────────────────────────────────────────────────────┤")
     print(f"│ -> ПОЛНОЕ ВРЕМЯ ТИКА ЦИКЛА: {t_total:6.3f} сек. Текущий Loss: {loss.item():12.6f}      │")
@@ -269,10 +274,12 @@ class ChromaMMDiT(nn.Module):
         super().__init__()
         from chroma_core.layers_clean import DoubleStreamBlock, SingleStreamBlock
         self.hidden_size = hidden_size
+        
         # Маршевые входные сенсоры последовательностей
         self.img_in = nn.Linear(64, hidden_size, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, hidden_size, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(hidden_size, 64, dtype=torch.bfloat16)
+        
         # Двухконтурные ModuleList под жесткую topology Метрополии
         self.double_blocks = nn.ModuleList([DoubleStreamBlock(hidden_size) for _ in range(num_double)])
         self.single_blocks = nn.ModuleList([SingleStreamBlock(hidden_size) for _ in range(num_single)])
@@ -298,36 +305,36 @@ class ChromaMMDiT(nn.Module):
         
         # ЖЕСТКИЙ ФИКС: Извлекаем скалярную длину оси последовательности токенов
         img_len = img_tokens.shape[1]
-
-        # Прямой каскад спаренных блоков Метрополии
+        
+        # Прямой каскад спаренных блоков Метрополии без вовлечения базового Autograd
         for block in self.double_blocks:
             img_tokens, txt_tokens = block(
-                img=img_tokens, 
-                txt=txt_tokens, 
-                pe=None, 
-                distill_vec=mods["double"], 
+                img=img_tokens,
+                txt=txt_tokens,
+                pe=None,
+                distill_vec=mods["double"],
                 mask=None
             )
-
+            
         # Выравнивание склейки под устав Метрополии: сначала ИЗОБРАЖЕНИЕ, затем ТЕКСТ
         x_combined = torch.cat([img_tokens, txt_tokens], dim=1)
-
+        
         # Одиночные blocks — строго 4 позиционных аргумента под геометрию Метрополии!
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
-
+            
         # Снайперское отсечение графика-токенов: берем строго скалярный img_len
         pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
+        # Обратный Pixel Shuffle: распаковка 64 каналов в 16-канальное латентное пространство
         B, C_raw, H_raw, W_raw = x_latent.shape
         H, W = H_raw // 2, W_raw // 2
         out = pred_img_flat.view(B, H, W, 16, 2, 2)
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
-
-#---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) ---
+#---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
 def save_lora_checkpoint(model: nn.Module, save_path: str):
     """
     Контур тотальной дефектоскопии весов LoRA.
@@ -348,16 +355,15 @@ def save_lora_checkpoint(model: nn.Module, save_path: str):
             if torch.isnan(clean_tensor).any() or torch.isinf(clean_tensor).any():
                 print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Обнаружены поврежденные структуры в слое: {name}")
                 corrupted_weights += 1
-            
             lora_state_dict[name] = clean_tensor
-
+            
     if corrupted_weights > 0:
         print(f" [WARN] Обнаружено поврежденных швов: {corrupted_weights}. Запись заблокирована для защиты ядра!")
         return False
-
+        
     if len(lora_state_dict) != 152:
-        print(f" [WARN] Аномалия контура: собрано {len(lora_state_dict)} параметров вместо уставных 152!")
-
+        print(f" [WARN] Аномалия tobacco контура: собрано {len(lora_state_dict)} параметров вместо уставных 152!")
+        
     # Безопасная запись на физический носитель
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -380,10 +386,10 @@ def run_reactor_forge():
     
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
-
+        
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
-
+    
     # 2. ПОДГРУЗКА ЗАВОДСКОЙ ПЛАЗМЫ (Выполняется строго ДО квантования)
     print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
     try:
@@ -394,7 +400,7 @@ def run_reactor_forge():
         del state_dict
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
-
+        
     # 3. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Перенесено на рабочее место после заливки весов)
     print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов в INT8...")
     try:
@@ -403,33 +409,32 @@ def run_reactor_forge():
         print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
     except Exception as ao_err:
         print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
-
-    # 4. Инжекция LoRA-электродов поверх сжатой и заполненной базы (76 швов)
+        
+    # 4. Инжекция LoRA-электродов поверх сжатой и заполненной базы (76 швов / 152 параметра)
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
-
-    # 5. СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальная блокировка Autograd для базового ядра
+    
+    # 5. СУПЕР-ЗАЗАЩИТА ОМНИССИИ: Тотальная блокировка Autograd для базового ядра
     print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базы...")
     for name, param in model.named_parameters():
         if "lora_" not in name:
             param.requires_grad = False
         else:
             param.requires_grad = True
-
+            
     approximator = None
     mod_projector = None
-
+    
     # 6. Фиксация 8-битного оптимизатора строго на 152 LoRA-параметрах
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
-
+    
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
     
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
         print(" [WARN] Холодная симуляция на тестовом фантом-батче.")
-        # ЖЕСТКИЙ ФИКС: Инициализация строго во float32 для исключения аварий Си-генератора CPU
         batch = {
             "latent": torch.randn(1, 16, 128, 128, dtype=torch.float32).to(torch.bfloat16),
             "clip_hidden": torch.randn(1, 77, 768, dtype=torch.float32).to(torch.bfloat16),
@@ -440,7 +445,7 @@ def run_reactor_forge():
         from chroma_core.init import ChromaDataset
         dataset = ChromaDataset(latent_dir=LATENT_DIR, text_dir=TEXT_DIR)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
-
+        
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЧИСТОГО ЦИКЛА ПЛАВКИ ===")
     import sys
     sys.settrace(trace_lines)
@@ -450,12 +455,14 @@ def run_reactor_forge():
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector, step=step)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
             
-            if step == 0:
-                checkpoint_path = r"Z:\flowch\checkpoints\chroma_lora_step_1.safetensors"
+            # Автосохранение каждые 250 шагов и на первом контрольном шаге
+            if step == 0 or (step + 1) % 250 == 0:
+                checkpoint_path = f"Z:\\flowch\\checkpoints\\chroma_lora_step_{step + 1}.safetensors"
                 save_lora_checkpoint(model, checkpoint_path)
                 
-            # Для выхода в длительный марш на 2000 шагов — просто закомментируйте 'break' ниже!
-            # break
+            # Для длительного марша на 2000 шагов — просто закомментируйте строку 'break' ниже!
+            if step == 0:
+                break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
