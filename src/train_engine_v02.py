@@ -82,7 +82,7 @@ class ChromaInlineLoRA(nn.Module):
         чтобы не засорять консоль Кэпа портянками логов.
         """
         # Проверяем, входит ли слой в первые три блока double_blocks (0, 1, 2)
-        is_first_block = any(f"double_blocks.{i}." in layer_name for i in)
+        is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
         
         if current_step == 0 and is_first_block:
             print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
