@@ -59,11 +59,9 @@ class ChromaInlineLoRA(nn.Module):
         target_device = base_layer.weight.device
         
         # КРИТИЧЕСКИЙ СИ-ФИКС: Веса объявляются как чистые тензоры, скрытые от PyTorch параметров!
-        # Это физически блокирует С++ триггер деквантования TorchAO во время форварда.
         self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
         self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
         
-        # Инициализируем Си-буферы градиентов вручную
         self.lora_A.grad = None
         self.lora_B.grad = None
 
@@ -77,7 +75,6 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # Абсолютный no_grad экран базового монолита Метрополии работает на сухих Си-тензорах
         with torch.no_grad():
             base_out = self.base_layer(x_cont).detach()
             lora_mid = torch.matmul(x_cont, self.lora_A)
@@ -87,14 +84,14 @@ class ChromaInlineLoRA(nn.Module):
 
     def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
         """
-        Локальный инжектор Омниссии v6.0: Рассчитывает градиенты на изолированных Си-тензорах,
-        аккумулируя их в ручные буферы .grad без вовлечения глобального Autograd-графа.
+        Локальный инжектор Омниссии v6.0: Принимает объединенные монолитные тензоры активаций
+        и градиентов. Жестко сопрягает формы для подавления Си-конфликтов cuBLAS.
         """
         with torch.no_grad():
             x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
             
-            # Жесткая синхронизация осей последовательности
+            # Жесткая Си-выверенная синхронизация осей без условных ветвлений
             if dy.shape[1] > x_cont.shape[1]:
                 dy = dy[:, :x_cont.shape[1], :]
             elif dy.shape[1] < x_cont.shape[1]:
@@ -102,20 +99,19 @@ class ChromaInlineLoRA(nn.Module):
                 zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
                 dy = torch.cat([dy, zero_padding], dim=1)
                 
-            # Перерасчет локального форварда "на лету"
+            # Перерасчет локального форварда шва "на лету"
             lora_mid = torch.matmul(x_cont, self.lora_A)
             
             dy_flat = dy.view(-1, dy.shape[-1])
             mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
             x_flat = x_cont.view(-1, x_cont.shape[-1])
             
-            # Расчет градиентов параметров текущего электрода LoRA
+            # Стабильный расчет градиентов Си-тензоров адаптера
             if mid_flat.shape[0] == dy_flat.shape[0]:
                 grad_B = torch.matmul(mid_flat.t(), dy_flat)
                 d_mid = torch.matmul(dy_flat, self.lora_B.t())
                 grad_A = torch.matmul(x_flat.t(), d_mid)
                 
-                # Вручную аккумулируем градиенты в Си-буферы тензоров
                 if self.lora_A.grad is None:
                     self.lora_A.grad = grad_A.view_as(self.lora_A)
                 else:
@@ -142,6 +138,7 @@ class ChromaInlineLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
@@ -182,15 +179,14 @@ import torch.nn.functional as F
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Принудительно режет геометрию латента до 64x64 прямо на входе, выжигая Си-оверлоад cuBLAS.
+    Внедряет монолитное склеивание активаций для полного уничтожения 384-ГБ фантома кубЛАС.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
     x1_raw = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
     
-    # КРИТИЧЕСКИЙ СИ-СНАЙПЕР v7.0: Принудительно режем латент в 4 раза, если он прилетел 128x128!
-    # Это аппаратно сжимает рабочую зону памяти cuBLAS и обходит лимиты WDDM Windows.
+    # Си-снайпер принудительного урезания пространственной геометрии латента
     if x1_raw.shape[-1] == 128:
         x1 = F.interpolate(x1_raw.float(), size=(64, 64), mode="bilinear").to(torch.bfloat16)
     else:
@@ -207,7 +203,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
         
-    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: АБСОЛЮТНЫЙ СТРОКОВЫЙ КАСТИНГ ВСЕХ КОНТЕЙНЕРОВ ===
+    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ ===
     if step == 0:
         shape_vae_str = str(list(x1.shape))
         dtype_vae_str = str(x1.dtype)
@@ -230,10 +226,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     
-    # Target_velocity запечатывается в чистый float32 намертво, минуя bfloat16
     target_velocity = (x1.float() - x0.float()).detach()
-    
-    # Полная изоляция от глобального Autograd
     xt.requires_grad_(False)
     
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -252,18 +245,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     with torch.no_grad():
         pred_velocity_raw = model(xt, t5_hidden, mods)
-        
-        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ СИ-ВЫХОДА
         pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
-        
-        # Расчет Loss на стерильных float32-тензорах
         loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
     
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
     
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v3.0)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v4.0)
     t_bwd_start = time.perf_counter()
     
     with torch.no_grad():
@@ -283,27 +272,24 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # Пред-расчет источников токенов
+        # Пред-расчет изолированных источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach().cpu().clone().cuda()
         static_txt_tokens = model.txt_in(t5_hidden).detach().cpu().clone().cuda()
         
-        # Выравнивание склейки под геометрию Одиночных Блоков
+        # === МОНОЛИТНАЯ СБОРКА ШИНЫ v7.0: Тотальная конкатенация для гашения Си-конфликтов потоков ===
+        # Текст и изображение склеиваются в единый сквозной массив и для Double, и для Single блоков
+        combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
+        
         txt_len = 512 
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 4. АВТОНОМНЫЙ ЦЕПНОЙ ИНЖЕКТОР v3.0: Швы пьют ток изолированно
+        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР: Все швы вызываются с единым сквозным полем градиента и активаций
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                if "txt_attn" in name:
-                    module.inject_manual_backward(base_grad_output, static_txt_tokens)
-                elif "img_attn" in name:
-                    module.inject_manual_backward(base_grad_output, static_img_tokens)
-                else:
-                    combined_static = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
-                    module.inject_manual_backward(combined_grad_output, combined_static)
+                module.inject_manual_backward(combined_grad_output, combined_static_tokens)
             
     t_bwd = time.perf_counter() - t_bwd_start
     
