@@ -21,16 +21,18 @@ OUTPUT_DIR = "./out_pdf"
 IGNORE_DIRS = {".venv", "__pycache__", ".git", "out_pdf"}
 VALID_EXTENSIONS = {".py", ".txt"}
 
-# Наша кастомная снайперская палитра для терминала
+# === СВЕРХКОНТРАСТНАЯ НЕОНОВАЯ ПАЛИТРА ДЛЯ ЛАЗЕРНОЙ ОПТИКИ КЭПА ===
 COLOR_MAP = {
-    Token.Keyword: "#0033CC",       # Яркий синий для def, import, return
-    Token.Name.Function: "#006666", # Бирюзовый для функций
-    Token.String: "#008000",        # Зеленый для строк
-    Token.Comment: "#7A7A7A",       # Серый для комментов
-    Token.Number: "#FF6600",        # Оранжевый для цифр
-    Token.Operator: "#000000",      # Черный для знаков = + -
-    Token.Name.Builtin: "#990099"   # Пурпурный для print, len, assert
+    Token.Keyword: "#0000FF",        # 100% Синий (def, import, return)
+    Token.Name.Function: "#FF00FF", # Насыщенная Маджента (имена функций)
+    Token.String: "#8B0000",        # Темно-красный Кровяной (строки и пути)
+    Token.Comment: "#006400",       # Глубокий Хвойно-зеленый (комментарии)
+    Token.Number: "#FF4500",        # Огненно-рыжий (числа, мантиссы, ранги)
+    Token.Operator: "#000000",      # Абсолютно Черный (знаки =, +, -, лоджики)
+    Token.Name.Builtin: "#4B0082"   # Насыщенный Индиго (print, len, isinstance)
 }
+
+
 
 # Инициализация кириллического моноширинного шрифта
 try:
@@ -115,14 +117,17 @@ def convert_file_to_pdf(source_path, output_dir):
     
     styles = getSampleStyleSheet()
     
+    # МАКСИМАЛЬНОЕ ПРОСВЕТЛЕНИЕ: Сверхконтраст и расширенный интерлиньяж
     code_style = ParagraphStyle(
         'CodeStyle',
         parent=styles['Normal'],
         fontName=FONT_NAME,
-        fontSize=7.5,      # Чуть уменьшили, чтобы длинный код влезал по ширине
-        leading=9.5,
-        textColor=colors.HexColor("#1A1A1A")
+        fontSize=8.5,               # Крупный калибр для легкого чтения
+        leading=12.0,               # Мощный вертикальный шаг — строки больше не слипнутся
+        textColor=colors.black      # Радикально черный пигмент текста базы
     )
+
+
     
     header_style = ParagraphStyle(
         'HeaderStyle',
