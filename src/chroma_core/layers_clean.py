@@ -249,7 +249,8 @@ class DoubleStreamBlock(nn.Module):
         img_modulated = self.img_norm1(img)
         txt_modulated = self.txt_norm1(txt)
         
-        # Инжекторы lora_A и lora_B строят Autograd-граф для электродов LoRA внутри qkv
+        # Наш LoRA инжектор перехватывает forward внутри img_attn.qkv и txt_attn.qkv,
+        # там Autograd-граф для электродов LoRA построится штатно!
         img_qkv = self.img_attn.qkv(img_modulated).contiguous()
         txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
         
@@ -275,7 +276,7 @@ class DoubleStreamBlock(nn.Module):
         txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
         img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
         
-        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ С ИЗОЛЯЦИЕЙ ТЕНЗОРОВ АКТИВАЦИЙчерез .detach()
+        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ С ИЗОЛЯЦИЕЙ ТЕНЗОРОВ ЧЕРЕЗ .detach()
         with torch.no_grad():
             img_proj_out = self.img_attn.proj(img_attn)
             img_mlp_out = self.img_mlp(self.img_norm2(img.detach()))
@@ -308,6 +309,8 @@ class SingleStreamBlock(nn.Module):
         x = x.to(target_dtype)
         
         x_mod = self.pre_norm(x)
+        
+        # Наш LoRA инжектор перехватывает forward внутри linear1, Autograd-граф здесь построится штатно!
         linear_out = self.linear1(x_mod).contiguous()
         
         qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
@@ -321,7 +324,7 @@ class SingleStreamBlock(nn.Module):
         attn = attention(q, k, v, pe=pe, mask=mask)
         attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
         
-        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Линейный слой linear2 заморожен и квантован
+        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Линейный слой linear2 заморожен и квантован, глушим Autograd
         with torch.no_grad():
             combined_features = torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1)
             output = self.linear2(combined_features)
