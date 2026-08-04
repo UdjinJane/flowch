@@ -276,21 +276,32 @@ class ChromaMMDiT(nn.Module):
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
     """
-    Управляет запуском реактора: разворачивает топологию, динамически
-    блокирует Autograd базы строго после инжекции и запирает оптимизатор на 152 параметрах LoRA.
+    Управляет запуском реактора: разворачивает топологию, сжимает базу весов в INT8 через TorchAO,
+    динамически блокирует Autograd базовой модели и запирает оптимизатор на LoRA-параметрах.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     CHROMA_MODEL_PATH = r"Z:\flowch\models_core\transformer\Chroma1-HD.safetensors"
     
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
-        
+    
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
-    # 2. Инжекция LoRA-электродов поверх базы Метрополии (Сварит ровно 76 швов)
+    # ==========================================================================
+    # СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Выполняется строго ДО инжекции LoRA слоев)
+    # ==========================================================================
+    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов в INT8...")
+    try:
+        from torchao.quantization import quantize_, int8_weight_only
+        # Пакуем замороженное ядро Метрополии, высвобождая ~8 ГБ VRAM
+        quantize_(model, int8_weight_only())
+        print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
+    except Exception as ao_err:
+        print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
+
+    # 2. Инжекция LoRA-электродов поверх сжатой базы (Сварит ровно 76 швов)
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
@@ -304,7 +315,7 @@ def run_reactor_forge():
         del state_dict # Мгновенное выжигание временного словаря из VRAM
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
-        
+    
     # ==========================================================================
     # СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальное принудительное выжигание левых градиентов базы
     # ==========================================================================
@@ -314,7 +325,6 @@ def run_reactor_forge():
             param.requires_grad = False
         else:
             param.requires_grad = True # Гарантируем стабильный BF16-ток для адаптеров
-    # ==========================================================================
     
     approximator = None
     mod_projector = None
@@ -323,7 +333,7 @@ def run_reactor_forge():
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
-
+    
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
     
@@ -339,7 +349,7 @@ def run_reactor_forge():
         from chroma_core.init import ChromaDataset
         dataset = ChromaDataset(latent_dir=LATENT_DIR, text_dir=TEXT_DIR)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
-
+        
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЧИСТОГО ЦИКЛА ПЛАВКИ ===")
     for step, batch in enumerate(dataloader):
         try:
@@ -350,7 +360,6 @@ def run_reactor_forge():
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
-            
     print("# === ДВИЖОК ВЕРИФИЦИРОВАН. СУХОЙ ПУСК LORA ПРОШЕЛ УСПЕШНО. КОНЕЦ СЕССИИ ===")
 
 if __name__ == "__main__":
