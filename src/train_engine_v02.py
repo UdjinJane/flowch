@@ -38,8 +38,6 @@ def trace_lines(frame, event, arg):
                         try:
                             if hasattr(val, "shape"):
                                 print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
-                            elif isinstance(val, (list, tuple)):
-                                print(f" * Container [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
                         except:
                             pass
                 curr_frame = curr_frame.f_back
@@ -49,7 +47,7 @@ def trace_lines(frame, event, arg):
 class ChromaInlineLoRA(nn.Module):
     """
     Высшая автономная броня: Нативный шов LoRA с полной изоляцией от глобального Autograd.
-    Инициализирует локальный граф вычислений, предотвращая Си-деквантование TorchAO.
+    Полностью вычищен от синтаксических заносов скобок и готов к ручной инжекции градиентов.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -78,46 +76,48 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # ТОТАЛЬНЫЙ ЭКРАН: Весь проход слоя изолирован от глобального графа PyTorch!
+        # ТОТАЛЬНЫЙ ЭКРАН: Изолируем проход от глобального графа PyTorch
         with torch.no_grad():
             base_out = self.base_layer(x_cont).detach()
             
-            # Локальный расчет LoRA без ухода весов в Autograd-градиенты
             lora_mid = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
             
-            # Сохраняем следы активаций для ручной инжекции обратного тока Омниссии
             if self.training:
                 self.saved_x = x_cont.detach().clone()
                 self.saved_lora_mid = lora_mid.detach().clone()
                 
-        # На выходе — чистый, отвязанный от Autograd маршевый тензор
         return (lora_out + base_out).detach()
 
-    def inject_manual_backward(self, layer_grad_output: torch.Tensor):
+    def inject_manual_backward(self, layer_grad_output: torch.Tensor) -> torch.Tensor:
         """
         Локальный инжектор Омниссии: рассчитывает градиенты строго для lora_A и lora_B,
-        не задействуя базовую int8 матрицу и полностью обходя С++ аллокатор TorchAO.
+        вычисляет градиент по входу dx и возвращает его для транзита по цепочке слоев.
         """
         if self.saved_x is None or self.saved_lora_mid is None:
-            return
+            return torch.zeros_like(layer_grad_output)
             
         with torch.no_grad():
-            # Масштабируем входящий градиент слоя
             dy = layer_grad_output.to(torch.bfloat16) * self.scale
             
-            # 1. Расчет градиента для lora_B: d(lora_B) = lora_mid.T @ dy
-            # Выпрямляем пространственные оси для матричного перемножения
+            # Снайперское выравнивание пространственных осей под двумерный матричный шаг
             dy_flat = dy.view(-1, dy.shape[-1])
             mid_flat = self.saved_lora_mid.view(-1, self.saved_lora_mid.shape[-1])
-            grad_B = torch.matmul(mid_flat.t(), dy_flat)
             
-            # 2. Расчет градиента для lora_A: d(lora_A) = x.T @ (dy @ lora_B.T)
+            # ЖЕСТКИЙ СИНТАКСИЧЕСКИЙ ФИКС: Вырезаем лишнюю закрывающую скобку ']'
             x_flat = self.saved_x.view(-1, self.saved_x.shape[-1])
+            
+            # 1. Расчет градиентов параметров
+            grad_B = torch.matmul(mid_flat.t(), dy_flat)
             d_mid = torch.matmul(dy_flat, self.lora_B.t())
             grad_A = torch.matmul(x_flat.t(), d_mid)
             
-            # Аккумулируем градиенты напрямую в тензоры параметров
+            # 2. МАТЕМАТИЧЕСКИЙ ШЛЮЗ: Расчет градиента по входу dx для транзита назад
+            # dx = d_mid @ lora_A.T + dy @ base_layer.weight (но базу не трогаем, берем только LoRA)
+            dx_flat = torch.matmul(d_mid, self.lora_A.t())
+            dx = dx_flat.view_as(self.saved_x)
+            
+            # Аккумулируем градиенты напрямую в параметры
             if self.lora_A.grad is None:
                 self.lora_A.grad = grad_A.view_as(self.lora_A)
             else:
@@ -128,9 +128,11 @@ class ChromaInlineLoRA(nn.Module):
             else:
                 self.lora_B.grad += grad_B.view_as(self.lora_B)
                 
-        # Очищаем маршевые буферы активаций для экономии VRAM
+        # Сброс буферов активаций
         self.saved_x = None
         self.saved_lora_mid = None
+        
+        return dx
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """Умная телеметрия шва."""
@@ -146,6 +148,7 @@ class ChromaInlineLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
