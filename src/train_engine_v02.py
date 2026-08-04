@@ -181,7 +181,7 @@ import time
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Тотально выжигает метаданные torchao из контура Loss через жесткую float32-стерилизацию.
+    Тотально выжигает метаданные torchao из входящих активаций через CPU-стерилизацию токенов.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -222,7 +222,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     
-    # МАРШЕВАЯ МОДИФИКАЦИЯ: target_velocity запечатывается в чистый float32 намертво, минуя bfloat16
+    # Target_velocity запечатывается в чистый float32 намертво, минуя bfloat16
     target_velocity = (x1.float() - x0.float()).detach()
     
     # Полная изоляция от глобального Autograd
@@ -245,7 +245,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     with torch.no_grad():
         pred_velocity_raw = model(xt, t5_hidden, mods)
         
-        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ: Выдергиваем тензор через CPU обратно в CUDA, полностью стирая С++ указатели torchao
+        # ТОТАЛЬНАЯ СТЕРИЛИЗАЦИЯ ВЫХОДА: Выдергиваем тензор через CPU обратно в CUDA, полностью стирая С++ указатели torchao
         pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
         
         # Расчет Loss на стерильных float32-тензорах
@@ -275,10 +275,12 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # Пред-расчет источников токенов
+        # === АБСОЛЮТНЫЙ КРЕМНИЕВЫЙ БАРЬЕР v4.0: Стерилизация входящих активаций базовых слоев ===
         xt_flat_base = model.pack_latents(xt)
-        static_img_tokens = model.img_in(xt_flat_base).detach()
-        static_txt_tokens = model.txt_in(t5_hidden).detach()
+        
+        # Прогоняем токены через CPU, полностью обнуляя Си-контексты cuBLAS для torchao
+        static_img_tokens = model.img_in(xt_flat_base).detach().cpu().clone().cuda()
+        static_txt_tokens = model.txt_in(t5_hidden).detach().cpu().clone().cuda()
         
         # Выравнивание склейки под геометрию Одиночных Блоков
         txt_len = 512 
@@ -344,6 +346,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
