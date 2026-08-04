@@ -461,7 +461,7 @@ def run_reactor_forge():
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
         
     # 3. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO (Перенесено на рабочее место после заливки весов)
-    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов в INT8...")
+    print("[RUN] Подключаю промышленный квантизатор TorchAO: поджимаю базу весов in INT8...")
     try:
         from torchao.quantization import quantize_, int8_weight_only
         quantize_(model, int8_weight_only())
@@ -473,19 +473,24 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
-    # 5. СУПЕР-ЗАЗАЩИТА ОМНИССИИ: Тотальная блокировка Autograd для базового ядра
-    print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базы...")
+    # 5. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Принудительно гасим Autograd для ВСЕХ базовых слоев без исключения
+    print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базового кремния...")
     for name, param in model.named_parameters():
         if "lora_" not in name:
             param.requires_grad = False
+            param.grad = None # Полное Си-стирание следов графов из памяти
         else:
             param.requires_grad = True
             
     approximator = None
     mod_projector = None
     
-    # 6. Фиксация 8-битного оптимизатора строго на 152 LoRA-параметрах
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    # 6. Фиксация 8-битного оптимизатора СТРОГО и ИСКЛЮЧИТЕЛЬНО на параметрах LoRA
+    trainable_params = []
+    for name, param in model.named_parameters():
+        if "lora_" in name:
+            trainable_params.append(param)
+            
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
     
