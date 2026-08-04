@@ -91,9 +91,14 @@ class ChromaInlineLoRA(nn.Module):
             # Снайперское выравнивание осей градиента под геометрию выходной матрицы шва
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
             
-            # Если слои склеены (SingleStreamBlock), подрезаем градиент по ширине входящих активаций
-            if dy.shape[1] != x_cont.shape[1]:
+            # ЖЕСТКАЯ ПАРАНОИДАЛЬНАЯ СИНХРОНИЗАЦИЯ ОСЕЙ ПОСЛЕДОВАТЕЛЬНОСТИ (Ликвидация тараканов)
+            if dy.shape[1] > x_cont.shape[1]:
                 dy = dy[:, :x_cont.shape[1], :]
+            elif dy.shape[1] < x_cont.shape[1]:
+                # Если градиент уже (DoubleStreamBlock текст/картинка), расширяем его нулями до длины активаций x_cont
+                padding_size = x_cont.shape[1] - dy.shape[1]
+                zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
+                dy = torch.cat([dy, zero_padding], dim=1)
                 
             # Перерасчет локального форварда "на лету" (Activation Checkpointing в вакууме графов)
             lora_mid = torch.matmul(x_cont, self.lora_A)
@@ -104,7 +109,6 @@ class ChromaInlineLoRA(nn.Module):
             x_flat = x_cont.view(-1, x_cont.shape[-1])
             
             # 1. Расчет градиентов параметров текущего электрода LoRA
-            # Если выходной слой qkv шире (сросшийся монолит), Си-умножение адаптирует форму автоматически
             if mid_flat.shape[0] == dy_flat.shape[0]:
                 grad_B = torch.matmul(mid_flat.t(), dy_flat)
                 d_mid = torch.matmul(dy_flat, self.lora_B.t())
