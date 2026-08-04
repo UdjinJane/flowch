@@ -180,7 +180,7 @@ import time
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Транслирует исходный градиент Loss напрямую во все швы, минуя цепной прожог dx сквозь базу.
+    Тотально изолирует тензор предсказаний через жесткий клон, уничтожая С++ триггер деквантования TorchAO.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -240,7 +240,12 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t_fwd_start = time.perf_counter()
     
     with torch.no_grad():
-        pred_velocity = model(xt, t5_hidden, mods)
+        pred_velocity_raw = model(xt, t5_hidden, mods)
+        
+        # ЖЕСТКАЯ СИ-ИЗОЛЯЦИЯ ОМНИССИИ: Полностью отвязываем тензор от С++ метаданных TorchAO
+        pred_velocity = pred_velocity_raw.detach().clone()
+        
+        # Теперь кастинг во float32 стерилен и не вызовет аварийного Си-выделения 128 Гигов
         loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
@@ -267,7 +272,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # ТОТАЛЬНЫЙ ПАРАНОИДАЛЬНЫЙ ФИКС: Пред-расчет ОБОИХ изолированных источников токенов
+        # Пред-расчет изолированных источников токенов
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
         static_txt_tokens = model.txt_in(t5_hidden).detach()
@@ -277,17 +282,15 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 4. АВТОНОМНЫЙ ЦЕПНОЙ ИНЖЕКТОР v3.0: Швы пьют ток изолированно, dx больше не передается по цепочке
+        # 4. АВТОНОМНЫЙ ЦЕПНОЙ ИНЖЕКТОР v3.0: Швы пьют ток изолированно
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                # Снайперский проброс строго целевого контекста активаций и независимого градиента
                 if "txt_attn" in name:
                     module.inject_manual_backward(base_grad_output, static_txt_tokens)
                 elif "img_attn" in name:
                     module.inject_manual_backward(base_grad_output, static_img_tokens)
                 else:
-                    # Для SingleStreamBlock.linear1 — передаем склеенный маршевый тензор градиента и активаций
                     combined_static = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
                     module.inject_manual_backward(combined_grad_output, combined_static)
             
@@ -340,6 +343,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
