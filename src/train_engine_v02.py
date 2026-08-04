@@ -46,55 +46,10 @@ def trace_lines(frame, event, arg):
             print("!"*80 + "\n")
     return trace_lines
 
-class LoRABackwardOp(torch.autograd.Function):
-    """
-    Изолированный Си++ Autograd-инжектор.
-    Вручную вычисляет дельты Омниссии без деквантования базового монолита.
-    """
-    @staticmethod
-    def forward(ctx, x_in, lora_mid_in, out_in, lora_A_param, lora_B_param, scale_val):
-        # Запечатываем параметры и промежуточные латенты в Autograd-контекст
-        ctx.save_for_backward(x_in, lora_mid_in, lora_A_param, lora_B_param)
-        ctx.scale_val = scale_val
-        ctx.lora_A_ref = lora_A_param
-        ctx.lora_B_ref = lora_B_param
-        return out_in.clone()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x_in, lora_mid_in, lora_A_param, lora_B_param = ctx.saved_tensors
-        scale = ctx.scale_val
-        
-        dY = grad_output.contiguous().to(torch.bfloat16)
-        dY_flat = dY.view(-1, dY.shape[-1])
-        lora_mid_flat = lora_mid_in.view(-1, lora_mid_in.shape[-1])
-        x_flat = x_in.view(-1, x_in.shape[-1])
-        
-        # 1. Вычисление ручного градиента для lora_B
-        grad_B = torch.matmul(lora_mid_flat.t(), dY_flat) * scale
-        if ctx.lora_B_ref.grad is None:
-            ctx.lora_B_ref.grad = grad_B
-        else:
-            ctx.lora_B_ref.grad += grad_B
-            
-        # 2. Вычисление ручного градиента для lora_A через промежуточную ось
-        d_mid = torch.matmul(dY_flat, lora_B_param.t())
-        grad_A = torch.matmul(x_flat.t(), d_mid) * scale
-        if ctx.lora_A_ref.grad is None:
-            ctx.lora_A_ref.grad = grad_A
-        else:
-            ctx.lora_A_ref.grad += grad_A
-            
-        # 3. Трансляция градиентного тока вверх по шине residual связей к предыдущим блокам
-        d_x = torch.matmul(d_mid, lora_A_param.t()).view_as(grad_output)
-        
-        # Возвращаем дельты строго по числу аргументов метода forward (6 элементов)
-        return d_x.to(grad_output.dtype), None, None, None, None, None
-
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая броня Метрополии: Кастомный шов LoRA с непрерывным Си-хуком бэкварда.
-    Полностью ампутирует базовую квантованную INT8 модель из Autograd-графа.
+    Высшая броня Метрополии: Нативный шов LoRA со сквозной изоляцией квантованной базы.
+    Удерживает эталонную форму тензоров и полностью отсекает backward TorchAO.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -105,6 +60,7 @@ class ChromaInlineLoRA(nn.Module):
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
         
+        # Единственные живые обучаемые параметры в контуре плавки
         self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
         self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
 
@@ -118,18 +74,20 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # БАЗА КРУТИТСЯ В АБСОЛЮТНОМ NO_GRAD (TorchAO полностью изолирован)
+        # ГЛУХАЯ ИЗОЛЯЦИЯ БАЗЫ НА УРОВНЕ ФОРВАРДА: Квантованное Си++ ядро считает без Autograd
         with torch.no_grad():
-            base_out = self.base_layer(x_cont)
+            base_out_raw = self.base_layer(x_cont)
+            
+        # Принудительно отрываем результат базы от графа, исключая ее из бэкварда на 100%
+        base_out = base_out_raw.detach()
+        
+        # НА ТИВНЫЙ AUTOGRAD-ТОК: Считаем LoRA-аппендикс с удержанием истории для входа x
+        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             lora_mid = torch.matmul(x_cont, self.lora_A)
             lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
             
-        # СОХРАНЯЕМ СКВОЗНОЙ ГРАДИЕНТНЫЙ ТОК: Связываем слой с историей бэкварда без участия TorchAO
-        x_trigger = x * 1.0
-        out = base_out + lora_out.to(base_out.dtype)
-        
-        # Прогоняем тензоры через защищенный оператор с трансляцией параметров
-        return LoRABackwardOp.apply(x_trigger, lora_mid, out, self.lora_A, self.lora_B, self.scale)
+        # Сложение сохраняет сквозной граф для LoRA, но база остается стерильным листом
+        return base_out + lora_out.to(base_out.dtype)
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """Умная телеметрия шва."""
