@@ -205,11 +205,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     else:
         t5_hidden = t5_raw[:, :512, :]
         
-    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: ЛОВИ ПАРАМЕТРЫ НА СТАРТЕ ===
+    # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ: СИНТАКСИЧЕСКИЙ ФИКС КАСТИНГА СТРОК ===
     if step == 0:
+        shape_vae_str = str(list(x1.shape))
+        shape_t5_str = str(list(t5_hidden.shape))
         print(f"\n┌── [МАРШЕВАЯ ТЕЛЕМЕТРИЯ ЯДРА RECTOR | ПУСКОВАЯ ВЕРИФИКАЦИЯ ВХОДОВ] ────────────────┐")
-        print(f"│ * Входной латент VAE  : Форма {list(x1.shape):<18} | Тип {x1.dtype:<10} | Mean {x1.abs().mean().item():.4f} │")
-        print(f"│ * Шина текста T5XXL   : Форма {list(t5_hidden.shape):<18} | Тип {t5_hidden.dtype:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
+        print(f"│ * Входной латент VAE  : Форма {shape_vae_str:<18} | Тип {x1.dtype:<10} | Mean {x1.abs().mean().item():.4f} │")
+        print(f"│ * Шина текста T5XXL   : Форма {shape_t5_str:<18} | Тип {t5_hidden.dtype:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
         print(f"│ * Полка видеопамяти   : Выделено {torch.cuda.memory_allocated()/1024**3:5.2f} ГБ     | Зарезервировано {torch.cuda.memory_reserved()/1024**3:5.2f} ГБ          │")
         print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
         
@@ -266,7 +268,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         grad_output = torch.matmul(grad_flat_64, final_weight)
         
-        # СТАБИЛИЗАЦИОННЫЙ МАНЕВР: Кэшируем проекцию токенов ОДИН РАЗ на входе, обрубая Си-вызовы из цикла
+        # Стабилизационный маневр: кэшируем проекцию токенов ОДИН РАЗ на входе
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach()
         
@@ -275,7 +277,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         zero_txt_grad = torch.zeros((B, txt_len, grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         grad_output = torch.cat([grad_output, zero_txt_grad], dim=1).contiguous()
         
-        # 5. ЦЕПНОЙ ИНЖЕКТОР: Пробрасываем градиент и передаем СТАТИЧНЫЙ пред-рассчитанный img_tokens
+        # 5. ЦЕПНОЙ ИНЖЕКТОР: Ручной марш градиентного тока сквозь все 76 швов LoRA
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
@@ -330,6 +332,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
