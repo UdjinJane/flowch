@@ -216,14 +216,13 @@ class SelfAttention(nn.Module):
         return x
 
 class DoubleStreamBlock(nn.Module):
-    """Маршевый спаренный блок с обводным шунтом для безопасного сухого пуска LoRA."""
+    """Маршевый спаренный блок с тотальным no_grad экранированием квантованной базы."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
         super().__init__()
         self.num_heads = num_heads
         self.hidden_size = hidden_size
         self.head_dim = hidden_size // num_heads
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        
         self.img_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.img_attn = SelfAttention(hidden_size, num_heads)
         self.img_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -232,7 +231,6 @@ class DoubleStreamBlock(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(mlp_hidden_dim, hidden_size, bias=True, dtype=torch.bfloat16),
         )
-        
         self.txt_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.txt_attn = SelfAttention(hidden_size, num_heads)
         self.txt_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -248,25 +246,22 @@ class DoubleStreamBlock(nn.Module):
         img = img.to(target_dtype)
         txt = txt.to(target_dtype)
         
-        # Наш огнеупорный обводной шунт Bypass:
         img_modulated = self.img_norm1(img)
         txt_modulated = self.txt_norm1(txt)
         
+        # Наш LoRA инжектор перехватывает forward внутри img_attn.qkv и txt_attn.qkv,
+        # там Autograd-граф для электродов LoRA построится штатно!
         img_qkv = self.img_attn.qkv(img_modulated).contiguous()
         txt_qkv = self.txt_attn.qkv(txt_modulated).contiguous()
         
-        # Нативный аппаратный .chunk() монолита QKV на 3 равных вектора
         img_q, img_k, img_v = img_qkv.chunk(3, dim=-1)
         txt_q, txt_k, txt_v = txt_qkv.chunk(3, dim=-1)
-        
         B, L_img, _ = img_q.shape
         _, L_txt, _ = txt_q.shape
         
-        # Выравнивание CUDA-геометрии строго под нативный устав SDPA [B, H, L, D]
         img_q = img_q.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         img_k = img_k.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         img_v = img_v.view(B, L_img, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
-        
         txt_q = txt_q.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         txt_k = txt_k.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         txt_v = txt_v.view(B, L_txt, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
@@ -276,29 +271,33 @@ class DoubleStreamBlock(nn.Module):
         v = torch.cat((txt_v, img_v), dim=2)
         
         attn = attention(q, k, v, pe=pe, mask=mask)
-        
-        # Числовой целочисленный срез по третьей оси (dim=2)
         txt_attn, img_attn = attn[:, :, :L_txt], attn[:, :, L_txt:]
         
-        # Перекладываем оси [B, H, L, D] -> [B, L, H*D] перед линейной проекцией Метрополии
         txt_attn = txt_attn.permute(0, 2, 1, 3).reshape(B, L_txt, self.hidden_size).contiguous()
         img_attn = img_attn.permute(0, 2, 1, 3).reshape(B, L_img, self.hidden_size).contiguous()
         
-        img = img + self.img_attn.proj(img_attn)
-        img = img + self.img_mlp(self.img_norm2(img))
-        txt = txt + self.txt_attn.proj(txt_attn)
-        txt = txt + self.txt_mlp(self.txt_norm2(txt))
+        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Вырезаем Autograd-трекинг для непропатченных тяжелых MLP и проекций
+        with torch.no_grad():
+            img_proj_out = self.img_attn.proj(img_attn)
+            img_mlp_out = self.img_mlp(self.img_norm2(img))
+            txt_proj_out = self.txt_attn.proj(txt_attn)
+            txt_mlp_out = self.txt_mlp(self.txt_norm2(txt))
+            
+        # Восстановление градиентного тока через остаточные связи (Residual Connections)
+        img = img + img_proj_out.to(img.dtype)
+        img = img + img_mlp_out.to(img.dtype)
+        txt = txt + txt_proj_out.to(txt.dtype)
+        txt = txt + txt_mlp_out.to(txt.dtype)
         return txt, img
 
 class SingleStreamBlock(nn.Module):
-    """Маршевый одиночный блок с обводным шунтом для безопасного сухого пуска LoRA."""
+    """Маршевый одиночный блок с тотальным no_grad экранированием квантованной базы."""
     def __init__(self, hidden_size: int, num_heads: int = 24, mlp_ratio: float = 4.0):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        
         self.linear1 = nn.Linear(hidden_size, hidden_size * 3 + self.mlp_hidden_dim, dtype=torch.bfloat16)
         self.linear2 = nn.Linear(hidden_size + self.mlp_hidden_dim, hidden_size, dtype=torch.bfloat16)
         self.pre_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
@@ -309,26 +308,26 @@ class SingleStreamBlock(nn.Module):
         target_dtype = self.linear1.weight.dtype
         x = x.to(target_dtype)
         
-        # Наш огнеупорный обводной шунт Bypass:
         x_mod = self.pre_norm(x)
+        
+        # Наш LoRA инжектор перехватывает forward внутри linear1, Autograd-граф здесь построится штатно!
         linear_out = self.linear1(x_mod).contiguous()
         
-        # Разделение монолита по уставной маске Метрополии
         qkv, mlp = torch.split(linear_out, [3 * self.hidden_size, self.mlp_hidden_dim], dim=-1)
-        
-        # Безопасный аппаратный .chunk() вместо Einops-распаковок
         q, k, v = qkv.chunk(3, dim=-1)
-        
         B, L, _ = q.shape
+        
         q = q.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         k = k.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         v = v.view(B, L, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
         
         attn = attention(q, k, v, pe=pe, mask=mask)
-        
-        # Перекладываем оси из [B, H, L, D] строго в [B, L, H, D] перед склейкой шины
         attn_flat = attn.permute(0, 2, 1, 3).reshape(B, L, self.hidden_size).contiguous()
         
-        output = self.linear2(torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1))
-        return x + output
+        # ТОТАЛЬНОЕ ЭКРАНИРОВАНИЕ БАЗЫ: Линейный слой linear2 заморожен и квантован, глушим Autograd
+        with torch.no_grad():
+            combined_features = torch.cat((attn_flat, self.mlp_act(mlp)), dim=-1)
+            output = self.linear2(combined_features)
+            
+        return x + output.to(x.dtype)
 #---------------- Конец Блока №4_ЯДРО -----------------
