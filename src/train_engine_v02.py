@@ -402,7 +402,7 @@ def run_reactor_forge():
                 save_lora_checkpoint(model, checkpoint_path)
                 
             # Для выхода в длительный марш на 2000 шагов — просто закомментируйте 'break' ниже!
-            break
+            # break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
