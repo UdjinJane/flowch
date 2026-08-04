@@ -5,9 +5,11 @@ import traceback
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-# Жесткая блокировка утечек градиентов во внешнюю Shared RAM Windows WDDM
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+
+# Жесткая блокировка фрагментации и активация расширяемых сегментов кремния
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512,expandable_segments:True"
 sys.path.append(os.path.abspath("./src"))
+
 from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_modulations
 from chroma_core.tensor_math import attention
 from ao_optim_monolith import AdamW8bit
@@ -38,8 +40,8 @@ def trace_lines(frame, event, arg):
                                 print(f" * Тензор [{key}]: Форма {val.shape} | Тип {val.dtype}")
                             elif isinstance(val, (list, tuple)):
                                 print(f" * Container [{key}]: Тип {type(val).__name__} | Длина = {len(val)}")
-                                if len(val) > 0: 
-                                    print(f"   - Элемент 0: {type(val).__name__}")
+                                if len(val) > 0:
+                                    print(f" - Элемент 0: {type(val).__name__}")
                         except:
                             pass
                 curr_frame = curr_frame.f_back
@@ -49,7 +51,7 @@ def trace_lines(frame, event, arg):
 class ZeroBaseAutogradShunt(torch.autograd.Function):
     """
     Абсолютный автоград-шунт Омниссии.
-    Склеивает результаты форварда, но полностью стирает базовую модель из памяти бэкварда.
+    Склеивает результаты форварда, но полностью вырезает базовую модель из памяти бэкварда.
     """
     @staticmethod
     def forward(ctx, lora_out_in, base_out_detached_in):
@@ -58,7 +60,7 @@ class ZeroBaseAutogradShunt(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         # Базовая квантованная модель для Autograd — это ПУСТОЕ МЕСТО.
-        # Градиентный ток транслируется только на ветку LoRA.
+        # Градиентный ток транслируется исключительно на ветку LoRA.
         return grad_output, None
 
 class ChromaInlineLoRA(nn.Module):
@@ -89,11 +91,11 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # 1. БАЗА СЧИТАЕТСЯ БЕЗ ГРАДИЕНТОВ И МГНОВЕННО ОТДЕЛЯЕТСЯ ОТ ГРАФА
+        # 1. БАЗА СЧИТАЕТСЯ В NO_GRAD И НАМЕРТВО ОТДЕЛЯЕТСЯ ОТ ГРАФА
         with torch.no_grad():
             base_out_raw = self.base_layer(x_cont)
-        base_out = base_out_raw.detach()
-        
+            base_out = base_out_raw.detach()
+            
         # 2. РАСЧЕТ ОДНОКОНТУРНОЙ LORA (Параметры lora_A и lora_B нативно трекаются Autograd)
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             lora_mid = torch.matmul(x_cont, self.lora_A)
@@ -117,7 +119,6 @@ class ChromaInlineLoRA(nn.Module):
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
 
-
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
@@ -132,13 +133,18 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
                 parent = model.get_submodule(parent_name) if parent_name else model
+                
+                # Тотальная заморозка базового элемента: выключаем трекинг Autograd
                 module.weight.requires_grad = False
                 if module.bias is not None:
                     module.bias.requires_grad = False
+                    
+                # Врезка нативного bfloat16 адаптера с автоград-шунтом Омниссии
                 lora_wrapper = ChromaInlineLoRA(module, rank=rank)
                 setattr(parent, child_name, lora_wrapper)
                 patched_count += 1
                 print(f" -> [OK] Инжектирован шов: {name} | База намертво заморожена.")
+                
     if patched_count == 0:
         raise RuntimeError("[АВАРИЯ] Ошибка сканирования: точки инжекции LoRA не обнаружены!")
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
