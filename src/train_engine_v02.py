@@ -199,14 +199,15 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Укрупненной Каскадной Броней) -----------
+#---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 from torch.utils.checkpoint import checkpoint
 
 class ChromaMMDiT(nn.Module):
     """
     Модернизированный маршевый трансформер Chroma.
-    19 спаренных блоков сгруппированы в 4 укрупненных каскада чекпоинтинга.
-    Это снижает нагрузку на Autograd-граф и полностью выжигает WDDM Shared RAM оверсвап.
+    Использует классический послойный реентерабельный чекпоинтинг (use_reentrant=True).
+    Это принудительно очищает активации Autograd на C++ уровне сразу после прохода блока,
+    полностью уничтожая спиллинг Windows WDDM в Shared RAM.
     """
     def __init__(self, hidden_size: int = 3072, num_double: int = 19, num_single: int = 38):
         super().__init__()
@@ -229,18 +230,9 @@ class ChromaMMDiT(nn.Module):
         x = x.permute(0, 2, 4, 1, 3, 5)
         return x.reshape(B, (H // 2) * (W // 2), C * 4)
 
-    def _run_cascade(self, start_idx: int, end_idx: int, txt_tokens: torch.Tensor, img_tokens: torch.Tensor):
-        """Внутренний маршевый изолятор для прогона локальной группы блоков внутри чекпоинта."""
-        # ГЕРМЕТИЗАЦИЯ ШВА: Явное приведение индексов к int для стабильного шага итератора
-        for idx in range(int(start_idx), int(end_idx)):
-            txt_tokens, img_tokens = self.double_blocks[idx](
-                txt_tokens, img_tokens, None, None, None
-            )
-        return txt_tokens, img_tokens
-
     def forward(self, x_latent: torch.Tensor, txt_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый проход трансформера Chroma1-HD с полным подавлением PCIe-спиллинга.
+        Маршевый проход трансформера Chroma1-HD с тотальной изоляцией активаций Autograd.
         """
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
@@ -256,29 +248,24 @@ class ChromaMMDiT(nn.Module):
         txt_len = txt_tokens.shape[1]
         
         # ==========================================================================
-        # КАСКАДНАЯ СБОРКА АВТОГРАДА: Нарезаем 19 блоков на 4 крупные зоны контроля.
-        # Координаты передаются как чистые int-параметры. Контур WDDM изолирован.
+        # ЖЕСТКАЯ РЕЕНТЕРАБЕЛЬНАЯ БРОНЯ: Послойная очистка памяти на C++ уровне
+        # Передаем уставные аргументы Метрополии сквозь классический чекпоинт
         # ==========================================================================
-        # Зона 1: Блоки 0-5 (6 блоков)
-        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-            self._run_cascade, 0, 6, txt_tokens, img_tokens, use_reentrant=False
-        )
-        # Зона 2: Блоки 6-11 (6 blocks)
-        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-            self._run_cascade, 6, 12, txt_tokens, img_tokens, use_reentrant=False
-        )
-        # Зона 3: Блоки 12-16 (5 блоков)
-        txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
-            self._run_cascade, 12, 17, txt_tokens, img_tokens, use_reentrant=False
-        )
-        # Зона 4: Блоки 17-18 (Финал, 2 блока) - Пускаем напрямую без чекпоинта
-        txt_tokens, img_tokens = self._run_cascade(17, 19, txt_tokens, img_tokens)
+        for block in self.double_blocks:
+            # Движок use_reentrant=True требует, чтобы функция возвращала и принимала тензоры.
+            # Обертка-лямбда жестко изолирует контекст выполнения каждого спаренного блока.
+            txt_tokens, img_tokens = torch.utils.checkpoint.checkpoint(
+                lambda t, i: block(t, i, None, None, None),
+                txt_tokens,
+                img_tokens,
+                use_reentrant=True
+            )
             
         # Склеивание очищенных потоков для одиночного параллельного каскада
         x_combined = torch.cat([txt_tokens, img_tokens], dim=1)
         
-        # Одиночные блоки идут напрямую в кремнии
-        for i, block in enumerate(self.single_blocks):
+        # Одиночные блоки идут напрямую в чистом кремнии
+        for block in self.single_blocks:
             x_combined = block(x=x_combined, pe=None, distill_vec=None, mask=None)
             
         # Восстановление исходной 4D-геометрии латентов
