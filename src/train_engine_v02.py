@@ -262,7 +262,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
-
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
@@ -303,7 +302,7 @@ class ChromaMMDiT(nn.Module):
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
-        # ЖЕСТКИЙ ФИКС: Извлекаем скалярную длину оси последовательности токенов
+        # СНАЙПЕРСКИЙ ФИКС: Извлекаем строго скалярную длину последовательности токенов
         img_len = img_tokens.shape[1]
         
         # Прямой каскад спаренных блоков Метрополии без вовлечения базового Autograd
@@ -323,7 +322,7 @@ class ChromaMMDiT(nn.Module):
         for block in self.single_blocks:
             x_combined = block(x_combined, None, mods["single"], None)
             
-        # Снайперское отсечение графика-токенов: берем строго скалярный img_len
+        # Снайперское отсечение графика-токенов по скалярному индексу img_len
         pred_img_flat = x_combined[:, :img_len].contiguous()
         pred_img_flat = self.final_layer(pred_img_flat)
         
@@ -334,6 +333,7 @@ class ChromaMMDiT(nn.Module):
         out = out.permute(0, 3, 1, 4, 2, 5)
         return out.reshape(B, 16, H_raw, W_raw)
 #---------------- Конец Блока 4 -----------------
+
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
 def save_lora_checkpoint(model: nn.Module, save_path: str):
     """
