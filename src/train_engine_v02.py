@@ -46,8 +46,8 @@ def trace_lines(frame, event, arg):
 
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая автономная броня v3.0: Нативный шов LoRA с протоколом изолированного бэкворда.
-    Полностью ампутирует расчет dx, исключая междевайсовые Си-заносы аллокатора TorchAO.
+    Высшая автономная броня v6.0: Нативный шов LoRA с тотальной Си-изоляцией весов адаптеров.
+    Ампутирует nn.Parameter, превращая веса в скрытые тензоры для защиты от деквантования TorchAO.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -58,9 +58,14 @@ class ChromaInlineLoRA(nn.Module):
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
         
-        # Обучаемые параметры шва в чистом bfloat16
-        self.lora_A = nn.Parameter(torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02)
-        self.lora_B = nn.Parameter(torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device))
+        # КРИТИЧЕСКИЙ СИ-ФИКС: Веса объявляются как чистые тензоры, скрытые от PyTorch параметров!
+        # Это физически блокирует С++ триггер деквантования TorchAO во время форварда.
+        self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
+        self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
+        
+        # Инициализируем Си-буферы градиентов вручную
+        self.lora_A.grad = None
+        self.lora_B.grad = None
 
     def __getattr__(self, name: str):
         try:
@@ -72,7 +77,7 @@ class ChromaInlineLoRA(nn.Module):
         ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
         x_cont = x.contiguous().to(torch.bfloat16)
         
-        # РЕЖИМ СУХОГО ХОДА: Абсолютный no_grad экран базового монолита Метрополии
+        # Абсолютный no_grad экран базового монолита Метрополии работает на сухих Си-тензорах
         with torch.no_grad():
             base_out = self.base_layer(x_cont).detach()
             lora_mid = torch.matmul(x_cont, self.lora_A)
@@ -82,39 +87,35 @@ class ChromaInlineLoRA(nn.Module):
 
     def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
         """
-        Локальный инжектор Омниссии v3.0: принимает чистый градиент от Loss и пред-рассчитанные
-        на старте токенизированные активации. Рассчитывает grad_A и grad_B без трансляции dx назад.
+        Локальный инжектор Омниссии v6.0: Рассчитывает градиенты на изолированных Си-тензорах,
+        аккумулируя их в ручные буферы .grad без вовлечения глобального Autograd-графа.
         """
         with torch.no_grad():
             x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
-            
-            # Снайперское выравнивание осей градиента под геометрию выходной матрицы шва
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
             
-            # ЖЕСТКАЯ ПАРАНОИДАЛЬНАЯ СИНХРОНИЗАЦИЯ ОСЕЙ ПОСЛЕДОВАТЕЛЬНОСТИ (Ликвидация тараканов)
+            # Жесткая синхронизация осей последовательности
             if dy.shape[1] > x_cont.shape[1]:
                 dy = dy[:, :x_cont.shape[1], :]
             elif dy.shape[1] < x_cont.shape[1]:
-                # Если градиент уже (DoubleStreamBlock текст/картинка), расширяем его нулями до длины активаций x_cont
                 padding_size = x_cont.shape[1] - dy.shape[1]
                 zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
                 dy = torch.cat([dy, zero_padding], dim=1)
                 
-            # Перерасчет локального форварда "на лету" (Activation Checkpointing в вакууме графов)
+            # Перерасчет локального форварда "на лету"
             lora_mid = torch.matmul(x_cont, self.lora_A)
             
-            # Проекция на двухмерную плоскость для матричного умножения Си-ядра
             dy_flat = dy.view(-1, dy.shape[-1])
             mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
             x_flat = x_cont.view(-1, x_cont.shape[-1])
             
-            # 1. Расчет градиентов параметров текущего электрода LoRA
+            # Расчет градиентов параметров текущего электрода LoRA
             if mid_flat.shape[0] == dy_flat.shape[0]:
                 grad_B = torch.matmul(mid_flat.t(), dy_flat)
                 d_mid = torch.matmul(dy_flat, self.lora_B.t())
                 grad_A = torch.matmul(x_flat.t(), d_mid)
                 
-                # Аккумулируем градиенты напрямую в параметры шва
+                # Вручную аккумулируем градиенты в Си-буферы тензоров
                 if self.lora_A.grad is None:
                     self.lora_A.grad = grad_A.view_as(self.lora_A)
                 else:
@@ -125,7 +126,6 @@ class ChromaInlineLoRA(nn.Module):
                 else:
                     self.lora_B.grad += grad_B.view_as(self.lora_B)
                     
-        # Полная изоляция: возвращаем None, цепочка dx оборвана и уничтожена во избежание деквантования
         return None
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
