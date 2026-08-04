@@ -1,4 +1,4 @@
-#-------------------- Блок №1: Хедер, Телеметрия и Модуляционные Контейнеры --------------------
+#-------------------- Блок №1: Хедер, Телеметрия, Модуляционные Контейнеры и Импорт Математики -------
 """
 ================================================================================
 МАРШЕВОЕ ОЧИЩЕННОЕ ЯДРО ГЕОМЕТРИИ РЕАКТОРА CHROMA V50
@@ -14,6 +14,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from dataclasses import dataclass
+
+# ГЕРМЕТИЗАЦИЯ КОНТУРА: Подтягиваем нативный огнеупорный attention напрямую из математического движка
+from chroma_core.tensor_math import attention
 
 @dataclass
 class ModulationOut:
@@ -38,7 +41,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.scale = nn.Parameter(torch.ones(dim))
-
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ChromaTelemetry.verify(x, "RMSNorm.input")
         x_dtype = x.dtype
@@ -49,6 +52,7 @@ class RMSNorm(nn.Module):
         ChromaTelemetry.verify(out, "RMSNorm.output")
         return out
 #-------------------- Конец блока №1 ----------------------------
+
 #-------------------- Блок №2: Маршевые Эмбеддеры и Изолированный DCT NeRF --------------------
 def timestep_embedding(timesteps: torch.Tensor, dim: int, max_period: int = 10000, time_factor: float = 1000.0) -> torch.Tensor:
     """Генерация синусоидальных эмбеддингов временных координат (Rectified Flow)."""
