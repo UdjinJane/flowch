@@ -260,11 +260,11 @@ class ChromaMMDiT(nn.Module):
 
 
 
-#---------------- Старт Блока 5 (Контур Инициализации, Изоляции Оптимизатора и Точка Входа) --------
+#---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Точка Входа) ---
 def run_reactor_forge():
     """
-    Управляет запуском реактора: разворачивает топологию, динамически 
-    блокирует Autograd базы и запирает 8-битный оптимизатор строго на весах LoRA.
+    Управляет запуском реактора: разворачивает топологию, динамически
+    блокирует Autograd базы строго после инжекции и запирает оптимизатор на 152 параметрах LoRA.
     """
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -277,17 +277,11 @@ def run_reactor_forge():
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
     
-    # 2. Безопасное аппаратное отключение Autograd для базовой модели (Экономия 12 ГБ VRAM)
-    print("[RUN] Блокирую Autograd для базовой геометрии трансформера...")
-    for name, param in model.named_parameters():
-        if "img_in" not in name and "txt_in" not in name and "final_layer" not in name:
-            param.requires_grad = False
-
-    # 3. Инжекция LoRA-электродов поверх изолированной базы (Master Weights в bfloat16)
+    # 2. Инжекция LoRA-электродов поверх базы Метрополии (Сварит ровно 76 швов)
     patched_count = patch_chroma_reactor(model, rank=16)
     model = model.to(device)
     
-    # 4. Подгрузка чистокровных весов safetensors напрямую в CUDA
+    # 3. Подгрузка чистокровных весов safetensors напрямую в CUDA
     print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
     try:
         from safetensors.torch import load_file
@@ -297,14 +291,25 @@ def run_reactor_forge():
         del state_dict # Мгновенное выжигание временного словаря из VRAM
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
+        
+    # ==========================================================================
+    # СУПЕР-ЗАЩИТА ОМНИССИИ: Тотальное принудительное выжигание левых градиентов базы
+    # ==========================================================================
+    print("[RUN] Активирую абсолютный фильтр градиентов: замораживаю 100% базы...")
+    for name, param in model.named_parameters():
+        if "lora_" not in name:
+            param.requires_grad = False
+        else:
+            param.requires_grad = True # Гарантируем стабильный BF16-ток для адаптеров
+    # ==========================================================================
     
     approximator = None
     mod_projector = None
     
-    # 5. ГЕРМЕТИЗАЦИЯ ШВА: Запираем AdamW8bit СТРОГО на обучаемых параметрах LoRA (requires_grad=True)
+    # 4. Запираем AdamW8bit СТРОГО на эталонных 152 LoRA-параметрах (76 швов * 2 матрицы)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
-    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах.")
+    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах (Ожидается ровно 152!).")
 
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
