@@ -1,35 +1,43 @@
-      [ ДИСКОВЫЙ НАКОПИТЕЛЬ Z: ]
-                  │
-         ┌────────┴────────┐
-         ▼                 ▼
-  [ latent_cache ]   [ text_cache ]
-     (bfloat16)          (dict)
-         │                 │
-         │                 ├─► ['clip_hidden'] ──┐
-         │                 └─► ['t5_hidden'] ───┼┐
-         ▼                                      ││
-┌──────────────────────────────────────────────┐││
-│  src\chroma_core\__init__.py                 │││
-│  Класс: ChromaDataset                        │││
-│  - Извлекает латенты [1, 16, 128, 128]       │││
-│  - Склеивает векторы clip + t5 по осям       │││
-└────────────────┘─────────────────────────────┘││
-                 │                              ││
-                 ▼ (Поток латентов и текста)    ││
-┌──────────────────────────────────────────────┐││
-│  src\chroma_core\layers_clean.py             │││
-│  Модель: Chroma v50 MMDiT (Flow Matching)    │◀┘│
-│  - Входная модуляция (AdaLN) ────────────────┼──┘
-│  - 19 DoubleStreamBlocks (Внимание + MLP)    │
-│    └─► Инжекция LoRA (Rank<=16, Alpha=16)     │
-│  - 38 SingleStreamBlocks (Унифицированный)   │
-│    └─► Инжекция LoRA (.attn.to_q/k/v/out)    │
-└────────────────┬─────────────────────────────┘
-                 │
-                 ▼ (Расчет Loss: Rectified Flow)
-┌──────────────────────────────────────────────┐
-│  src\ao_optim_monolith.py                    │
-│  Оптимизатор: AdamW8bit                      │
-│  - Снайперское квантование моментов в int8   │
-│  - Удержание полки VRAM строго <= 21.0 GB    │
-└──────────────────────────────────────────────┘
+{
+  "project": "Chroma_v50_Rector_Forge_v4.0_Shield",
+  "hw_constraints": {
+    "gpu": "RTX 3090 24GB VRAM",
+    "os_driver": "Windows 11 WDDM (expandable_segments=False, max_split_size_mb=512)",
+    "pcie_spill_limit": "Shared RAM оверсвап при VRAM > 23.5GB рубит рантайм по OOM 128/384GB"
+  },
+  "env_stack": {
+    "python": "3.10+",
+    "pytorch": "2.2.0+cu121",
+    "torchao": "0.1.0+",
+    "bitsandbytes": "0.41.0+ (AdamW8bit)"
+  },
+  "core_topology": {
+    "model_name": "Chroma1-HD (MMDiT)",
+    "blocks": {
+      "double_stream": 19,
+      "single_stream": 38
+    },
+    "fixed_inputs": {
+      "latent_vae": "[B, 16, 64, 64] принудительный сухой пук 4x урезание",
+      "text_t5xxl": "[B, 512, 4096] жесткий инлайн-паддинг"
+    },
+    "base_quant": "TorchAO int8_weight_only() строго на базовые слои до инжекции LoRA",
+    "lora_injector": {
+      "total_electrodes": 76,
+      "master_weights": 152,
+      "targets": ["txt_attn.qkv", "img_attn.qkv", "linear1"],
+      "filters": ["*.proj", "mlp_hidden_dim выходные"]
+    }
+  },
+  "shield_autograd_v3": {
+    "forward_mode": "with torch.no_grad() тотальный вакуум графов",
+    "lora_weights": "Чистые сухие Си-тензоры torch.Tensor (requires_grad=True, НЕ nn.Parameter)",
+    "backward_manager": {
+      "type": "Автономный изолированный цепной инжектор Омниссии",
+      "loss_gradient": "dL/d(pred) = 2 * (pred - target) / N в чистом float32",
+      "pixel_shuffle_reverse": "4D [B, 16, 64, 64] -> 3D [B, 1024, 64] токенов",
+      "gradient_transit": "dx = None (эстафета убита, полная блокировка С++ деквантования TorchAO)",
+      "checkpointing": "Ручной послойный перерасчет lora_mid на лету из static_img_tokens и static_txt_tokens"
+    }
+  }
+}
