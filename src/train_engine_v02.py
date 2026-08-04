@@ -237,15 +237,18 @@ class ChromaMMDiT(nn.Module):
         if len(txt_hidden.shape) == 4:
             txt_hidden = txt_hidden.squeeze(1)
             
-        x_latent = x_latent.to(torch.bfloat16)
-        txt_hidden = txt_hidden.to(torch.bfloat16)
-        
         # Инициализация токенов через входные сенсоры
         xt_flat = self.pack_latents(x_latent)
         img_tokens = self.img_in(xt_flat)
         txt_tokens = self.txt_in(txt_hidden)
         
+        # ==========================================================================
+        # ИСПРАВЛЕНИЕ ЗАНОСА: Искусственный поджиг Autograd графа для use_reentrant=True
+        # Скрытый маркер заставит PyTorch строить граф LoRA внутри чекпоинтов!
+        # ==========================================================================
+        img_tokens.requires_grad_(True) 
         txt_len = txt_tokens.shape[1]
+
         
         # ==========================================================================
         # ЖЕСТКАЯ РЕЕНТЕРАБЕЛЬНАЯ БРОНЯ: Послойная очистка памяти на C++ уровне
