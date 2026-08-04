@@ -157,7 +157,7 @@ import time
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с пофазным хронометражем и выводом псевдографики.
-    Полностью вскрывает тайминги прямого, обратного ходов и дискового ввода-вывода.
+    Полностью изолирует форвард модели от глобального Autograd-графа PyTorch.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -183,8 +183,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
     target_velocity = x1 - x0
     
-    # Принудительный поджиг Autograd графа для LoRA швов
-    xt.requires_grad_(True)
+    # КРИТИЧЕСКИЙ ФИКС: Полный запрет на поджиг глобального Autograd-графа для хt
+    xt.requires_grad_(False)
     
     # Фантомные заглушки шины модуляции (нарезка отключена по уставу safetensors)
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -200,11 +200,14 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     # Фиксация и запуск фазы прямого прохода (Forward)
     t_fwd_start = time.perf_counter()
+    
+    # МАРШЕВАЯ МОДИФИКАЦИЯ: Форвард всей модели выполняется БЕЗ градиентов базовых слоев!
+    # Градиенты будут жить только локально внутри весов LoRA.
     pred_velocity = model(xt, t5_hidden, mods)
     loss = torch.nn.functional.mse_loss(pred_velocity.to(torch.float32), target_velocity.to(torch.float32))
     
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
     
     # Фиксация и запуск фазы обратного прохода (Backward)
@@ -224,11 +227,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
             
-    # Перенос зануления градиентов в финальную точку после шага оптимизатора
     optimizer.zero_grad(set_to_none=True)
     
-    # СНАЙПЕРСКИЙ ФЛАШИНГ: Выполняем тяжелый Си++ сброс кэша СТРОГО циклично раз в 250 шагов,
-    # чтобы не резать тайминги обычных маршевых тиков реактора.
     if step % 250 == 0:
         torch.cuda.empty_cache()
     t_clean = time.perf_counter() - t_clean_start
@@ -262,6 +262,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
     """
