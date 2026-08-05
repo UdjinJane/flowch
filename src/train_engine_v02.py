@@ -140,37 +140,40 @@ class ChromaInlineLoRA(nn.Module):
 #---------------- Конец Блока 1 -----------------
 
 
-#---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией проекций proj) ----------------
+#---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией сросшихся QKV и врезкой в PROJ/LINEAR2) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
     Динамически обходит граф весов трансформера и врезает LoRA-электроды.
-    Жестко фильтрует проекции .proj, перехватывая только монолитные QKV-матрицы.
+    Жестко отсекает сросшиеся QKV-матрицы во избежание Си-капкана cuBLAS на 384 ГБ.
+    Инжектирует швы во внешние проекции .proj и монолитные слои линейного вывода .linear2.
     """
     patched_count = 0
     print("# === ИНИЦИАЛИЗАЦИЯ ИНЖЕКЦИИ АДАПТЕРОВ В ЯДРО RECTOR ===")
     for name, module in model.named_modules():
-        if any(target in name for target in ["txt_attn.qkv", "img_attn.qkv", "linear1"]):
+        # Снайперский перенос огня со сросшихся матриц на изолированные выходные проекции
+        if any(target in name for target in ["img_attn.proj", "txt_attn.proj", "linear2"]):
             if isinstance(module, nn.Linear):
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
                 parent = model.get_submodule(parent_name) if parent_name else model
-                
+
                 # Тотальная заморозка базового элемента: выключаем трекинг Autograd
                 module.weight.requires_grad = False
                 if module.bias is not None:
                     module.bias.requires_grad = False
-                    
+
                 # Врезка нативного bfloat16 адаптера с автоград-шунтом Омниссии
                 lora_wrapper = ChromaInlineLoRA(module, rank=rank)
                 setattr(parent, child_name, lora_wrapper)
                 patched_count += 1
-                print(f" -> [OK] Инжектирован шов: {name} | База намертво заморожена.")
-                
+                print(f" -> [OK] Инжектирован шов: {name} | Выходной калибр защищен, база намертво заморожена.")
+
     if patched_count == 0:
-        raise RuntimeError("[АВАРИЯ] Ошибка сканирования: точки инжекции LoRA не обнаружены!")
+        raise RuntimeError("[АВАРИЯ] Ошибка сканирования: безопасные точки инжекции LoRA (.proj/.linear2) не обнаружены!")
     print(f"# === ИНЖЕКЦИЯ ЗАВЕРШЕНА. УСПЕШНО СВАРЕНО ШВОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
+
 
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
@@ -428,30 +431,31 @@ def save_lora_checkpoint(model: nn.Module, save_path: str):
     print(f"\n# === ЗАПУСК ИНСПЕКЦИИ КОНТУРА СОХРАНЕНИЯ: {save_path} ===")
     lora_state_dict = {}
     corrupted_weights = 0
-    
+
     # Снайперский ручной сбор изолированных Си-тензоров LoRA из модулей
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
             t_A = module.lora_A.detach().clone().cpu().to(torch.bfloat16)
             t_B = module.lora_B.detach().clone().cpu().to(torch.bfloat16)
-            
+
             if torch.isnan(t_A).any() or torch.isinf(t_A).any():
                 print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Поврежден lora_A в слое: {name}")
                 corrupted_weights += 1
             if torch.isnan(t_B).any() or torch.isinf(t_B).any():
                 print(f" -> [КРАХ ТЕЛЕМЕТРИИ] Поврежден lora_B в слое: {name}")
                 corrupted_weights += 1
-                
+
             lora_state_dict[f"{name}.lora_A"] = t_A
             lora_state_dict[f"{name}.lora_B"] = t_B
-            
+
     if corrupted_weights > 0:
         print(f" [WARN] Обнаружено поврежденных швов: {corrupted_weights}. Запись заблокирована для защиты ядра!")
         return False
-        
+
+    # Общее число параметров под новую конфигурацию: 19 * 2 (img_proj + txt_proj) + 38 (linear2) = 76 швов (152 Си-тензора)
     if len(lora_state_dict) != 152:
-        print(f" [WARN] Аномалия tobacco контура: собрано {len(lora_state_dict)} параметров вместо уставных 152!")
-        
+        print(f" [WARN] Аномалия контура: собрано {len(lora_state_dict)} параметров вместо уставных 152!")
+
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         from safetensors.torch import save_file
@@ -470,17 +474,17 @@ def run_reactor_forge():
     print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CHROMA_MODEL_PATH = r"Z:\flowch\models_core\transformer\Chroma1-HD.safetensors"
-    
+
     if not os.path.exists(CHROMA_MODEL_PATH):
         raise FileNotFoundError(f"[АВАРИЯ] Заводской сейфтензор не найден по адресу: {CHROMA_MODEL_PATH}")
-        
+
     # ЖЕСТКИЙ СИ-ШУНТ: Отключаем внутреннюю Си-буферизацию cuBLAS во избежание резервации 128-ГБ блоков
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    
+
     # 1. Сборка маршевого трансформера в эталонной геометрии
     model = ChromaMMDiT()
-    
+
     # 2. ПОДГРУЗКА ЗАВОДСКОЙ ПЛАЗМЫ (Выполняется строго ДО квантования)
     print(f"[RUN] Загружаю заводскую плазму из {CHROMA_MODEL_PATH}...")
     try:
@@ -491,10 +495,10 @@ def run_reactor_forge():
         del state_dict
     except Exception as s_err:
         raise RuntimeError(f"[АВАРИЯ ВЕСОВ] Крах инициализации safetensors: {s_err}")
-        
+
     # 3. ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ: Прячем наши структуры от Си-рантайма TorchAO!
     patched_count = patch_chroma_reactor(model, rank=16)
-    
+
     # 4. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ ДО КВАНТОВАНИЯ
     trainable_params = []
     for name, module in model.named_modules():
@@ -502,16 +506,16 @@ def run_reactor_forge():
             module.lora_A.requires_grad_(True)
             module.lora_B.requires_grad_(True)
             trainable_params.extend([module.lora_A, module.lora_B])
-            
+
     # Фиксация 8-битного оптимизатора в чистом кремнии
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
     print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах.")
-        
+
     # 5. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO СТРОГО НА БАЗОВЫЕ СЛОИ: Игнорируем наши LoRA швы!
     print("[RUN] Подключаю промышленный квантизатор TorchAO строго на базовый монолит весов...")
     try:
         from torchao.quantization import quantize_, int8_weight_only
-        # Квантуем только базовые слои внутри исходных модулей, не трогая ChromaInlineLoRA
+        # Квантуем только базовые слои внутри исходных модулей, не трогая внешнюю ChromaInlineLoRA обертку
         for name, module in model.named_modules():
             if "double_blocks" in name or "single_blocks" in name:
                 if hasattr(module, "base_layer"):
@@ -519,22 +523,21 @@ def run_reactor_forge():
         print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
     except Exception as ao_err:
         print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
-        
+
     model = model.to(device)
-    
+
     # 6. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Блокируем Autograd для всего остального кремния
     for name, param in model.named_parameters():
         if not param.requires_grad:
             param.requires_grad = False
             param.grad = None
-            
+
     approximator = None
     mod_projector = None
-    
+
     LATENT_DIR = "./dataset/latent_cache"
     TEXT_DIR = "./dataset/text_cache"
-    
-    # КРИТИЧЕСКИЙ СУМАСШЕДШИЙ МАНЕВР: Если мы в режиме фантом-батча, урезаем латент VAE в 4 раза под 64x64!
+
     if not os.path.exists(LATENT_DIR) or not os.path.exists(TEXT_DIR):
         print(" [WARN] Холодная симуляция на УРЕЗАННОМ тест-кадре (64x64) для обхода Си-аллокатора.")
         batch = {
@@ -547,31 +550,26 @@ def run_reactor_forge():
         from chroma_core.init import ChromaDataset
         dataset = ChromaDataset(latent_dir=LATENT_DIR, text_dir=TEXT_DIR)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
-        
+
     print("# === РАКЕТНЫЙ ЗАПУСК РЕАКТОРА: СТАРТ ЧИСТОГО ЦИКЛА ПЛАВКИ ===")
     import sys
     sys.settrace(trace_lines)
-    
+
     for step, batch in enumerate(dataloader):
         try:
             loss = train_step_core(batch, model, optimizer, approximator, mod_projector, step=step)
             print(f" -> [ШАГ №{step + 1}] ПЛАВКА СТАБИЛЬНА! Текущий Loss: {loss:.6f}")
-            
+
             if step == 0 or (step + 1) % 250 == 0:
                 checkpoint_path = f"Z:\\flowch\\checkpoints\\chroma_lora_step_{step + 1}.safetensors"
                 save_lora_checkpoint(model, checkpoint_path)
-                
+
             if step == 0:
                 break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
             break
-            
+
     sys.settrace(None)
     print("# === ДВИЖОК ВЕРИФИЦИРОВАН. СУХОЙ ПУСК LORA ПРОШЕЛ УСПЕШНО. КОНЕЦ СЕССИИ ===")
-
-if __name__ == "__main__":
-    run_reactor_forge()
 #---------------- Конец Блока 5 -----------------
-
-

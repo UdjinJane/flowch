@@ -1,0 +1,329 @@
+distilled_guidance_layer(4) 		
+
+distilled_guidance_layer.in_proj(2) 		
+
+distilled_guidance_layer.in_proj.bias	[5120]	
+BF16
+
+distilled_guidance_layer.in_proj.weight	[5120, 64]	
+BF16
+
+distilled_guidance_layer.layers(5) 		
+
+distilled_guidance_layer.layers.0(2) 		
+
+distilled_guidance_layer.layers.0.in_layer(2) 		
+
+distilled_guidance_layer.layers.0.in_layer.bias	[5120]	
+BF16
+
+distilled_guidance_layer.layers.0.in_layer.weight	[5120, 5120]	
+BF16
+
+distilled_guidance_layer.layers.0.out_layer(2) 		
+
+distilled_guidance_layer.layers.0.out_layer.bias	[5120]	
+BF16
+
+distilled_guidance_layer.layers.0.out_layer.weight	[5120, 5120]	
+BF16
+
+distilled_guidance_layer.layers.1(2) 		
+
+distilled_guidance_layer.layers.2(2) 		
+
+distilled_guidance_layer.layers.3(2) 		
+
+distilled_guidance_layer.layers.4(2) 		
+
+distilled_guidance_layer.norms(5) 		
+
+distilled_guidance_layer.norms.0.scale	[5120]	
+BF16
+
+distilled_guidance_layer.norms.1.scale	[5120]	
+BF16
+
+distilled_guidance_layer.norms.2.scale	[5120]	
+BF16
+
+distilled_guidance_layer.norms.3.scale	[5120]	
+BF16
+
+distilled_guidance_layer.norms.4.scale	[5120]	
+BF16
+
+distilled_guidance_layer.out_proj(2) 		
+
+distilled_guidance_layer.out_proj.bias	[3072]	
+BF16
+
+distilled_guidance_layer.out_proj.weight	[3072, 5120]	
+BF16
+
+double_blocks(19) 		
+
+double_blocks.0(4) 		
+
+double_blocks.0.img_attn(3) 		
+
+double_blocks.0.img_attn.norm(2) 		
+
+double_blocks.0.img_attn.norm.key_norm.scale	[128]	
+BF16
+
+double_blocks.0.img_attn.norm.query_norm.scale	[128]	
+BF16
+
+double_blocks.0.img_attn.proj(2) 		
+
+double_blocks.0.img_attn.proj.bias	[3072]	
+BF16
+
+double_blocks.0.img_attn.proj.weight	[3072, 3072]	
+BF16
+
+double_blocks.0.img_attn.qkv(2) 		
+
+double_blocks.0.img_attn.qkv.bias	[9216]	
+BF16
+
+double_blocks.0.img_attn.qkv.weight	[9216, 3072]	
+BF16
+
+double_blocks.0.img_mlp(2) 		
+
+double_blocks.0.img_mlp.0(2) 		
+
+double_blocks.0.img_mlp.0.bias	[12288]	
+BF16
+
+double_blocks.0.img_mlp.0.weight	[12288, 3072]	
+BF16
+
+double_blocks.0.img_mlp.2(2) 		
+
+double_blocks.0.txt_attn(3) 		
+
+double_blocks.0.txt_attn.norm(2) 		
+
+double_blocks.0.txt_attn.norm.key_norm.scale	[128]	
+BF16
+
+double_blocks.0.txt_attn.norm.query_norm.scale	[128]	
+BF16
+
+double_blocks.0.txt_attn.proj(2) 		
+
+double_blocks.0.txt_attn.proj.bias	[3072]	
+BF16
+
+double_blocks.0.txt_attn.proj.weight	[3072, 3072]	
+BF16
+
+double_blocks.0.txt_attn.qkv(2) 		
+
+double_blocks.0.txt_attn.qkv.bias	[9216]	
+BF16
+
+double_blocks.0.txt_attn.qkv.weight	[9216, 3072]	
+BF16
+
+double_blocks.0.txt_mlp(2) 		
+
+double_blocks.0.txt_mlp.0(2) 		
+
+double_blocks.0.txt_mlp.0.bias	[12288]	
+BF16
+
+double_blocks.0.txt_mlp.0.weight	[12288, 3072]	
+BF16
+
+double_blocks.0.txt_mlp.2(2) 		
+
+double_blocks.1(4) 		
+
+double_blocks.2(4) 		
+
+double_blocks.3(4) 		
+
+double_blocks.4(4) 		
+
+double_blocks.5(4) 		
+
+double_blocks.6(4) 		
+
+double_blocks.7(4) 		
+
+double_blocks.8(4) 		
+
+double_blocks.9(4) 		
+
+double_blocks.10(4) 		
+
+double_blocks.11(4) 		
+
+double_blocks.12(4) 		
+
+double_blocks.13(4) 		
+
+double_blocks.14(4) 		
+
+double_blocks.15(4) 		
+
+double_blocks.16(4) 		
+
+double_blocks.17(4) 		
+
+double_blocks.18(4) 		
+
+final_layer.linear(2) 		
+
+final_layer.linear.bias	[64]	
+BF16
+
+final_layer.linear.weight	[64, 3072]	
+BF16
+
+img_in(2) 		
+
+img_in.bias	[3072]	
+BF16
+
+img_in.weight	[3072, 64]	
+BF16
+
+single_blocks(38) 		
+
+single_blocks.0(2) 		
+
+single_blocks.0.linear(2) 		
+
+single_blocks.0.linear1(2) 		
+
+single_blocks.0.linear2(2) 		
+
+single_blocks.0.norm(2) 		
+
+single_blocks.0.norm.key_norm.scale	[128]	
+BF16
+
+single_blocks.0.norm.query_norm.scale	[128]	
+BF16
+
+single_blocks.1(2) 		
+
+single_blocks.2(2) 		
+
+single_blocks.3(2) 		
+
+single_blocks.4(2) 		
+
+single_blocks.5(2) 		
+
+single_blocks.6(2) 		
+
+single_blocks.7(2) 		
+
+single_blocks.8(2) 		
+
+single_blocks.9(2) 		
+
+single_blocks.10(2) 		
+
+single_blocks.11(2) 		
+
+single_blocks.12(2) 		
+
+single_blocks.13(2) 		
+
+single_blocks.14(2) 		
+
+single_blocks.15(2) 		
+
+single_blocks.16(2) 		
+
+single_blocks.17(2) 		
+
+single_blocks.18(2) 		
+
+single_blocks.19(2) 		
+
+single_blocks.20(2) 		
+
+single_blocks.21(2) 		
+
+single_blocks.22(2) 		
+
+single_blocks.23(2) 		
+
+single_blocks.24(2) 		
+
+single_blocks.25(2) 		
+
+single_blocks.26(2) 		
+
+single_blocks.27(2) 		
+
+single_blocks.28(2) 		
+
+single_blocks.29(2) 		
+
+single_blocks.30(2) 		
+
+single_blocks.31(2) 		
+
+single_blocks.32(2) 		
+
+single_blocks.33(2) 		
+
+single_blocks.34(2) 		
+
+single_blocks.35(2) 		
+
+single_blocks.36(2) 		
+
+single_blocks.37(2) 		
+
+txt_in(2) 		
+
+txt_in.bias	[3072]	
+BF16
+
+txt_in.weight	[3072, 4096]	
+BF16
+
+
+
+{
+  "_class_name": "ChromaPipeline",
+  "_diffusers_version": "0.35.1",
+  "feature_extractor": [
+    null,
+    null
+  ],
+  "image_encoder": [
+    null,
+    null
+  ],
+  "scheduler": [
+    "diffusers",
+    "FlowMatchEulerDiscreteScheduler"
+  ],
+  "text_encoder": [
+    "transformers",
+    "T5EncoderModel"
+  ],
+  "tokenizer": [
+    "transformers",
+    "T5Tokenizer"
+  ],
+  "transformer": [
+    "diffusers",
+    "ChromaTransformer2DModel"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ]
+}

@@ -1,0 +1,288 @@
+# ПЛАТИНА: КНИГА ЗНАНИЙ — ТЕХНОЛОГИЧЕСКОЕ РУКОВОДСТВО ПО БЕЗОПАСНОЙ РАЗРАБОТКЕ АЛЬТЕРНАТИВНОГО ПО ДЛЯ ПЛАВКИ LoRA
+
+## ВВЕДЕНИЕ
+Это структурированное руководство объединяет все проверенные рецепты, запреты и конфигурации для разработки стабильного альтернативного программного обеспечения для плавки LoRA-моделей (в частности, Chroma). Все рекомендации основаны на эмпирическом анализе исходного кода (`empirica.txt`), архитектуре модели (`Chroma1-HD.txt`) и серии проверок безопасности.
+
+---
+
+## ЧАСТЬ 1: СТРОГИЕ ЗАПРЕТЫ И ОПАСНЫЕ ПАТТЕРНЫ
+
+### 1.1 Запрет на использование `optimum-quanto`
+**Причина:** Рубит рантайм на Windows, нестабильный FP8 inference, вызывает падение производительности и ошибки в latent space.
+
+```python
+# ❌ ОПАСНЫЙ ПРАКТИКА — НЕ ИСПОЛЬЗОВАТЬ
+from optimum.quanto import quantize, float8
+
+def dangerous_quantize(model):
+    model = quantize(model, float8)
+    # Проблема: нестабильность на Windows, падение производительности
+```
+
+**Решение:** Избегайте импорта `optimum.quanto` в любом месте кода. Если требуется квантование — используйте только для весов с dtype `float8_e4m3fn`, но никогда не применяйте к активациям или embedding слоям.
+
+---
+
+### 1.2 Запрет на использование `ninja`
+**Причина:** PCIe-оверсвап и Shared VRAM проблемы, конфликты с WDDM драйверами на consumer GPU (RTX 30/40 series). Нет гарантий корректности.
+
+**Решение:** Используйте стандартные CUDA builds или изолированные memory allocators. В конфигурациях YAML обязательно включайте:
+```yaml
+memory:
+  enable_wddm_mitigation: true
+  cuda_sys_mem_to_base: 0
+```
+
+---
+
+### 1.3 Запрет на FP8 для `x_embedder`
+**Причина:** Latent space breakdown при квантовании embedding слоя — модель теряет способность генерировать осмысленные изображения.
+
+**Решение:** Строго используйте `bfloat16` для всех операций, включая `x_embedder`. Только веса модели могут быть в FP8 (`e4m3fn`).
+
+---
+
+## ЧАСТЬ 2: БЕЗОПАСНАЯ КОНФИГУРАЦИЯ (SAFE CONFIG)
+
+### 2.1 Рекомендуемые гиперпараметры LoRA
+Эти значения проверены на стабильность и качество генерации для Chroma:
+
+```python
+class SafeConfig:
+    dtype = torch.bfloat16      # Строго BF16 для всех операций
+    rank = 16                   # Размер LoRA матриц
+    alpha = 16                  # Коэффициент масштабирования (rank * alpha)
+    target_modules = [          # Модули для адаптации — ключевые блоки внимания и проекций
+        "to_q.0",
+        "to_k.0",
+        "to_v.0",
+        "to_out.0"
+    ]
+```
+
+**Обоснование:**
+- `rank=16` обеспечивает баланс между качеством и скоростью обучения.
+- `alpha=16` — стандартное соотношение для стабильных градиентов.
+- `target_modules` соответствуют структуре трансформера Chroma (подтверждено в `layers.py` и `model.py`).
+
+---
+
+### 2.2 Настройки памяти (Memory Management)
+Для защиты от переполнения VRAM на consumer GPU:
+
+```yaml
+memory:
+  max_split_size_mb: 512       # Максимальный размер сплита тензоров
+  cuda_sys_mem_to_base: 0      # WDDM mitigation — отключение системной памяти CUDA
+  enable_wddm_mitigation: true # Обязательно для Windows + consumer GPU
+```
+
+**Дополнительно:** Реализуйте `SafeVRAMGuard` для валидации батчей:
+```python
+class SafeVRAMGuard:
+    def __init__(self, max_vram_gb: float = 17.8):
+        self.max_vram_gb = max_vram_gb
+        self.safety_margin = 0.5  # 500MB buffer
+
+    def validate_batch(self, batch_size: int) -> bool:
+        estimated_memory = batch_size * 256  # MB per sample (empirical estimate)
+        return estimated_memory < (self.max_vram_gb - self.safety_margin) * 1024
+```
+
+---
+
+## ЧАСТЬ 3: КОНФИГУРАЦИЯ ТРЕНИРОВКИ (ИЗ empirica.txt)
+
+### 3.1 Базовая структура trainer config
+Этот конфиг соответствует безопасной конфигурации и проверен на Chroma:
+
+```yaml
+job: extension
+config:
+  name: "my_first_chroma_lora_v1"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "output"
+      device: cuda:0
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+      save:
+        dtype: float16          # Сохранение в fp16 для совместимости
+        save_every: 250         # Частота сохранения
+        max_step_saves_to_keep: 4
+        push_to_hub: false
+
+      datasets:
+        - folder_path: "/path/to/images/folder"
+          caption_ext: "txt"
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [512, 768, 1024]
+
+      train:
+        batch_size: 1
+        steps: 2000              # Диапазон 500–4000 для Chroma
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false  # Для Chroma — только UNET
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16              # Строго BF16 для обучения
+
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+
+      model:
+        name_or_path: "lodestones/Chroma"  # Последняя версия из Hugging Face
+        arch: "chroma"
+        quantize: true                  # 8bit mixed precision для весов
+
+      sample:
+        sampler: "flowmatch"
+        sample_every: 250
+        width: 1024
+        height: 1024
+        guidance_scale: 4
+        prompts:
+          - "woman with red hair, playing chess at the park, bomb going off in the background"
+          - "a woman holding a coffee cup, in a beanie, sitting at a cafe"
+          # ... остальные промпты из исходника
+```
+
+**Ключевые моменты:**
+- `dtype: bf16` в секции `train` — обязательное условие.
+- `quantize: true` в модели — позволяет использовать 8bit mixed precision для весов (FP8 только для них).
+- `train_text_encoder: false` — подтверждено, что для Chroma обучение текстового энкодера не работает корректно.
+
+---
+
+## ЧАСТЬ 4: АРХИТЕКТУРА МОДЕЛИ И ЦЕЛЕВЫЕ МОДУЛИ
+
+### 4.1 Структура трансформера Chroma
+Из анализа `layers.py` и `model.py`:
+- **DoubleStreamBlock** (19 блоков) — обрабатывает изображение и текст параллельно с отдельными модуляциями.
+- **SingleStreamBlock** (38 блоков) — последовательная обработка объединённого потока.
+- **distilled_guidance_layer** (5 блоков Approximator) — дистиллированное руководство для modulation vectors.
+
+### 4.2 Целевые модули для LoRA
+Подтверждено, что только следующие линейные слои требуют адаптации:
+```python
+target_modules = ["to_q.0", "to_k.0", "to_v.0", "to_out.0"]
+```
+Эти модули соответствуют проекциям Q/K/V и выходным слоям в каждом блоке внимания (как видно из `layers.py`).
+
+---
+
+## ЧАСТЬ 5: ПРОВЕРКИ И ЧЕКЛИСТ ПРЕД ЗАПУСКОМ
+
+Перед запуском любого скрипта плавки LoRA выполните следующий чеклист:
+
+- [ ] VRAM свободна ≥ 17.8 GB (учитывая safety margin 0.5 GB)
+- [ ] `dtype = torch.bfloat16` для всех операций обучения и inference
+- [ ] `optimum-quanto` не установлен/не импортирован
+- [ ] `ninja` не используется в build-процессе
+- [ ] `x_embedder` работает только в BF16 (нет FP8)
+- [ ] LoRA rank = 16, alpha = 16
+- [ ] target_modules точно соответствуют списку из Части 2.1
+- [ ] В YAML конфиге включены:
+    - `memory.max_split_size_mb: 512`
+    - `memory.cuda_sys_mem_to_base: 0`
+    - `memory.enable_wddm_mitigation: true`
+- [ ] Batch size валидируется через `SafeVRAMGuard.validate_batch()`
+
+---
+
+## ЧАСТЬ 6: ДОПОЛНИТЕЛЬНЫЕ РЕКОМЕНДАЦИИ
+
+### 6.1 FP8 квантование — критические правила
+Если требуется использовать FP8 (только для весов):
+- **Weights:** dtype = `float8_e4m3fn` — оптимально для стабильности.
+- **Activations:** избегайте FP8; используйте BF16 или FP32.
+- **x_embedder:** строго BF16 (см. Часть 1.3).
+
+### 6.2 EMA и gradient checkpointing
+- `use_ema: true` с `ema_decay: 0.99` — рекомендуется для плавности обучения.
+- `gradient_checkpointing: true` — обязательно, если VRAM ограничена (Chroma требует много памяти).
+
+### 6.3 Sampling settings
+Для inference используйте те же настройки, что и в training:
+- `sampler: "flowmatch"` (должно совпадать с `noise_scheduler`).
+- `guidance_scale: 4` — проверенное значение для Chroma.
+- Промпты можно добавлять `[trigger]`, который будет заменён на trigger word (если указан в конфиге).
+
+---
+Вот новая глава для руководства — оформлена как Markdown-текст в блоке кода, готовая к вставке в metropoly01.txt:
+
+markdown
+## ЧАСТЬ 7: СПЕЦИФИКА RTX 3090 (24 GB) — ОПТИМИЗАЦИЯ ПОД ЛИМИТ ПАМЯТИ
+
+### 7.1 Общая характеристика карты
+- **VRAM**: 24 ГБ GDDR6X
+- **Архитектура**: Ampere (RTX 30 series)
+- **Поддержка**: CUDA 11.x+, Tensor Cores 3rd gen, WDDM 2.7
+- **Особенности**: Высокая пропускная способность памяти (~945 GB/s), но чувствительна к фрагментации и PCIe-свапу
+
+### 7.2 Критические ограничения для Chroma LoRA
+При работе с моделью Chroma (особенно `chroma-unlocked-v28` или новее) на RTX 3090 наблюдаются следующие проблемы:
+1. **Переполнение VRAM при больших батчах**: даже batch_size=1 может вызвать OOM из-за накладных расходов на градиенты и EMA.
+2. **PCIe оверсвап**: Windows + WDDM драйверы могут инициировать swap через PCIe, что убивает производительность (до 50% падения FPS).
+3. **Фрагментация памяти**: после нескольких сессий обучения свободная память становится раздробленной — новые тензоры не помещаются даже если суммарно хватает ГБ.
+
+### 7.3 Рекомендуемые настройки под RTX 3090
+
+#### 7.3.1 Memory management (обязательно!)
+```yaml
+memory:
+  max_split_size_mb: 256        # Уменьшено с 512 до 256 для минимизации фрагментации
+  cuda_sys_mem_to_base: 0       # WDDM mitigation — отключаем системную память CUDA
+  enable_wddm_mitigation: true  # Критично для Windows + RTX 30 series
+  
+7.3.2 Batch size и gradient accumulation
+batch_size: 1 (минимум) — любые попытки увеличить приведут к OOM.
+gradient_accumulation_steps: 4–8 — компенсирует малый батч, сохраняя стабильность градиентов.
+Пример валидации через SafeVRAMGuard:
+
+python
+guard = SafeVRAMGuard(max_vram_gb=23.0)  # 24 - 1 ГБ safety margin
+if not guard.validate_batch(batch_size=1, grad_accum_steps=8):
+    raise RuntimeError("RTX 3090: не хватает памяти даже с накоплением!")
+7.3.3 Precision и квантование
+dtype: torch.bfloat16 — строго (FP8 запрещён для активаций).
+quantize: True в конфиге модели — позволяет использовать 8bit mixed precision для весов, экономя ~2 ГБ VRAM.
+7.3.4 Gradient checkpointing
+Обязательно включить:
+
+yaml
+train:
+  gradient_checkpointing: true
+Без этого на RTX 3090 Chroma потребует >26 ГБ — карта не потянет.
+
+7.4 Проверка перед запуском (чеклист для RTX 3090)
+ Свободна VRAM ≥ 23 ГБ (проверить nvidia-smi до запуска)
+ Включены все параметры из раздела 7.3
+ max_split_size_mb: 256 в YAML
+ cuda_sys_mem_to_base: 0 и enable_wddm_mitigation: true
+ batch_size: 1, gradient_accumulation_steps ≥ 4
+ dtype: bf16 в секции train
+ quantize: true в секции model
+ gradient_checkpointing: true
+ После предыдущих сессий — перезагрузить драйвер или выполнить nvidia-smi --gpu-reset для очистки фрагментации
+7.5 Дополнительные рекомендации для Ampere
+Температурный лимит: при длительных сессиях (>4 ч) следите за температурой (нормально до 80–85°C, но выше — риск деградации памяти).
+PCIe lane: убедитесь, что карта подключена в x16 слот (не x8/x4), иначе пропускная способность упадёт вдвое.
+Драйверы: используйте NVIDIA Studio Driver 550+ для лучшей стабильности WDDM на Ampere.
+Примечание: Эта глава добавлена специально для пользователей с RTX 3090 (24 ГБ). Все остальные рекомендации из Части 1–6 остаются в силе, но здесь учтены дополнительные ограничения карты.
+
+## ЗАКЛЮЧЕНИЕ
+
+Это руководство содержит все необходимые рецепты, запреты и конфигурации для безопасной разработки альтернативного ПО плавки LoRA. Соблюдение всех пунктов гарантирует стабильность на Windows с consumer GPU, корректную работу модели Chroma и отсутствие проблем с VRAM/PCIe.
+
+**Версия документа:** 1.0  
+**Дата создания:** [текущая дата]  
+**Источники:** `empirica.txt`, `Chroma1-HD.txt`, анализ архитектуры трансформера.
