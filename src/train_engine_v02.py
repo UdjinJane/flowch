@@ -50,7 +50,7 @@ def trace_lines(frame, event, arg):
 
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая автономная броня v6.5: Нативный шов LoRA с динамической легализацией параметров.
+    Высшая автономная броня v6.5: Нативный шов LoRA с динамической легализации параметров.
     Изначально прячет веса как чистые тензоры от TorchAO, но позволяет превратить их в nn.Parameter для оптимизатора.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
@@ -80,36 +80,38 @@ class ChromaInlineLoRA(nn.Module):
 
         with torch.no_grad():
             base_out = self.base_layer(x_cont).detach()
-            lora_mid = torch.matmul(x_cont, self.lora_A)
-            lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
+            # Жесткое отсечение графа Autograd через явный .detach() при расчете форварда
+            lora_mid = torch.matmul(x_cont, self.lora_A.detach())
+            lora_out = torch.matmul(lora_mid, self.lora_B.detach()) * self.scale
 
         return (lora_out + base_out).detach()
 
     def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
         """
         Локальный инжектор Омниссии v6.5: Принимает объединенные монолитные тензоры активаций
-        и градиентов. Жестко сопрягает формы для подавления Си-конфликтов cuBLAS.
+        и градиентов. Изолирует вычисления от скрытых С++ Autograd-цепей.
         """
         with torch.no_grad():
             x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
 
-            if dy.shape[1] > x_cont.shape[1]:
-                dy = dy[:, :x_cont.shape[1], :]
-            elif dy.shape[1] < x_cont.shape[1]:
-                padding_size = x_cont.shape[1] - dy.shape[1]
-                zero_padding = torch.zeros((B, padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
+            if dy.shape > x_cont.shape:
+                dy = dy[:, :x_cont.shape, :]
+            elif dy.shape < x_cont.shape:
+                padding_size = x_cont.shape - dy.shape
+                zero_padding = torch.zeros((B, padding_size, dy.shape), dtype=dy.dtype, device=dy.device)
                 dy = torch.cat([dy, zero_padding], dim=1)
 
-            lora_mid = torch.matmul(x_cont, self.lora_A)
+            # Принудительное разыменование параметров в чистые тензоры на шаге бекварда
+            lora_mid = torch.matmul(x_cont, self.lora_A.detach())
 
             dy_flat = dy.view(-1, dy.shape[-1])
             mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
             x_flat = x_cont.view(-1, x_cont.shape[-1])
 
-            if mid_flat.shape[0] == dy_flat.shape[0]:
+            if mid_flat.shape == dy_flat.shape:
                 grad_B = torch.matmul(mid_flat.t(), dy_flat)
-                d_mid = torch.matmul(dy_flat, self.lora_B.t())
+                d_mid = torch.matmul(dy_flat, self.lora_B.detach().t())
                 grad_A = torch.matmul(x_flat.t(), d_mid)
 
                 if self.lora_A.grad is None:
@@ -181,7 +183,7 @@ import torch.nn.functional as F
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Жестко синхронизирован с геометрией выходных проекций .proj и слоев .linear2.
+    Жестко изолирует легализованные параметры от стандартного Autograd-графа во избежание Си-конфликтов.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -217,15 +219,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
         print(f"\n┌── [МАРШЕВАЯ ТЕЛЕМЕТРИЯ ЯДРА RECTOR | ПУСКОВАЯ ВЕРИФИКАЦИЯ ВХОДОВ] ────────────────┐")
         print(f"│ * Входной латент VAE : Форма {shape_vae_str:<18} | Тип {dtype_vae_str:<10} | Mean {x1.abs().mean().item():.4f} │")
-        print(f"│ * Шина текста T5XXL : Форма {shape_t5_str:<18} | Type {dtype_t5_str:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
-        print(f"│ * Полка видеопамяти : Выделено {mem_alloc_gb:<5} ГБ | Зарезервировано {mem_res_gb:<5} ГБ      │")
+        print(f"│ * Шина текста T5XXL  : Форма {shape_t5_str:<18} | Type {dtype_t5_str:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
+        print(f"│ * Полка видеопамяти  : Выделено {mem_alloc_gb:<5} ГБ | Зарезервировано {mem_res_gb:<5} ГБ      │")
         print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
 
-    # ЖЕСТКИЙ СИ-ШУНТ: Принудительное ручное выжигание градиентов чистых Си-тензоров LoRA БЕЗ участия параметров!
+    # ЖЕСТКИЙ СИ-ШУНТ: Тотальное обнуление градиентных регистров перед началом шага
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
-            module.lora_A.grad = None
-            module.lora_B.grad = None
+            if module.lora_A.grad is not None:
+                module.lora_A.grad.zero_()
+            if module.lora_B.grad is not None:
+                module.lora_B.grad.zero_()
 
     optimizer.zero_grad(set_to_none=True)
 
@@ -257,10 +261,10 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
 
     if torch.isnan(loss):
-        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
+        raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
 
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v6.0)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v6.5)
     t_bwd_start = time.perf_counter()
 
     with torch.no_grad():
@@ -285,27 +289,24 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         static_img_tokens = model.img_in(xt_flat_base).detach().contiguous()
         static_txt_tokens = model.txt_in(t5_hidden).detach().contiguous()
 
-        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v6.0 ===
-        # Так как LoRA теперь стоит на .proj и .linear2, нам нужно подавать градиент калибра hidden_size (3072),
-        # а не раздутый QKV-монолит. Выравниваем длины последовательностей токенов.
+        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v6.5 ===
         combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
         
-        txt_len = static_txt_tokens.shape[1]
+        txt_len = static_txt_tokens.shape
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
 
-        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР БЭКВАРДА: Все швы .proj и .linear2 принимают Си-тензоры сопряженных форм
+        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР БЭКВАРДА: Изолируем вычисления от C++ Autograd через явный сброс графа
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                # Передаем точные снайперские тензоры активаций и градиентов без привлечения С++ графа базы
-                module.inject_manual_backward(combined_grad_output, combined_static_tokens)
+                # Передаем тензоры, принудительно отсекая любые попытки зацепить стандартный backward
+                module.inject_manual_backward(combined_grad_output.detach(), combined_static_tokens.detach())
 
     t_bwd = time.perf_counter() - t_bwd_start
 
     # Фиксация и запуск фазы оптимизации весов (Optimizer Step)
     t_opt_start = time.perf_counter()
-    # Собираем параметры LoRA вручную для клиппинга, так как они исключены из стандартного графа параметров модели
     trainable_params = []
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
@@ -321,11 +322,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
 
-    # Повторное зануление Си-тензоров после шага для предотвращения накопления «снежного кома»
+    # Принудительное зануление Си-тензоров после шага для предотвращения накопления «снежного кома»
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
-            module.lora_A.grad = None
-            module.lora_B.grad = None
+            if module.lora_A.grad is not None:
+                module.lora_A.grad.zero_()
+            if module.lora_B.grad is not None:
+                module.lora_B.grad.zero_()
             
     optimizer.zero_grad(set_to_none=True)
 
@@ -360,6 +363,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
 class ChromaMMDiT(nn.Module):
@@ -533,7 +537,7 @@ def run_reactor_forge():
 
     # 5. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ И ОФИЦИАЛЬНАЯ ЛЕГАЛИЗАЦИЯ
     # СНАЙПЕРСКИЙ ШУНТ: Легализируем параметры внутри самих модулей ПОСЛЕ квантования TorchAO,
-    # чтобы они получили валидный C++ статус листьев графа и беззаговорочно принялись оптимизатором!
+    # чтобы они получили валидный C++ статус листьев графа и безоговорочно принялись оптимизатором!
     trainable_params = []
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
