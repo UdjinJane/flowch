@@ -8,10 +8,14 @@ from torch.utils.data import DataLoader
 
 # Жесткая блокировка фрагментации и активация расширяемых сегментов кремния
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512,expandable_segments:True"
+
+# ФАЗОВЫЙ СИ-ШУНТ: Сначала регистрируем трюм src, только потом дергаем бортовые модули!
 sys.path.append(os.path.abspath("./src"))
+sys.path.append(os.path.abspath("."))
 
 from chroma_core.layers_clean import ChromaTelemetry, Approximator, distribute_modulations
 from chroma_core.tensor_math import attention
+# ВОЗВРАТ НАДЛЕЖАЩЕГО ИМПОРТА: Подключаем чистокровный бортовой оптимизатор Кэпа
 from ao_optim_monolith import AdamW8bit
 
 def trace_lines(frame, event, arg):
@@ -57,87 +61,12 @@ class ChromaInlineLoRA(nn.Module):
         in_features = base_layer.in_features
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
-        
+
         # КРИТИЧЕСКИЙ СИ-ФИКС: Веса объявляются как чистые тензоры, скрытые от PyTorch параметров!
         self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
         self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
-        
-        self.lora_A.grad = None
-        self.lora_B.grad = None
-
-    def __getattr__(self, name: str):
-        try:
-            return super().__getattr__(name)
-        except AttributeError:
-            return getattr(self.base_layer, name)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
-        x_cont = x.contiguous().to(torch.bfloat16)
-        
-        with torch.no_grad():
-            base_out = self.base_layer(x_cont).detach()
-            lora_mid = torch.matmul(x_cont, self.lora_A)
-            lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
-            
-        return (lora_out + base_out).detach()
-
-    def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
-        """
-        Локальный инжектор Омниссии v6.0: Принимает объединенные монолитные тензоры активаций
-        и градиентов. Жестко сопрягает формы для подавления Си-конфликтов cuBLAS.
-        """
-        with torch.no_grad():
-            x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
-            dy = loss_grad_output.to(torch.bfloat16) * self.scale
-            
-            # Жесткая Си-выверенная синхронизация осей без условных ветвлений
-            if dy.shape[1] > x_cont.shape[1]:
-                dy = dy[:, :x_cont.shape[1], :]
-            elif dy.shape[1] < x_cont.shape[1]:
-                padding_size = x_cont.shape[1] - dy.shape[1]
-                zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
-                dy = torch.cat([dy, zero_padding], dim=1)
-                
-            # Перерасчет локального форварда шва "на лету"
-            lora_mid = torch.matmul(x_cont, self.lora_A)
-            
-            dy_flat = dy.view(-1, dy.shape[-1])
-            mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
-            x_flat = x_cont.view(-1, x_cont.shape[-1])
-            
-            # Стабильный расчет градиентов Си-тензоров адаптера
-            if mid_flat.shape[0] == dy_flat.shape[0]:
-                grad_B = torch.matmul(mid_flat.t(), dy_flat)
-                d_mid = torch.matmul(dy_flat, self.lora_B.t())
-                grad_A = torch.matmul(x_flat.t(), d_mid)
-                
-                if self.lora_A.grad is None:
-                    self.lora_A.grad = grad_A.view_as(self.lora_A)
-                else:
-                    self.lora_A.grad += grad_A.view_as(self.lora_A)
-                    
-                if self.lora_B.grad is None:
-                    self.lora_B.grad = grad_B.view_as(self.lora_B)
-                else:
-                    self.lora_B.grad += grad_B.view_as(self.lora_B)
-                    
-        return None
-
-    def verify_gradients(self, layer_name: str, current_step: int = 0):
-        """Умная телеметрия шва."""
-        is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
-        if current_step == 0 and is_first_block:
-            print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
-            for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
-                if param.grad is None:
-                    print(f" -> [WARN] МЕРТВЫЙ ГРАДИЕНТ [{name}]")
-                elif torch.isnan(param.grad).any():
-                    print(f" -> [КРАХ] ВЗРЫВ ГРАДИЕНТА [{name}]")
-                else:
-                    grad_mean = param.grad.abs().mean().item()
-                    print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией сросшихся QKV и врезкой в PROJ/LINEAR2) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
