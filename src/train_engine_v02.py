@@ -186,6 +186,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по спутникам LoRA.
     Жестко изолирует легализованные параметры от стандартного Autograd-графа во избежание Си-конфликтов.
+    ВКРУЧЕН МИКРО-ДЕТЕКТОР: Снайперский замер градиентных осей бэкварда строго на Шаге №1.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
@@ -258,19 +259,15 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     t_fwd_start = time.perf_counter()
 
     with torch.no_grad():
-        # Форвард базового трансформера (чистый и изолированный TorchAO контур)
         pred_velocity_raw = model(xt, t5_hidden, mods)
         pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
-        
-        # Интеграция параллельного тока спутников LoRA на уровне вывода графа (при необходимости)
-        # В данной архитектуре бэкворд течет независимо через сохраненный кэш активаций
         loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
 
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
 
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v7.0)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v7.2)
     t_bwd_start = time.perf_counter()
 
     with torch.no_grad():
@@ -295,12 +292,17 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         static_img_tokens = model.img_in(xt_flat_base).detach().contiguous()
         static_txt_tokens = model.txt_in(t5_hidden).detach().contiguous()
 
-        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v7.0 ===
+        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v7.2 ===
         combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
         
-        txt_len = static_txt_tokens.shape[1]
+        txt_len = static_txt_tokens.shape
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
+
+        # СНАЙПЕРСКИЙ МИКРО-ДЕТЕКТОР ОБРАТНОГО ХОДА (Строго один раз на Шаге №1)
+        if step == 0:
+            nan_grad = torch.isnan(combined_grad_output).any().item()
+            print(f"[РЕНТГЕН-БЭКВОРД] Шина градиентов | Форма dy: {list(combined_grad_output.shape)} | Форма x: {list(combined_static_tokens.shape)} | NaN: {nan_grad}")
 
         # 4. МОНОЛИТНЫЙ ИНЖЕКТОР БЭКВАРДА: Спутники принимают чистые тензоры без С++ Autograd базы
         modules_chain = list(model.named_modules())
@@ -369,7 +371,8 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.0) ------------
+
+#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.2) ------------
 class ChromaBlockProcessor(nn.Module):
     """
     Вспомогательный С++ контроллер Омниссии для послойного перехвата форварда.
@@ -392,8 +395,8 @@ class ChromaBlockProcessor(nn.Module):
 
 class ChromaMMDiT(nn.Module):
     """
-    Монолитный Трансформер ChromaMMDiT v7.0 с поддержкой параллельного тока спутников.
-    Полностью очищен от AdaLN-Zero (по чертежам Метрополии), использует Rectified Flow.
+    Монолитный Трансформер ChromaMMDiT v7.2 с поддержкой параллельного тока спутников.
+    ВКРУЧЕН КОМПАКТНЫЙ ДЕФЕКТОСКОП: Рентген входящих осей и мантиссы SwiGLU-тока на Шаге №1.
     """
     def __init__(self):
         super().__init__()
@@ -418,8 +421,12 @@ class ChromaMMDiT(nn.Module):
             
         for i in range(38):
             b = self.single_blocks[i]
-            b.linear1 = nn.Linear(3072, 12288, dtype=torch.bfloat16)
-            b.linear2 = nn.Linear(12288, 3072, dtype=torch.bfloat16)
+            # ФИКС КЛИЕНТСКОЙ МАНТИССЫ: Точный сросшийся калибр SwiGLU-шины оригинальных весов
+            b.linear1 = nn.Linear(3072, 21504, dtype=torch.bfloat16)
+            b.linear2 = nn.Linear(10752, 3072, dtype=torch.bfloat16)
+
+        # Флаг-затвор однократной телеметрии
+        self.has_telemetry_fired = False
 
     def pack_latents(self, x: torch.Tensor) -> torch.Tensor:
         """Разворачивает 4D VAE латент [B, C, H, W] в 2D последовательность токенов [B, H*W, C*4]."""
@@ -430,53 +437,60 @@ class ChromaMMDiT(nn.Module):
 
     def forward(self, xt: torch.Tensor, t5_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый форвард трансформера. Проводит ток активаций сквозь 57 слоев,
-        на лету сопрягая базовые квантованные вычисления с параллельными спутниками LoRA.
+        Маршевый форвард трансформера с лаконичной однократной проверкой SwiGLU-цепей.
         """
         # 1. Входная проекция латентов и текстовой шины
         xt_flat = self.pack_latents(xt)
         img_tokens = self.img_in(xt_flat)  # Калибр [B, 1024, 3072]
         txt_tokens = self.txt_in(t5_hidden) # Калибр [B, 512, 3072]
 
-        # 2. ПРОХОД СКВОЗЬ 19 DOUBLE BLOCKS (Параллельная обработка картинки и текста)
+        # 2. ПРОХОД СКВОЗЬ 19 DOUBLE BLOCKS
         for i, block in enumerate(self.double_blocks):
-            # Внутреннее QKV-внимание базовой модели (Квантовано TorchAO, LoRA сюда не лезет)
             img_qkv = block.img_attn.qkv(img_tokens)
             txt_qkv = block.txt_attn.qkv(txt_tokens)
             
-            # Математика фабричного механизма внимания (attention)
             img_context = attention(img_qkv)
             txt_context = attention(txt_qkv)
             
-            # СНАЙПЕРСКИЙ ПЕРЕХВАТ ВЫХОДНЫХ ПРОЕКЦИЙ: Вливаем ток спутников LoRA v7.0!
             img_tokens = img_tokens + ChromaBlockProcessor.inject_shadow_flow("img_attn.proj", block.img_attn.proj, block.img_attn, img_context)
             txt_tokens = txt_tokens + ChromaBlockProcessor.inject_shadow_flow("txt_attn.proj", block.txt_attn.proj, block.txt_attn, txt_context)
 
         # Объединение шины для прохода сквозь одиночные блоки
         combined_tokens = torch.cat([img_tokens, txt_tokens], dim=1) # Калибр [B, 1536, 3072]
 
-        # 3. ПРОХОД СКВОЗЬ 38 SINGLE BLOCKS (Монолитная сквозная шина модуляции)
+        # 3. ПРОХОД СКВОЗЬ 38 SINGLE BLOCKS
         for i, block in enumerate(self.single_blocks):
-            # Проекция на расширенное MLP-пространство (linear1)
-            mlp_mid = block.linear1(combined_tokens)
+            # Проекция на расширенное MLP-пространство SwiGLU (21504)
+            mlp_gate_gate = block.linear1(combined_tokens)
             
-            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2!
+            # Внутреннее Си-расщепление и активация Swish
+            mlp_x1, mlp_x2 = mlp_gate_gate.chunk(2, dim=-1) # Нарезка на два потока по 10752
+            mlp_mid = F.silu(mlp_x1) * mlp_x2 # Калибр [B, 1536, 10752]
+            
+            # СНАЙПЕРСКИЙ РЕНТГЕН ЦЕПИ (Отрабатывает строго на блоке 0, шаг 1, один раз)
+            if i == 0 and not self.has_telemetry_fired:
+                has_nan = torch.isnan(mlp_mid).any().item()
+                print(f"[РЕНТГЕН] Блок_0.linear2 | Форма входа: {list(mlp_mid.shape)} | NaN: {has_nan} | Mean: {mlp_mid.abs().mean().item():.5f}")
+                self.has_telemetry_fired = True
+            
+            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2
             combined_tokens = combined_tokens + ChromaBlockProcessor.inject_shadow_flow("linear2", block.linear2, block, mlp_mid)
 
-        # 4. Изоляция выходного кадра картинок от текстового хвоста последовательности
-        img_len = img_tokens.shape[1]
+        # 4. Изоляция выходного кадра картинок от текстового хвоста
+        img_len = img_tokens.shape
         final_img_tokens = combined_tokens[:, :img_len, :]
 
         # 5. Выходной Аппроксиматор Метрополии
         output_flat = self.final_layer(final_img_tokens) # Калибр [B, 1024, 64]
         
-        # Сборка 2D токенов обратно в исходную 4D геометрию скорости Rectified Flow [B, 16, H, W]
-        B = xt.shape[0]
-        H, W = xt.shape[2], xt.shape[3]
+        # Сборка 2D токенов обратно в исходную 4D геометрию скорости [B, 16, H, W]
+        B = xt.shape
+        H, W = xt.shape, xt.shape
         output_4d = output_flat.view(B, H // 2, W // 2, 16, 2, 2)
         output_4d = output_4d.permute(0, 3, 1, 4, 2, 5).contiguous()
         return output_4d.view(B, 16, H, W)
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
 def save_lora_checkpoint(model: nn.Module, save_path: str):
