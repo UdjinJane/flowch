@@ -50,7 +50,7 @@ def trace_lines(frame, event, arg):
 
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая автономная броня v6.5: Нативный шов LoRA с динамической легализации параметров.
+    Высшая автономная броня v6.6: Нативный шов LoRA с динамической легализацией параметров.
     Изначально прячет веса как чистые тензоры от TorchAO, но позволяет превратить их в nn.Parameter для оптимизатора.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
@@ -88,18 +88,19 @@ class ChromaInlineLoRA(nn.Module):
 
     def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
         """
-        Локальный инжектор Омниссии v6.5: Принимает объединенные монолитные тензоры активаций
-        и градиентов. Изолирует вычисления от скрытых С++ Autograd-цепей.
+        Локальный инжектор Омниссии v6.6: Принимает объединенные монолитные тензоры активаций
+        и градиентов. Выравнивание геометрии переведено на строгие целочисленные индексы осей.
         """
         with torch.no_grad():
             x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
 
-            if dy.shape > x_cont.shape:
-                dy = dy[:, :x_cont.shape, :]
-            elif dy.shape < x_cont.shape:
-                padding_size = x_cont.shape - dy.shape
-                zero_padding = torch.zeros((B, padding_size, dy.shape), dtype=dy.dtype, device=dy.device)
+            # ИСПРАВЛЕНИЕ ЛАКУНЫ: Строгое выравнивание по осям длин последовательностей токенов
+            if dy.shape[1] > x_cont.shape[1]:
+                dy = dy[:, :x_cont.shape[1], :]
+            elif dy.shape[1] < x_cont.shape[1]:
+                padding_size = x_cont.shape[1] - dy.shape[1]
+                zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
                 dy = torch.cat([dy, zero_padding], dim=1)
 
             # Принудительное разыменование параметров в чистые тензоры на шаге бекварда
@@ -109,7 +110,7 @@ class ChromaInlineLoRA(nn.Module):
             mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
             x_flat = x_cont.view(-1, x_cont.shape[-1])
 
-            if mid_flat.shape == dy_flat.shape:
+            if mid_flat.shape[0] == dy_flat.shape[0]:
                 grad_B = torch.matmul(mid_flat.t(), dy_flat)
                 d_mid = torch.matmul(dy_flat, self.lora_B.detach().t())
                 grad_A = torch.matmul(x_flat.t(), d_mid)
@@ -176,7 +177,7 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     return patched_count
 #---------------- Конец Блока 2 -----------------
 
-#---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
+#---------------- Старт Блока 3 (Монолитное Боевое Ядро -badge Контур Чистой Плавки и Хронометража) ----
 import time
 import torch.nn.functional as F
 
@@ -264,7 +265,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
 
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v6.5)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v6.6)
     t_bwd_start = time.perf_counter()
 
     with torch.no_grad():
@@ -289,10 +290,11 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         static_img_tokens = model.img_in(xt_flat_base).detach().contiguous()
         static_txt_tokens = model.txt_in(t5_hidden).detach().contiguous()
 
-        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v6.5 ===
+        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v6.6 ===
         combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
         
-        txt_len = static_txt_tokens.shape
+        # ИСПРАВЛЕНИЕ ЛАКУНЫ: Извлечение строго целочисленной длины вместо сырого torch.Size
+        txt_len = static_txt_tokens.shape[1]
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
 
@@ -300,7 +302,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                # Передаем тензоры, принудительно отсекая любые попытки зацепить стандартный backward
                 module.inject_manual_backward(combined_grad_output.detach(), combined_static_tokens.detach())
 
     t_bwd = time.perf_counter() - t_bwd_start
@@ -363,6 +364,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
 
     return loss.item()
 #---------------- Конец Блока 3 -----------------
+
 
 
 #---------------- Старт Блока 4 (Трансформер ChromaMMDiT с Послойной Реентерабельной Броней) -------
