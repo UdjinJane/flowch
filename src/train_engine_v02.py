@@ -48,21 +48,18 @@ def trace_lines(frame, event, arg):
             print("!"*80 + "\n")
     return trace_lines
 
-class ChromaInlineLoRA(nn.Module):
+class ChromaStandaloneLoRA(nn.Module):
     """
-    Высшая автономная броня v6.6: Нативный шов LoRA с динамической легализацией параметров.
-    Изначально прячет веса как чистые тензоры от TorchAO, но позволяет превратить их в nn.Parameter для оптимизатора.
+    Высшая автономная броня v7.0: Абсолютно стерильный автономный шов LoRA.
+    ФУНДАМЕНТАЛЬНЫЙ СИ-ШУНТ: Больше не содержит внутри себя базовый квантованный слой nn.Linear!
+    Полностью изолирован от С++ хуков TorchAO. Хранит только легализованные параметры адаптера.
     """
-    def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
+    def __init__(self, in_features: int, out_features: int, rank: int = 16, alpha: float = 16.0, target_device="cuda"):
         super().__init__()
-        self.base_layer = base_layer
         self.rank = rank
         self.scale = alpha / rank
-        in_features = base_layer.in_features
-        out_features = base_layer.out_features
-        target_device = base_layer.weight.device
 
-        # Изначально объявляем как чистые Си-тензоры для маскировки от TorchAO
+        # Изначально создаем чистые Си-тензоры, чтобы пролететь радар TorchAO на взлете
         self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
         self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
 
@@ -74,28 +71,24 @@ class ChromaInlineLoRA(nn.Module):
             self.lora_B = nn.Parameter(self.lora_B, requires_grad=True)
         return self.lora_A, self.lora_B
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
+    def forward_lora_only(self, x: torch.Tensor) -> torch.Tensor:
+        """Рассчитывает исключительно дельту адаптера, полностью игнорируя базу."""
         x_cont = x.contiguous().to(torch.bfloat16)
-
         with torch.no_grad():
-            base_out = self.base_layer(x_cont).detach()
-            # Жесткое отсечение графа Autograd через явный .detach() при расчете форварда
             lora_mid = torch.matmul(x_cont, self.lora_A.detach())
             lora_out = torch.matmul(lora_mid, self.lora_B.detach()) * self.scale
-
-        return (lora_out + base_out).detach()
+        return lora_out.detach()
 
     def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
         """
-        Локальный инжектор Омниссии v6.6: Принимает объединенные монолитные тензоры активаций
-        и градиентов. Выравнивание геометрии переведено на строгие целочисленные индексы осей.
+        Локальный инжектор Омниссии v7.0: Чистый расчет градиентов без зацепа 
+        С++ Autograd-инфраструктуры PyTorch.
         """
         with torch.no_grad():
             x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
 
-            # ИСПРАВЛЕНИЕ ЛАКУНЫ: Строгое выравнивание по осям длин последовательностей токенов
+            # Синхронизация геометрии последовательностей токенов
             if dy.shape[1] > x_cont.shape[1]:
                 dy = dy[:, :x_cont.shape[1], :]
             elif dy.shape[1] < x_cont.shape[1]:
@@ -103,7 +96,6 @@ class ChromaInlineLoRA(nn.Module):
                 zero_padding = torch.zeros((dy.shape[0], padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
                 dy = torch.cat([dy, zero_padding], dim=1)
 
-            # Принудительное разыменование параметров в чистые тензоры на шаге бекварда
             lora_mid = torch.matmul(x_cont, self.lora_A.detach())
 
             dy_flat = dy.view(-1, dy.shape[-1])
@@ -129,9 +121,8 @@ class ChromaInlineLoRA(nn.Module):
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
         """Умная телеметрия шва."""
-        is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
-        if current_step == 0 and is_first_block:
-            print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
+        if current_step == 0 and "double_blocks.0." in layer_name:
+            print(f"[ТЕЛЕМЕТРИЯ СТЕРИЛЬНОГО ШВА] Проверка для {layer_name}:")
             for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
                 if param.grad is None:
                     print(f" -> [WARN] МЕРТВЫЙ ГРАДИЕНТ [{name}]")
@@ -141,7 +132,6 @@ class ChromaInlineLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
-
 
 #---------------- Старт Блока 2 (Снайперский Инжектор с фильтрацией сросшихся QKV и врезкой в PROJ/LINEAR2) ----------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
