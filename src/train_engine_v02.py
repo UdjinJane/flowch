@@ -447,16 +447,24 @@ def run_reactor_forge():
     patched_count = patch_chroma_reactor(model, rank=16)
 
     # 4. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ ДО КВАНТОВАНИЯ
+    # СНАЙПЕРСКИЙ ШУНТ: Оборачиваем скрытые Си-тензоры в nn.Parameter ТОЛЬКО для инжекции в оптимизатор,
+    # чтобы обойти С++ валидацию torch.optim.Optimizer и ликвидировать ошибку empty parameter list.
     trainable_params = []
     for name, module in model.named_modules():
         if hasattr(module, "inject_manual_backward"):
-            module.lora_A.requires_grad_(True)
-            module.lora_B.requires_grad_(True)
-            trainable_params.extend([module.lora_A, module.lora_B])
+            # Создаем временные С++ прокси-параметры, привязанные к памяти наших скрытых тензоров
+            param_A = nn.Parameter(module.lora_A, requires_grad=True)
+            param_B = nn.Parameter(module.lora_B, requires_grad=True)
+            
+            # Подменяем ссылки в модуле, чтобы оптимизатор Кэпа обновлял те же ячейки кремния
+            module.lora_A = param_A
+            module.lora_B = param_B
+            
+            trainable_params.extend([param_A, param_B])
 
     # Фиксация 8-битного оптимизатора в чистом кремнии
     optimizer = AdamW8bit(trainable_params, lr=1e-4)
-    print(f" -> [OK] Автономный оптимизатор AdamW8bit зафиксирован строго на {len(trainable_params)} LoRA-параметрах.")
+    print(f" -> [OK] Автономный оптимизатор AdamW8bit успешно принял С++ прокси и зафиксирован на {len(trainable_params)} LoRA-параметрах.")
 
     # 5. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO СТРОГО НА БАЗОВЫЕ СЛОИ: Игнорируем наши LoRA швы!
     print("[RUN] Подключаю промышленный квантизатор TorchAO строго на базовый монолит весов...")
@@ -523,3 +531,4 @@ def run_reactor_forge():
 if __name__ == "__main__":
     run_reactor_forge()
 #---------------- Конец Блока 5 -----------------
+
