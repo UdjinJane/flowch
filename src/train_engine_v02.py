@@ -145,23 +145,22 @@ class ChromaStandaloneLoRA(nn.Module):
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
 
-
-#---------------- Старт Блока 2 (Снайперский Инжектор Спутников PROJ/LINEAR2 без подмены Базы) ------------
+#---------------- Старт Блока 2 (Снайперский Инжектор Спутников PROJ/PROJ_OUT без подмены Базы) ------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
     """
     Динамически обходит граф весов трансформера и монтирует LoRA-спутники РЯДОМ с базой.
     ФУНДАМЕНТАЛЬНЫЙ СИ-ШУНТ: Базовый квантованный слой TorchAO вообще НЕ подменяется!
-    Это полностью исключает активацию С++ backward-хуков и стирает фантом на 384 ГБ.
+    Жестко синхронизирован с именами слоев официального индекса lodestones/Chroma1-HD.
     """
     patched_count = 0
-    print("# === ИНИЦИАЛИЗАЦИЯ МОНТАЖА АВТОНОМНЫХ СПУТНИКОВ RECTOR v7.0 ===")
+    print("# === ИНИЦИАЛИЗАЦИЯ МОНТАЖА АВТОНОМНЫХ СПУТНИКОВ RECTOR v7.5 ===")
     
     # Собираем модули в список, чтобы избежать RuntimeError при динамической модификации словаря
     modules_to_check = list(model.named_modules())
     
     for name, module in modules_to_check:
-        # Снайперский прицел строго на изолированные выходные проекции иmlp-выводы
-        if any(target in name for target in ["img_attn.proj", "txt_attn.proj", "linear2"]):
+        # Снайперский прицел строго на изолированные выходные проекции double блоков и proj_out single блоков
+        if any(target in name for target in ["img_attn.proj", "txt_attn.proj", "proj_out"]):
             if isinstance(module, nn.Linear):
                 parent_name = ".".join(name.split(".")[:-1])
                 child_name = name.split(".")[-1]
@@ -178,18 +177,19 @@ def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
                 out_features = module.out_features
                 target_device = module.weight.device
 
-                # Создаем чистокровный изолированный спутник v7.0
+                # Создаем чистокровный изолированный спутник v7.3 с локальным x_cache буфером
                 lora_shadow = ChromaStandaloneLoRA(in_features, out_features, rank=rank, target_device=target_device)
                 setattr(parent, shadow_name, lora_shadow)
                 
                 patched_count += 1
-                print(f" -> [OK] Смонтирован параллельный спутник: {name}_lora_shadow | База изолирована.")
+                print(f" -> [OK] Смонтирован параллельный спутник: {name}_lora_shadow | База изолирована. Калибр входа: {in_features}")
 
     if patched_count == 0:
-        raise RuntimeError("[АВАРИЯ] Ошибка сканирования: целевые точки (.proj/.linear2) для монтажа спутников не найдены!")
+        raise RuntimeError("[АВАРИЯ] Ошибка сканирования: целевые точки (.proj/.proj_out) для монтажа спутников не найдены!")
     print(f"# === МОНТАЖ ЗАВЕРШЕН. УСПЕШНО СВАРЕНО СПУТНИКОВ: {patched_count} ===")
     return patched_count
 #---------------- Конец Блока 2 -----------------
+
 
 #---------------- Старт Блока 3 (Монолитное Боевое Ядро - Контур Чистой Плавки и Хронометража) ----
 import time
@@ -384,7 +384,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.3-Финальная) ------------
+#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.5) ------------
 class ChromaBlockProcessor(nn.Module):
     """
     Вспомогательный С++ контроллер Омниссии для послойного перехвата форварда.
@@ -407,24 +407,24 @@ class ChromaBlockProcessor(nn.Module):
 
 class ChromaMMDiT(nn.Module):
     """
-    Монолитный Transformer ChromaMMDiT v7.3 с поддержкой параллельного тока спутников.
-    ФУНДАМЕНТАЛЬНЫЙ ГЕОМЕТРИЧЕСКИЙ ФИКС: Одиночные блоки (single_blocks) переведены на 
-    истинный пятикратный SwiGLU-калибр Метрополии (30720 -> 15360 -> 3072) для успешного load_state_dict.
+    Монолитный Transformer ChromaMMDiT v7.5 под веса lodestones/Chroma1-HD.
+    ТОТАЛЬНЫЙ СИНТАКСИЧЕСКИЙ ШУНТ: Имена слоев приведены в идеальное соответствие 
+    с индексным файлом Hugging Face (transformer_blocks / single_transformer_blocks).
     """
     def __init__(self):
         super().__init__()
-        # Инициализация оригинальной拓扑 Lodestone Rock (8.9B / 57 блоков)
+        # Инициализация оригинальной топологии Lodestone Rock (8.9B / 57 блоков)
         self.img_in = nn.Linear(64, 3072, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, 3072, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(3072, 64, dtype=torch.bfloat16)
         
-        # Динамические контейнеры под Double и Single блоки фабричной Chroma1-HD
-        self.double_blocks = nn.ModuleList([nn.Module() for _ in range(19)])
-        self.single_blocks = nn.ModuleList([nn.Module() for _ in range(38)])
+        # ИСТИННЫЕ ИМЕНА ИЗ ИНДЕКСА SAFETENSORS
+        self.transformer_blocks = nn.ModuleList([nn.Module() for _ in range(19)])
+        self.single_transformer_blocks = nn.ModuleList([nn.Module() for _ in range(38)])
         
-        # Эмуляция структуры слоев для корректной стыковки load_state_dict
+        # Эмуляция структуры double-блоков под ключи фабричной Chroma1-HD
         for i in range(19):
-            b = self.double_blocks[i]
+            b = self.transformer_blocks[i]
             b.img_attn = nn.Module()
             b.img_attn.qkv = nn.Linear(3072, 9216, dtype=torch.bfloat16)
             b.img_attn.proj = nn.Linear(3072, 3072, dtype=torch.bfloat16)
@@ -432,11 +432,12 @@ class ChromaMMDiT(nn.Module):
             b.txt_attn.qkv = nn.Linear(3072, 9216, dtype=torch.bfloat16)
             b.txt_attn.proj = nn.Linear(3072, 3072, dtype=torch.bfloat16)
             
+        # Эмуляция структуры single-блоков под точные ключи hf index.json
         for i in range(38):
-            b = self.single_blocks[i]
-            # ТОТАЛЬНЫЙ СИ-ШУНТ ГЕОМЕТРИИ: Точные пятикратные SwiGLU-оси оригинального монолита весов!
-            b.linear1 = nn.Linear(3072, 30720, dtype=torch.bfloat16)
-            b.linear2 = nn.Linear(15360, 3072, dtype=torch.bfloat16)
+            b = self.single_transformer_blocks[i]
+            # ИСТИННАЯ ГЕОМЕТРИЯ ПЯТИКРАТНОГО SwiGLU ИЗ ХЕШ-ТАБЛИЦЫ РЕПОЗИТОРИЯ
+            b.proj_mlp = nn.Linear(3072, 30720, dtype=torch.bfloat16)
+            b.proj_out = nn.Linear(15360, 3072, dtype=torch.bfloat16)
 
         # Флаг-затвор однократной телеметрии
         self.has_telemetry_fired = False
@@ -450,15 +451,15 @@ class ChromaMMDiT(nn.Module):
 
     def forward(self, xt: torch.Tensor, t5_hidden: torch.Tensor, mods: dict = None) -> torch.Tensor:
         """
-        Маршевый форвард трансформера с лаконичной однократной проверкой SwiGLU-цепей.
+        Маршевый форвард трансформера по истинной топологической карте lodestones.
         """
         # 1. Входная проекция латентов и текстовой шины
         xt_flat = self.pack_latents(xt)
         img_tokens = self.img_in(xt_flat)  # Калибр [B, 1024, 3072]
         txt_tokens = self.txt_in(t5_hidden) # Калибр [B, 512, 3072]
 
-        # 2. ПРОХОД СКВОЗЬ 19 DOUBLE BLOCKS
-        for i, block in enumerate(self.double_blocks):
+        # 2. ПРОХОД СКВОЗЬ 19 TRANSFORMER BLOCKS (Истинные Двойные Блоки)
+        for i, block in enumerate(self.transformer_blocks):
             img_qkv = block.img_attn.qkv(img_tokens)
             txt_qkv = block.txt_attn.qkv(txt_tokens)
             
@@ -471,10 +472,10 @@ class ChromaMMDiT(nn.Module):
         # Объединение шины для прохода сквозь одиночные блоки
         combined_tokens = torch.cat([img_tokens, txt_tokens], dim=1) # Калибр [B, 1536, 3072]
 
-        # 3. ПРОХОД СКВОЗЬ 38 SINGLE BLOCKS
-        for i, block in enumerate(self.single_blocks):
-            # Проекция на расширенное MLP-пространство SwiGLU (30720)
-            mlp_gate_gate = block.linear1(combined_tokens)
+        # 3. ПРОХОД СКВОЗЬ 38 SINGLE TRANSFORMER BLOCKS (Истинные Одиночные Блоки)
+        for i, block in enumerate(self.single_transformer_blocks):
+            # Проекция на расширенную SwiGLU шину proj_mlp (30720)
+            mlp_gate_gate = block.proj_mlp(combined_tokens)
             
             # Внутреннее Си-расщепление и активация Swish (разрезка 30720 на два потока по 15360)
             mlp_x1, mlp_x2 = mlp_gate_gate.chunk(2, dim=-1)
@@ -483,11 +484,11 @@ class ChromaMMDiT(nn.Module):
             # СНАЙПЕРСКИЙ МИКРО-РЕНТГЕН ЦЕПИ (Отрабатывает строго на блоке 0, шаг 1, один раз)
             if i == 0 and not self.has_telemetry_fired:
                 has_nan = torch.isnan(mlp_mid).any().item()
-                print(f"[РЕНТГЕН] Блок_0.linear2 | Истинная форма входа SwiGLU: {list(mlp_mid.shape)} | NaN: {has_nan} | Mean: {mlp_mid.abs().mean().item():.5f}")
+                print(f"[РЕНТГЕН] Блок_0.proj_out | Форма входа SwiGLU: {list(mlp_mid.shape)} | NaN: {has_nan}")
                 self.has_telemetry_fired = True
             
-            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2 (вход 15360)
-            combined_tokens = combined_tokens + ChromaBlockProcessor.inject_shadow_flow("linear2", block.linear2, block, mlp_mid)
+            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем дельту LoRA на proj_out (вход 15360)
+            combined_tokens = combined_tokens + ChromaBlockProcessor.inject_shadow_flow("proj_out", block.proj_out, block, mlp_mid)
 
         # 4. Изоляция выходного кадра картинок от текстового хвоста
         img_len = img_tokens.shape
@@ -503,6 +504,7 @@ class ChromaMMDiT(nn.Module):
         output_4d = output_4d.permute(0, 3, 1, 4, 2, 5).contiguous()
         return output_4d.view(B, 16, H, W)
 #---------------- Конец Блока 4 -----------------
+
 
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
