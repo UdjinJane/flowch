@@ -50,8 +50,8 @@ def trace_lines(frame, event, arg):
 
 class ChromaInlineLoRA(nn.Module):
     """
-    Высшая автономная броня v6.0: Нативный шов LoRA с тотальной Си-изоляцией весов адаптеров.
-    Ампутирует nn.Parameter, превращая веса в скрытые тензоры для защиты от деквантования TorchAO.
+    Высшая автономная броня v6.5: Нативный шов LoRA с динамической легализацией параметров.
+    Изначально прячет веса как чистые тензоры от TorchAO, но позволяет превратить их в nn.Parameter для оптимизатора.
     """
     def __init__(self, base_layer: nn.Linear, rank: int = 16, alpha: float = 16.0):
         super().__init__()
@@ -62,9 +62,81 @@ class ChromaInlineLoRA(nn.Module):
         out_features = base_layer.out_features
         target_device = base_layer.weight.device
 
-        # КРИТИЧЕСКИЙ СИ-ФИКС: Веса объявляются как чистые тензоры, скрытые от PyTorch параметров!
+        # Изначально объявляем как чистые Си-тензоры для маскировки от TorchAO
         self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
         self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
+
+    def legalise_for_optimizer(self):
+        """Превращает скрытые тензоры в официальные nn.Parameter модели."""
+        if not isinstance(self.lora_A, nn.Parameter):
+            self.lora_A = nn.Parameter(self.lora_A, requires_grad=True)
+        if not isinstance(self.lora_B, nn.Parameter):
+            self.lora_B = nn.Parameter(self.lora_B, requires_grad=True)
+        return self.lora_A, self.lora_B
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ChromaTelemetry.verify(x, f"LoRA_In_r{self.rank}")
+        x_cont = x.contiguous().to(torch.bfloat16)
+
+        with torch.no_grad():
+            base_out = self.base_layer(x_cont).detach()
+            lora_mid = torch.matmul(x_cont, self.lora_A)
+            lora_out = torch.matmul(lora_mid, self.lora_B) * self.scale
+
+        return (lora_out + base_out).detach()
+
+    def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
+        """
+        Локальный инжектор Омниссии v6.5: Принимает объединенные монолитные тензоры активаций
+        и градиентов. Жестко сопрягает формы для подавления Си-конфликтов cuBLAS.
+        """
+        with torch.no_grad():
+            x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
+            dy = loss_grad_output.to(torch.bfloat16) * self.scale
+
+            if dy.shape[1] > x_cont.shape[1]:
+                dy = dy[:, :x_cont.shape[1], :]
+            elif dy.shape[1] < x_cont.shape[1]:
+                padding_size = x_cont.shape[1] - dy.shape[1]
+                zero_padding = torch.zeros((B, padding_size, dy.shape[2]), dtype=dy.dtype, device=dy.device)
+                dy = torch.cat([dy, zero_padding], dim=1)
+
+            lora_mid = torch.matmul(x_cont, self.lora_A)
+
+            dy_flat = dy.view(-1, dy.shape[-1])
+            mid_flat = lora_mid.view(-1, lora_mid.shape[-1])
+            x_flat = x_cont.view(-1, x_cont.shape[-1])
+
+            if mid_flat.shape[0] == dy_flat.shape[0]:
+                grad_B = torch.matmul(mid_flat.t(), dy_flat)
+                d_mid = torch.matmul(dy_flat, self.lora_B.t())
+                grad_A = torch.matmul(x_flat.t(), d_mid)
+
+                if self.lora_A.grad is None:
+                    self.lora_A.grad = grad_A.view_as(self.lora_A)
+                else:
+                    self.lora_A.grad += grad_A.view_as(self.lora_A)
+
+                if self.lora_B.grad is None:
+                    self.lora_B.grad = grad_B.view_as(self.lora_B)
+                else:
+                    self.lora_B.grad += grad_B.view_as(self.lora_B)
+
+        return None
+
+    def verify_gradients(self, layer_name: str, current_step: int = 0):
+        """Умная телеметрия шва."""
+        is_first_block = any(f"double_blocks.{i}." in layer_name for i in (0, 1, 2))
+        if current_step == 0 and is_first_block:
+            print(f"[ТЕЛЕМЕТРИЯ ШВА] Проверка электродов для {layer_name}:")
+            for name, param in [("lora_A", self.lora_A), ("lora_B", self.lora_B)]:
+                if param.grad is None:
+                    print(f" -> [WARN] МЕРТВЫЙ ГРАДИЕНТ [{name}]")
+                elif torch.isnan(param.grad).any():
+                    print(f" -> [КРАХ] ВЗРЫВ ГРАДИЕНТА [{name}]")
+                else:
+                    grad_mean = param.grad.abs().mean().item()
+                    print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
 
 
@@ -446,27 +518,7 @@ def run_reactor_forge():
     # 3. ИНЖЕКЦИЯ LORA ДО КВАНТОВАНИЯ: Прячем наши структуры от Си-рантайма TorchAO!
     patched_count = patch_chroma_reactor(model, rank=16)
 
-    # 4. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ ДО КВАНТОВАНИЯ
-    # СНАЙПЕРСКИЙ ШУНТ: Оборачиваем скрытые Си-тензоры в nn.Parameter ТОЛЬКО для инжекции в оптимизатор,
-    # чтобы обойти С++ валидацию torch.optim.Optimizer и ликвидировать ошибку empty parameter list.
-    trainable_params = []
-    for name, module in model.named_modules():
-        if hasattr(module, "inject_manual_backward"):
-            # Создаем временные С++ прокси-параметры, привязанные к памяти наших скрытых тензоров
-            param_A = nn.Parameter(module.lora_A, requires_grad=True)
-            param_B = nn.Parameter(module.lora_B, requires_grad=True)
-            
-            # Подменяем ссылки в модуле, чтобы оптимизатор Кэпа обновлял те же ячейки кремния
-            module.lora_A = param_A
-            module.lora_B = param_B
-            
-            trainable_params.extend([param_A, param_B])
-
-    # Фиксация 8-битного оптимизатора в чистом кремнии
-    optimizer = AdamW8bit(trainable_params, lr=1e-4)
-    print(f" -> [OK] Автономный оптимизатор AdamW8bit успешно принял С++ прокси и зафиксирован на {len(trainable_params)} LoRA-параметрах.")
-
-    # 5. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO СТРОГО НА БАЗОВЫЕ СЛОИ: Игнорируем наши LoRA швы!
+    # 4. СНАЙПЕРСКОЕ СЖАТИЕ TORCHAO СТРОГО НА БАЗОВЫЕ СЛОИ
     print("[RUN] Подключаю промышленный квантизатор TorchAO строго на базовый монолит весов...")
     try:
         from torchao.quantization import quantize_, int8_weight_only
@@ -478,6 +530,20 @@ def run_reactor_forge():
         print(" -> [OK] Базовый монолит успешно квантован (int8_weight_only). Полка VRAM защищена.")
     except Exception as ao_err:
         print(f" [WARN] Сбой TorchAO-кастинга весов: {ao_err}. Переход на ванильный bfloat16-контур.")
+
+    # 5. СТРОГИЙ РУЧНОЙ СБОР ПАРАМЕТРОВ И ОФИЦИАЛЬНАЯ ЛЕГАЛИЗАЦИЯ
+    # СНАЙПЕРСКИЙ ШУНТ: Легализируем параметры внутри самих модулей ПОСЛЕ квантования TorchAO,
+    # чтобы они получили валидный C++ статус листьев графа и беззаговорочно принялись оптимизатором!
+    trainable_params = []
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            # Вызываем метод легализации шва
+            p_A, p_B = module.legalise_for_optimizer()
+            trainable_params.extend([p_A, p_B])
+
+    # Фиксация 8-битного оптимизатора в чистом кремнии
+    optimizer = AdamW8bit(trainable_params, lr=1e-4)
+    print(f" -> [OK] Автономный оптимизатор AdamW8bit успешно принял легализованные параметры: {len(trainable_params)} узлов.")
 
     model = model.to(device)
 
@@ -531,4 +597,3 @@ def run_reactor_forge():
 if __name__ == "__main__":
     run_reactor_forge()
 #---------------- Конец Блока 5 -----------------
-
