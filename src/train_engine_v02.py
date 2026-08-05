@@ -384,7 +384,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.2) ------------
+#---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.3-Финальная) ------------
 class ChromaBlockProcessor(nn.Module):
     """
     Вспомогательный С++ контроллер Омниссии для послойного перехвата форварда.
@@ -407,12 +407,13 @@ class ChromaBlockProcessor(nn.Module):
 
 class ChromaMMDiT(nn.Module):
     """
-    Монолитный Трансформер ChromaMMDiT v7.2 с поддержкой параллельного тока спутников.
-    ВКРУЧЕН КОМПАКТНЫЙ ДЕФЕКТОСКОП: Рентген входящих осей и мантиссы SwiGLU-тока на Шаге №1.
+    Монолитный Transformer ChromaMMDiT v7.3 с поддержкой параллельного тока спутников.
+    ФУНДАМЕНТАЛЬНЫЙ ГЕОМЕТРИЧЕСКИЙ ФИКС: Одиночные блоки (single_blocks) переведены на 
+    истинный пятикратный SwiGLU-калибр Метрополии (30720 -> 15360 -> 3072) для успешного load_state_dict.
     """
     def __init__(self):
         super().__init__()
-        # Инициализация оригинальной топологии Lodestone Rock (8.9B / 57 блоков)
+        # Инициализация оригинальной拓扑 Lodestone Rock (8.9B / 57 блоков)
         self.img_in = nn.Linear(64, 3072, dtype=torch.bfloat16)
         self.txt_in = nn.Linear(4096, 3072, dtype=torch.bfloat16)
         self.final_layer = nn.Linear(3072, 64, dtype=torch.bfloat16)
@@ -433,9 +434,9 @@ class ChromaMMDiT(nn.Module):
             
         for i in range(38):
             b = self.single_blocks[i]
-            # ВЫЖИГАНИЕ ГЛИСТА САТТЕРА: Точный сросшийся калибр SwiGLU-шины весов Метрополии!
-            b.linear1 = nn.Linear(3072, 21504, dtype=torch.bfloat16)
-            b.linear2 = nn.Linear(10752, 3072, dtype=torch.bfloat16)
+            # ТОТАЛЬНЫЙ СИ-ШУНТ ГЕОМЕТРИИ: Точные пятикратные SwiGLU-оси оригинального монолита весов!
+            b.linear1 = nn.Linear(3072, 30720, dtype=torch.bfloat16)
+            b.linear2 = nn.Linear(15360, 3072, dtype=torch.bfloat16)
 
         # Флаг-затвор однократной телеметрии
         self.has_telemetry_fired = False
@@ -472,20 +473,20 @@ class ChromaMMDiT(nn.Module):
 
         # 3. ПРОХОД СКВОЗЬ 38 SINGLE BLOCKS
         for i, block in enumerate(self.single_blocks):
-            # Проекция на расширенное MLP-пространство SwiGLU (21504)
+            # Проекция на расширенное MLP-пространство SwiGLU (30720)
             mlp_gate_gate = block.linear1(combined_tokens)
             
-            # Внутреннее Си-расщепление и активация Swish (разрезка 21504 на два потока по 10752)
+            # Внутреннее Си-расщепление и активация Swish (разрезка 30720 на два потока по 15360)
             mlp_x1, mlp_x2 = mlp_gate_gate.chunk(2, dim=-1)
-            mlp_mid = F.silu(mlp_x1) * mlp_x2 # Калибр [B, 1536, 10752]
+            mlp_mid = F.silu(mlp_x1) * mlp_x2 # Истинный калибр [B, 1536, 15360]
             
-            # СНАЙПЕРСКИЙ РЕНТГЕН ЦЕПИ (Отрабатывает строго на блоке 0, шаг 1, один раз)
+            # СНАЙПЕРСКИЙ МИКРО-РЕНТГЕН ЦЕПИ (Отрабатывает строго на блоке 0, шаг 1, один раз)
             if i == 0 and not self.has_telemetry_fired:
                 has_nan = torch.isnan(mlp_mid).any().item()
-                print(f"[РЕНТГЕН] Блок_0.linear2 | Форма входа: {list(mlp_mid.shape)} | NaN: {has_nan} | Mean: {mlp_mid.abs().mean().item():.5f}")
+                print(f"[РЕНТГЕН] Блок_0.linear2 | Истинная форма входа SwiGLU: {list(mlp_mid.shape)} | NaN: {has_nan} | Mean: {mlp_mid.abs().mean().item():.5f}")
                 self.has_telemetry_fired = True
             
-            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2 (вход 10752)
+            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2 (вход 15360)
             combined_tokens = combined_tokens + ChromaBlockProcessor.inject_shadow_flow("linear2", block.linear2, block, mlp_mid)
 
         # 4. Изоляция выходного кадра картинок от текстового хвоста
@@ -502,6 +503,7 @@ class ChromaMMDiT(nn.Module):
         output_4d = output_4d.permute(0, 3, 1, 4, 2, 5).contiguous()
         return output_4d.view(B, 16, H, W)
 #---------------- Конец Блока 4 -----------------
+
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
 def save_lora_checkpoint(model: nn.Module, save_path: str):
