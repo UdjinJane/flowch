@@ -109,22 +109,22 @@ import torch.nn.functional as F
 def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approximator: nn.Module, mod_projector: nn.Module, step: int = 0) -> float:
     """
     Выполняет один боевой шаг плавки с ручным распределением градиентного тока по швам LoRA.
-    Внедряет монолитное склеивание активаций для полного уничтожения 384-ГБ фантома кубЛАС.
+    Жестко синхронизирован с геометрией выходных проекций .proj и слоев .linear2.
     """
     # Фиксация старта фазы ввода-вывода (I/O) и подготовки батча
     t_start = time.perf_counter()
     x1_raw = batch["latent"].cuda()
     t5_raw = batch["t5_hidden"].cuda()
-    
+
     # Си-снайпер принудительного урезания пространственной геометрии латента
     if x1_raw.shape[-1] == 128:
         x1 = F.interpolate(x1_raw.float(), size=(64, 64), mode="bilinear").to(torch.bfloat16)
     else:
         x1 = x1_raw
-        
+
     if len(t5_raw.shape) == 4:
         t5_raw = t5_raw.squeeze(1)
-        
+
     B_pad, L_pad, D_pad = t5_raw.shape
     if L_pad < 512:
         padding_size = 512 - L_pad
@@ -132,33 +132,39 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         t5_hidden = torch.cat([t5_raw, zero_padding], dim=1)
     else:
         t5_hidden = t5_raw[:, :512, :]
-        
+
     # === КОНТУР ВХОДНОЙ ТЕЛЕМЕТРИИ ОМНИССИИ ===
     if step == 0:
         shape_vae_str = str(list(x1.shape))
         dtype_vae_str = str(x1.dtype)
         shape_t5_str = str(list(t5_hidden.shape))
         dtype_t5_str = str(t5_hidden.dtype)
-        
+
         mem_alloc_gb = str(round(torch.cuda.memory_allocated() / 1024**3, 2))
         mem_res_gb = str(round(torch.cuda.memory_reserved() / 1024**3, 2))
-        
+
         print(f"\n┌── [МАРШЕВАЯ ТЕЛЕМЕТРИЯ ЯДРА RECTOR | ПУСКОВАЯ ВЕРИФИКАЦИЯ ВХОДОВ] ────────────────┐")
-        print(f"│ * Входной латент VAE  : Форма {shape_vae_str:<18} | Тип {dtype_vae_str:<10} | Mean {x1.abs().mean().item():.4f} │")
-        print(f"│ * Шина текста T5XXL   : Форма {shape_t5_str:<18} | Type {dtype_t5_str:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
-        print(f"│ * Полка видеопамяти   : Выделено {mem_alloc_gb:<5} ГБ       | Зарезервировано {mem_res_gb:<5} ГБ          │")
+        print(f"│ * Входной латент VAE : Форма {shape_vae_str:<18} | Тип {dtype_vae_str:<10} | Mean {x1.abs().mean().item():.4f} │")
+        print(f"│ * Шина текста T5XXL : Форма {shape_t5_str:<18} | Type {dtype_t5_str:<10} | Mean {t5_hidden.abs().mean().item():.4f} │")
+        print(f"│ * Полка видеопамяти : Выделено {mem_alloc_gb:<5} ГБ | Зарезервировано {mem_res_gb:<5} ГБ      │")
         print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
-        
+
+    # ЖЕСТКИЙ СИ-ШУНТ: Принудительное ручное выжигание градиентов чистых Си-тензоров LoRA БЕЗ участия параметров!
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            module.lora_A.grad = None
+            module.lora_B.grad = None
+
     optimizer.zero_grad(set_to_none=True)
-    
-    # Генерация пространственного шума и траектории Rectified Flow
+
+    # Generation пространственного шума и траектории Rectified Flow
     x0 = torch.randn_like(x1)
     t = torch.rand(x1.shape, device=x1.device, dtype=torch.float32).to(x1.dtype)
     xt = t.view(-1, 1, 1, 1) * x1 + (1.0 - t.view(-1, 1, 1, 1)) * x0
-    
+
     target_velocity = (x1.float() - x0.float()).detach()
     xt.requires_grad_(False)
-    
+
     fake_shift = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_scale = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
     fake_gate = torch.zeros((1, 1, 3072), dtype=torch.bfloat16, device="cuda")
@@ -167,80 +173,94 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         "single": None,
         "final": [fake_shift, fake_scale, fake_gate]
     }
-    
+
     t_io = time.perf_counter() - t_start
-    
+
     # Фиксация и запуск фазы прямого прохода (Forward)
     t_fwd_start = time.perf_counter()
-    
+
     with torch.no_grad():
         pred_velocity_raw = model(xt, t5_hidden, mods)
         pred_velocity = pred_velocity_raw.detach().cpu().float().cuda()
         loss = torch.nn.functional.mse_loss(pred_velocity, target_velocity)
-    
+
     if torch.isnan(loss):
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул in NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
-    
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v4.0)
+
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v6.0)
     t_bwd_start = time.perf_counter()
-    
+
     with torch.no_grad():
         # 1. Расчет стартового градиента от MSE-Loss
         total_elements = pred_velocity.numel()
         grad_out_4d = 2.0 * (pred_velocity - target_velocity) / total_elements
         grad_out_4d = grad_out_4d.to(torch.bfloat16)
-        
+
         # 2. Реверс Pixel Shuffle
         B, C_raw, H_raw, W_raw = grad_out_4d.shape
         H, W = H_raw // 2, W_raw // 2
         grad_flat_64 = grad_out_4d.view(B, 16, H, 2, W, 2)
         grad_flat_64 = grad_flat_64.permute(0, 2, 4, 1, 3, 5).contiguous()
         grad_flat_64 = grad_flat_64.view(B, H * W, 64)
-        
+
         # 3. Проход сквозь транспонированный final_layer
         final_weight = model.final_layer.weight.to(torch.bfloat16)
-        base_grad_output = torch.matmul(grad_flat_64, final_weight)
-        
-        # Пред-расчет изолированных источников токенов
+        base_grad_output = torch.matmul(grad_flat_64, final_weight) # Калибр [B, H*W, 3072]
+
+        # Пред-расчет изолированных источников токенов для сопряжения со швами .proj/.linear2
         xt_flat_base = model.pack_latents(xt)
-        static_img_tokens = model.img_in(xt_flat_base).detach().cpu().clone().cuda()
-        static_txt_tokens = model.txt_in(t5_hidden).detach().cpu().clone().cuda()
-        
-        # === МОНОЛИТНАЯ СБОРКА ШИНЫ v7.0: Тотальная конкатенация для гашения Си-конфликтов потоков ===
-        # Текст и изображение склеиваются в единый сквозной массив и для Double, и для Single блоков
+        static_img_tokens = model.img_in(xt_flat_base).detach().contiguous()
+        static_txt_tokens = model.txt_in(t5_hidden).detach().contiguous()
+
+        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v6.0 ===
+        # Так как LoRA теперь стоит на .proj и .linear2, нам нужно подавать градиент калибра hidden_size (3072),
+        # а не раздутый QKV-монолит. Выравниваем длины последовательностей токенов.
         combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
         
-        txt_len = 512 
+        txt_len = static_txt_tokens.shape[1]
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
-        
-        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР: Все швы вызываются с единым сквозным полем градиента и активаций
+
+        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР БЭКВАРДА: Все швы .proj и .linear2 принимают Си-тензоры сопряженных форм
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
+                # Передаем точные снайперские тензоры активаций и градиентов без привлечения С++ графа базы
                 module.inject_manual_backward(combined_grad_output, combined_static_tokens)
-            
+
     t_bwd = time.perf_counter() - t_bwd_start
-    
+
     # Фиксация и запуск фазы оптимизации весов (Optimizer Step)
     t_opt_start = time.perf_counter()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    # Собираем параметры LoRA вручную для клиппинга, так как они исключены из стандартного графа параметров модели
+    trainable_params = []
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            trainable_params.extend([module.lora_A, module.lora_B])
+            
+    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
     optimizer.step()
     t_opt = time.perf_counter() - t_opt_start
-    
+
     # Фиксация фазы проверки градиентного тока и снайперской чистки кэша VRAM
     t_clean_start = time.perf_counter()
     for name, module in model.named_modules():
         if hasattr(module, "verify_gradients"):
             module.verify_gradients(name, current_step=step)
+
+    # Повторное зануление Си-тензоров после шага для предотвращения накопления «снежного кома»
+    for name, module in model.named_modules():
+        if hasattr(module, "inject_manual_backward"):
+            module.lora_A.grad = None
+            module.lora_B.grad = None
             
     optimizer.zero_grad(set_to_none=True)
-    
+
     if step % 250 == 0:
         torch.cuda.empty_cache()
     t_clean = time.perf_counter() - t_clean_start
-    
+
     # РАСЧЕТ И ВЫВОД МАРШЕВОЙ ПСЕВДОГРАФИКИ НА ТАБЛО КОНСОЛИ
     t_total = t_io + t_fwd + t_bwd + t_opt + t_clean
     total_sec = max(t_total, 0.001)
@@ -249,13 +269,13 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     p_bwd = int((t_bwd / total_sec) * 40)
     p_opt = int((t_opt / total_sec) * 40)
     p_clean = int((t_clean / total_sec) * 40)
-    
+
     bar_io = "▒" * max(p_io, 1)
     bar_fwd = "█" * max(p_fwd, 1)
     bar_bwd = "▓" * max(p_bwd, 1)
     bar_opt = "█" * max(p_opt, 1)
     bar_clean = "░" * max(p_clean, 1)
-    
+
     print(f"\n┌── [МАРШЕВЫЙ ТРЕКЕР ТАЙМИНГОВ СМЕНЫ | ШАГ №{step + 1}] ──────────────────────────────────┐")
     print(f"│ [I/O & Батч] : {t_io:6.3f} сек | {bar_io:<40} │")
     print(f"│ [Форвард]    : {t_fwd:6.3f} сек | {bar_fwd:<40} │")
@@ -263,9 +283,9 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     print(f"│ [Оптимизатор]: {t_opt:6.3f} сек | {bar_opt:<40} │")
     print(f"│ [Флашинг VRAM]: {t_clean:6.3f} сек | {bar_clean:<40} │")
     print(f"├─── ПАСПОРТ СКОРОСТИ РЕАКТОРА ───────────────────────────────────────────────────────┤")
-    print(f"│ -> ПОЛНОЕ ВРЕМЯ ТИКА ЦИКЛА: {t_total:6.3f} сек. Текущий Loss: {loss.item():12.6f}      │")
+    print(f"│ -> ПОЛНОЕ ВРЕМЯ ТИКА ЦИКЛА: {t_total:6.3f} сек. Текущий Loss: {loss.item():12.6f} │")
     print(f"└─────────────────────────────────────────────────────────────────────────────────────┘\n")
-    
+
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
