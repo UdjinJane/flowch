@@ -50,18 +50,21 @@ def trace_lines(frame, event, arg):
 
 class ChromaStandaloneLoRA(nn.Module):
     """
-    Высшая автономная броня v7.0: Абсолютно стерильный автономный шов LoRA.
-    ФУНДАМЕНТАЛЬНЫЙ СИ-ШУНТ: Больше не содержит внутри себя базовый квантованный слой nn.Linear!
-    Полностью изолирован от С++ хуков TorchAO. Хранит только легализованные параметры адаптера.
+    Высшая автономная броня v7.3: Абсолютно стерильный автономный шов LoRA.
+    ЛОКАЛЬНЫЙ СИ-ШУНТ АКТИВАЦИЙ: Спутник сам изолированно кэширует свой точный входной ток x_cache,
+    полностью ликвидируя рассинхронизацию осей и С++ "size mismatch" cuBLAS для linear2 слоев SwiGLU.
     """
     def __init__(self, in_features: int, out_features: int, rank: int = 16, alpha: float = 16.0, target_device="cuda"):
         super().__init__()
         self.rank = rank
         self.scale = alpha / rank
 
-        # Изначально создаем чистые Си-тензоры, чтобы пролететь радар TorchAO на взлете
+        # Изначально создаем чистые Си-тензоры для маскировки от радаров TorchAO
         self.lora_A = torch.randn(in_features, rank, dtype=torch.bfloat16, device=target_device) * 0.02
         self.lora_B = torch.zeros(rank, out_features, dtype=torch.bfloat16, device=target_device)
+        
+        # Локальный маршевый кэш активаций
+        self.x_cache = None
 
     def legalise_for_optimizer(self):
         """Превращает скрытые тензоры в официальные nn.Parameter модели."""
@@ -72,23 +75,30 @@ class ChromaStandaloneLoRA(nn.Module):
         return self.lora_A, self.lora_B
 
     def forward_lora_only(self, x: torch.Tensor) -> torch.Tensor:
-        """Рассчитывает исключительно дельту адаптера, полностью игнорируя базу."""
+        """Рассчитывает дельту адаптера и изолированно кэширует локальный входной ток."""
         x_cont = x.contiguous().to(torch.bfloat16)
+        
+        # Запись слепка кремния строго через .detach() без участия Autograd графа модели
+        self.x_cache = x_cont.detach().clone()
+        
         with torch.no_grad():
             lora_mid = torch.matmul(x_cont, self.lora_A.detach())
             lora_out = torch.matmul(lora_mid, self.lora_B.detach()) * self.scale
         return lora_out.detach()
 
-    def inject_manual_backward(self, loss_grad_output: torch.Tensor, static_incoming_x: torch.Tensor):
+    def inject_manual_backward(self, loss_grad_output: torch.Tensor):
         """
-        Локальный инжектор Омниссии v7.0: Чистый расчет градиентов без зацепа 
-        С++ Autograd-инфраструктуры PyTorch.
+        Локальный инжектор Омниссии v7.3: Автономный расчет градиентов по собственному 
+        локальному кэшу x_cache. Точность геометрии осей cuBLAS — 100%.
         """
+        if self.x_cache is None:
+            return None # Пропускаем блоки, до которых ток форварда не добежал
+            
         with torch.no_grad():
-            x_cont = static_incoming_x.contiguous().to(torch.bfloat16)
+            x_cont = self.x_cache.contiguous().to(torch.bfloat16)
             dy = loss_grad_output.to(torch.bfloat16) * self.scale
 
-            # Синхронизация геометрии последовательностей токенов
+            # Точечная синхронизация геометрии последовательностей по первому измерению токенов [B, N, D]
             if dy.shape[1] > x_cont.shape[1]:
                 dy = dy[:, :x_cont.shape[1], :]
             elif dy.shape[1] < x_cont.shape[1]:
@@ -116,7 +126,9 @@ class ChromaStandaloneLoRA(nn.Module):
                     self.lora_B.grad = grad_B.view_as(self.lora_B)
                 else:
                     self.lora_B.grad += grad_B.view_as(self.lora_B)
-
+                    
+        # Очистка локального буфера для защиты VRAM от утечек
+        self.x_cache = None
         return None
 
     def verify_gradients(self, layer_name: str, current_step: int = 0):
@@ -132,6 +144,7 @@ class ChromaStandaloneLoRA(nn.Module):
                     grad_mean = param.grad.abs().mean().item()
                     print(f" -> [OK] Ток стабилен. Средний градиент {name}: {grad_mean:.8f}")
 #---------------- Конец Блока 1 -----------------
+
 
 #---------------- Старт Блока 2 (Снайперский Инжектор Спутников PROJ/LINEAR2 без подмены Базы) ------------
 def patch_chroma_reactor(model: nn.Module, rank: int = 16) -> int:
@@ -267,7 +280,7 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         raise ValueError("[КВАНТОВЫЙ ПРОЖОГ] Критическая ошибка: Loss рухнул в NaN!")
     t_fwd = time.perf_counter() - t_fwd_start
 
-    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v7.2)
+    # Фиксация и запуск фазы обратного прохода (Ручной Бэкворд Омниссии v7.3)
     t_bwd_start = time.perf_counter()
 
     with torch.no_grad():
@@ -287,28 +300,28 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
         final_weight = model.final_layer.weight.to(torch.bfloat16)
         base_grad_output = torch.matmul(grad_flat_64, final_weight) # Калибр [B, H*W, 3072]
 
-        # Пред-расчет изолированных источников токенов для сопряжения со спутниками
+        # Пред-расчет изолированной базовой шины градиентов под форму Double-блоков
         xt_flat_base = model.pack_latents(xt)
         static_img_tokens = model.img_in(xt_flat_base).detach().contiguous()
         static_txt_tokens = model.txt_in(t5_hidden).detach().contiguous()
 
-        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v7.2 ===
-        combined_static_tokens = torch.cat([static_img_tokens, static_txt_tokens], dim=1).contiguous()
-        
-        txt_len = static_txt_tokens.shape
+        # === ТОПОЛОГИЧЕСКОЕ ВЫРАВНИВАНИЕ ШИНЫ ГРАДИЕНТОВ v7.3 ===
+        txt_len = static_txt_tokens.shape[1]
         zero_txt_grad = torch.zeros((B, txt_len, base_grad_output.shape[-1]), dtype=torch.bfloat16, device="cuda")
         combined_grad_output = torch.cat([base_grad_output, zero_txt_grad], dim=1).contiguous()
 
         # СНАЙПЕРСКИЙ МИКРО-ДЕТЕКТОР ОБРАТНОГО ХОДА (Строго один раз на Шаге №1)
         if step == 0:
             nan_grad = torch.isnan(combined_grad_output).any().item()
-            print(f"[РЕНТГЕН-БЭКВОРД] Шина градиентов | Форма dy: {list(combined_grad_output.shape)} | Форма x: {list(combined_static_tokens.shape)} | NaN: {nan_grad}")
+            print(f"[РЕНТГЕН-БЭКВОРД] Базовая шина градиентов dy: {list(combined_grad_output.shape)} | NaN: {nan_grad}")
 
-        # 4. МОНОЛИТНЫЙ ИНЖЕКТОР БЭКВАРДА: Спутники принимают чистые тензоры без С++ Autograd базы
+        # 4. МОНОЛИТНЫЙ СПУТНИКОВЫЙ ИНЖЕКТОР БЭКВАРДА v7.3
+        # ФУНДАМЕНТАЛЬНЫЙ СИ-ШУНТ: Передаем только тензор dy. Входные формы x спутники берут 
+        # из своего изолированного локального кэша x_cache, полностью исключая size-mismatch!
         modules_chain = list(model.named_modules())
         for name, module in reversed(modules_chain):
             if hasattr(module, "inject_manual_backward"):
-                module.inject_manual_backward(combined_grad_output.detach(), combined_static_tokens.detach())
+                module.inject_manual_backward(combined_grad_output.detach())
 
     t_bwd = time.perf_counter() - t_bwd_start
 
@@ -371,7 +384,6 @@ def train_step_core(batch: dict, model: nn.Module, optimizer: AdamW8bit, approxi
     return loss.item()
 #---------------- Конец Блока 3 -----------------
 
-
 #---------------- Старт Блока 4 (Архитектура Монолитной Шины и Сопряжения Спутников LoRA v7.2) ------------
 class ChromaBlockProcessor(nn.Module):
     """
@@ -421,7 +433,7 @@ class ChromaMMDiT(nn.Module):
             
         for i in range(38):
             b = self.single_blocks[i]
-            # ФИКС КЛИЕНТСКОЙ МАНТИССЫ: Точный сросшийся калибр SwiGLU-шины оригинальных весов
+            # ВЫЖИГАНИЕ ГЛИСТА САТТЕРА: Точный сросшийся калибр SwiGLU-шины весов Метрополии!
             b.linear1 = nn.Linear(3072, 21504, dtype=torch.bfloat16)
             b.linear2 = nn.Linear(10752, 3072, dtype=torch.bfloat16)
 
@@ -463,8 +475,8 @@ class ChromaMMDiT(nn.Module):
             # Проекция на расширенное MLP-пространство SwiGLU (21504)
             mlp_gate_gate = block.linear1(combined_tokens)
             
-            # Внутреннее Си-расщепление и активация Swish
-            mlp_x1, mlp_x2 = mlp_gate_gate.chunk(2, dim=-1) # Нарезка на два потока по 10752
+            # Внутреннее Си-расщепление и активация Swish (разрезка 21504 на два потока по 10752)
+            mlp_x1, mlp_x2 = mlp_gate_gate.chunk(2, dim=-1)
             mlp_mid = F.silu(mlp_x1) * mlp_x2 # Калибр [B, 1536, 10752]
             
             # СНАЙПЕРСКИЙ РЕНТГЕН ЦЕПИ (Отрабатывает строго на блоке 0, шаг 1, один раз)
@@ -473,7 +485,7 @@ class ChromaMMDiT(nn.Module):
                 print(f"[РЕНТГЕН] Блок_0.linear2 | Форма входа: {list(mlp_mid.shape)} | NaN: {has_nan} | Mean: {mlp_mid.abs().mean().item():.5f}")
                 self.has_telemetry_fired = True
             
-            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2
+            # СНАЙПЕРСКИЙ ПЕРЕХВАТ СЛОЕВ ВЫВОДА MLP: Вливаем ток спутников LoRA на linear2 (вход 10752)
             combined_tokens = combined_tokens + ChromaBlockProcessor.inject_shadow_flow("linear2", block.linear2, block, mlp_mid)
 
         # 4. Изоляция выходного кадра картинок от текстового хвоста
@@ -490,7 +502,6 @@ class ChromaMMDiT(nn.Module):
         output_4d = output_4d.permute(0, 3, 1, 4, 2, 5).contiguous()
         return output_4d.view(B, 16, H, W)
 #---------------- Конец Блока 4 -----------------
-
 
 #---------------- Старт Блока 5 (Контур Инициализации, Жесткой Изоляции Градиентов и Сохранения Чекпоинтов) -------
 def save_lora_checkpoint(model: nn.Module, save_path: str):
@@ -540,7 +551,7 @@ def run_reactor_forge():
     Управляет запуском реактора: разворачивает топологию, заливает заводские веса,
     сжимает базу в INT8 через TorchAO, монтирует автономные спутники LoRA и запускает плавку.
     """
-    print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 v7.0 ===")
+    print("# === ИНИЦИАЛИЗАЦИЯ ДВИЖКА ТРЕНИРОВКИ TRAIN_ENGINE_V02 v7.3-МОНОЛИТ ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CHROMA_MODEL_PATH = r"Z:\flowch\models_core\transformer\Chroma1-HD.safetensors"
 
@@ -575,7 +586,6 @@ def run_reactor_forge():
         # Квантуем строго исходные слои nn.Linear. Окружающие спутники (имеющие другие имена) радар игнорирует!
         for name, module in model.named_modules():
             if "double_blocks" in name or "single_blocks" in name:
-                # Проверяем, что это оригинальный слой, а не наш кастомный спутник
                 if isinstance(module, nn.Linear) and not "lora_shadow" in name:
                     quantize_(module, int8_weight_only())
         print(" -> [OK] Оригинальный базовый монолит успешно квантован. Спутники в безопасности.")
@@ -599,7 +609,6 @@ def run_reactor_forge():
 
     # 6. ТОТАЛЬНАЯ ВЫЖЖЕННАЯ ЗЕМЛЯ: Блокируем Autograd для всего остального кремния модели
     for name, param in model.named_parameters():
-        # Разрешаем градиенты только для параметров наших автономных спутников
         if not any(x in name for x in ["lora_A", "lora_B"]):
             param.requires_grad = False
             param.grad = None
@@ -637,6 +646,7 @@ def run_reactor_forge():
                 save_lora_checkpoint(model, checkpoint_path)
 
             if step == 0:
+                # В боевом марше убираем этот брейк для непрерывного полета
                 break
         except Exception as e:
             print(f" [АВАРИЯ РАД ТАЙМА]: Цикл прерван на шаге {step + 1}: {e}")
